@@ -1,6 +1,6 @@
 import { colors } from '../../theme';
 /**
- * Settings screen — agent identity, dream mode, auto-update, connection.
+ * Settings screen — agent identity, channels, dream mode, auto-update, connection.
  */
 
 import { useEffect, useState } from 'react';
@@ -26,6 +26,16 @@ export default function SettingsScreen() {
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(false);
   const [autoUpdateMode, setAutoUpdateMode] = useState('auto');
   const [autoUpdateInterval, setAutoUpdateInterval] = useState('17 */6 * * *');
+
+  // Channel state
+  const [tgToken, setTgToken] = useState('');
+  const [tgUsers, setTgUsers] = useState('');
+  const [dcToken, setDcToken] = useState('');
+  const [dcUsers, setDcUsers] = useState('');
+  const [waId, setWaId] = useState('');
+  const [waToken, setWaToken] = useState('');
+  const [waUsers, setWaUsers] = useState('');
+
   const [saved, setSaved] = useState<string | null>(null);
 
   useEffect(() => {
@@ -35,7 +45,6 @@ export default function SettingsScreen() {
     }
   }, [connConfig]);
 
-  // Populate from loaded config
   useEffect(() => {
     if (!agentConfig) return;
     setName(agentConfig.name || '');
@@ -45,6 +54,19 @@ export default function SettingsScreen() {
     setAutoUpdateEnabled(agentConfig.auto_update?.enabled ?? false);
     setAutoUpdateMode(agentConfig.auto_update?.mode || 'auto');
     setAutoUpdateInterval(agentConfig.auto_update?.check_interval || '17 */6 * * *');
+
+    // Channels
+    const ch = agentConfig.channels || {};
+    const tg = ch.telegram || {};
+    setTgToken(tg.token || '');
+    setTgUsers((tg.allowed_users || []).join(', '));
+    const dc = ch.discord || {};
+    setDcToken(dc.token || '');
+    setDcUsers((dc.allowed_users || []).join(', '));
+    const wa = ch.whatsapp || {};
+    setWaId(wa.green_api_id || '');
+    setWaToken(wa.green_api_token || '');
+    setWaUsers((wa.allowed_users || []).join(', '));
   }, [agentConfig]);
 
   const saveSection = async (section: string, data: any, label: string) => {
@@ -53,6 +75,44 @@ export default function SettingsScreen() {
       setSaved(label);
       setTimeout(() => setSaved(null), 3000);
     }
+  };
+
+  const saveChannels = async () => {
+    const channels: any = { ...(agentConfig?.channels || {}) };
+
+    // Telegram
+    if (tgToken.trim()) {
+      channels.telegram = {
+        token: tgToken.trim(),
+        allowed_users: tgUsers.split(',').map((s: string) => s.trim()).filter(Boolean),
+      };
+    } else {
+      delete channels.telegram;
+    }
+
+    // Discord
+    if (dcToken.trim()) {
+      channels.discord = {
+        token: dcToken.trim(),
+        allowed_users: dcUsers.split(',').map((s: string) => s.trim()).filter(Boolean),
+      };
+    } else {
+      delete channels.discord;
+    }
+
+    // WhatsApp
+    if (waId.trim() && waToken.trim()) {
+      channels.whatsapp = {
+        green_api_id: waId.trim(),
+        green_api_token: waToken.trim(),
+        allowed_users: waUsers.split(',').map((s: string) => s.trim()).filter(Boolean),
+      };
+    } else {
+      delete channels.whatsapp;
+    }
+
+    // Keep websocket config untouched
+    await saveSection('channels', channels, 'channels');
   };
 
   const handleDisconnect = () => { disconnect(); router.replace('/'); };
@@ -70,13 +130,7 @@ export default function SettingsScreen() {
       <Text style={styles.sectionTitle}>Agent Identity</Text>
       <View style={styles.card}>
         <Text style={styles.label}>Name</Text>
-        <TextInput
-          style={styles.input}
-          value={name}
-          onChangeText={setName}
-          placeholder="my-agent"
-          placeholderTextColor="#999"
-        />
+        <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="my-agent" placeholderTextColor="#999" />
         <Text style={[styles.label, { marginTop: 12 }]}>System Prompt</Text>
         {Platform.OS === 'web' ? (
           <textarea
@@ -90,23 +144,43 @@ export default function SettingsScreen() {
             } as any}
           />
         ) : (
-          <TextInput
-            style={[styles.input, { height: 120, textAlignVertical: 'top' }]}
-            value={systemPrompt}
-            onChangeText={setSystemPrompt}
-            multiline
-          />
+          <TextInput style={[styles.input, { height: 120, textAlignVertical: 'top' }]} value={systemPrompt} onChangeText={setSystemPrompt} multiline />
         )}
-        <TouchableOpacity
-          style={styles.saveBtn}
-          onPress={() => saveSection('name', name, 'identity').then(() =>
-            saveSection('system_prompt', systemPrompt, 'identity')
-          )}
-        >
-          <Text style={styles.saveBtnText}>
-            {saved === 'identity' ? '✓ Saved' : 'Save Identity'}
-          </Text>
-        </TouchableOpacity>
+        <SaveBtn label="Save Identity" saved={saved === 'identity'} onPress={() => saveSection('name', name, 'identity').then(() => saveSection('system_prompt', systemPrompt, 'identity'))} />
+      </View>
+
+      {/* Channels */}
+      <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Channels</Text>
+      <View style={styles.card}>
+        {/* Telegram */}
+        <Text style={styles.channelTitle}>Telegram</Text>
+        <Text style={styles.label}>Bot Token</Text>
+        <TextInput style={styles.input} value={tgToken} onChangeText={setTgToken} placeholder="${TELEGRAM_BOT_TOKEN}" placeholderTextColor="#999" secureTextEntry />
+        <Text style={[styles.label, { marginTop: 8 }]}>Allowed User IDs (comma-separated)</Text>
+        <TextInput style={styles.input} value={tgUsers} onChangeText={setTgUsers} placeholder="123456789, 987654321" placeholderTextColor="#999" />
+
+        <View style={styles.channelDivider} />
+
+        {/* Discord */}
+        <Text style={styles.channelTitle}>Discord</Text>
+        <Text style={styles.label}>Bot Token</Text>
+        <TextInput style={styles.input} value={dcToken} onChangeText={setDcToken} placeholder="${DISCORD_BOT_TOKEN}" placeholderTextColor="#999" secureTextEntry />
+        <Text style={[styles.label, { marginTop: 8 }]}>Allowed User IDs (comma-separated)</Text>
+        <TextInput style={styles.input} value={dcUsers} onChangeText={setDcUsers} placeholder="123456789012345678" placeholderTextColor="#999" />
+
+        <View style={styles.channelDivider} />
+
+        {/* WhatsApp */}
+        <Text style={styles.channelTitle}>WhatsApp (Green API)</Text>
+        <Text style={styles.label}>Instance ID</Text>
+        <TextInput style={styles.input} value={waId} onChangeText={setWaId} placeholder="${GREEN_API_ID}" placeholderTextColor="#999" />
+        <Text style={[styles.label, { marginTop: 8 }]}>API Token</Text>
+        <TextInput style={styles.input} value={waToken} onChangeText={setWaToken} placeholder="${GREEN_API_TOKEN}" placeholderTextColor="#999" secureTextEntry />
+        <Text style={[styles.label, { marginTop: 8 }]}>Allowed Users (comma-separated)</Text>
+        <TextInput style={styles.input} value={waUsers} onChangeText={setWaUsers} placeholder="391234567890" placeholderTextColor="#999" />
+
+        <SaveBtn label="Save Channels" saved={saved === 'channels'} onPress={saveChannels} />
+        <Text style={styles.restartHint}>Restart required after changes</Text>
       </View>
 
       {/* Dream Mode */}
@@ -114,29 +188,11 @@ export default function SettingsScreen() {
       <View style={styles.card}>
         <View style={styles.toggleRow}>
           <Text style={styles.toggleLabel}>Enabled</Text>
-          <Switch
-            value={dreamEnabled}
-            onValueChange={setDreamEnabled}
-            trackColor={{ false: '#DDD', true: colors.primary }}
-            thumbColor="#FFF"
-          />
+          <Switch value={dreamEnabled} onValueChange={setDreamEnabled} trackColor={{ false: '#DDD', true: colors.primary }} thumbColor="#FFF" />
         </View>
         <Text style={styles.label}>Time (HH:MM)</Text>
-        <TextInput
-          style={styles.input}
-          value={dreamTime}
-          onChangeText={setDreamTime}
-          placeholder="3:00"
-          placeholderTextColor="#999"
-        />
-        <TouchableOpacity
-          style={styles.saveBtn}
-          onPress={() => saveSection('dream_mode', { enabled: dreamEnabled, time: dreamTime }, 'dream')}
-        >
-          <Text style={styles.saveBtnText}>
-            {saved === 'dream' ? '✓ Saved' : 'Save Dream Mode'}
-          </Text>
-        </TouchableOpacity>
+        <TextInput style={styles.input} value={dreamTime} onChangeText={setDreamTime} placeholder="3:00" placeholderTextColor="#999" />
+        <SaveBtn label="Save Dream Mode" saved={saved === 'dream'} onPress={() => saveSection('dream_mode', { enabled: dreamEnabled, time: dreamTime }, 'dream')} />
       </View>
 
       {/* Auto-Update */}
@@ -144,43 +200,19 @@ export default function SettingsScreen() {
       <View style={styles.card}>
         <View style={styles.toggleRow}>
           <Text style={styles.toggleLabel}>Enabled</Text>
-          <Switch
-            value={autoUpdateEnabled}
-            onValueChange={setAutoUpdateEnabled}
-            trackColor={{ false: '#DDD', true: colors.primary }}
-            thumbColor="#FFF"
-          />
+          <Switch value={autoUpdateEnabled} onValueChange={setAutoUpdateEnabled} trackColor={{ false: '#DDD', true: colors.primary }} thumbColor="#FFF" />
         </View>
         <Text style={styles.label}>Mode</Text>
         <View style={styles.segmented}>
           {['auto', 'notify', 'manual'].map((m) => (
-            <TouchableOpacity
-              key={m}
-              style={[styles.segment, autoUpdateMode === m && styles.segmentActive]}
-              onPress={() => setAutoUpdateMode(m)}
-            >
+            <TouchableOpacity key={m} style={[styles.segment, autoUpdateMode === m && styles.segmentActive]} onPress={() => setAutoUpdateMode(m)}>
               <Text style={[styles.segmentText, autoUpdateMode === m && styles.segmentTextActive]}>{m}</Text>
             </TouchableOpacity>
           ))}
         </View>
         <Text style={[styles.label, { marginTop: 12 }]}>Check Interval (cron)</Text>
-        <TextInput
-          style={styles.input}
-          value={autoUpdateInterval}
-          onChangeText={setAutoUpdateInterval}
-          placeholder="17 */6 * * *"
-          placeholderTextColor="#999"
-        />
-        <TouchableOpacity
-          style={styles.saveBtn}
-          onPress={() => saveSection('auto_update', {
-            enabled: autoUpdateEnabled, mode: autoUpdateMode, check_interval: autoUpdateInterval,
-          }, 'auto_update')}
-        >
-          <Text style={styles.saveBtnText}>
-            {saved === 'auto_update' ? '✓ Saved' : 'Save Auto-Update'}
-          </Text>
-        </TouchableOpacity>
+        <TextInput style={styles.input} value={autoUpdateInterval} onChangeText={setAutoUpdateInterval} placeholder="17 */6 * * *" placeholderTextColor="#999" />
+        <SaveBtn label="Save Auto-Update" saved={saved === 'auto_update'} onPress={() => saveSection('auto_update', { enabled: autoUpdateEnabled, mode: autoUpdateMode, check_interval: autoUpdateInterval }, 'auto_update')} />
       </View>
 
       {/* Connection */}
@@ -203,6 +235,14 @@ export default function SettingsScreen() {
 
       <View style={{ height: 40 }} />
     </ScrollView>
+  );
+}
+
+function SaveBtn({ label, saved, onPress }: { label: string; saved: boolean; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={styles.saveBtn} onPress={onPress}>
+      <Text style={styles.saveBtnText}>{saved ? '✓ Saved' : label}</Text>
+    </TouchableOpacity>
   );
 }
 
@@ -241,4 +281,7 @@ const styles = StyleSheet.create({
   disconnectText: { color: '#666', fontSize: 14, fontWeight: '500' },
   removeBtn: { marginTop: 8, backgroundColor: '#FFF', borderRadius: 8, borderWidth: 1, borderColor: '#D94F4F', padding: 12, alignItems: 'center' },
   removeText: { color: '#D94F4F', fontSize: 14, fontWeight: '500' },
+  channelTitle: { fontSize: 15, fontWeight: '600', color: '#1a1a1a', marginBottom: 8, marginTop: 4 },
+  channelDivider: { height: 1, backgroundColor: '#F0F0F0', marginVertical: 16 },
+  restartHint: { fontSize: 11, color: '#999', textAlign: 'center', marginTop: 8 },
 });
