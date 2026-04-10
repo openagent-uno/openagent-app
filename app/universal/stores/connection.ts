@@ -120,6 +120,15 @@ export const useConnection = create<ConnectionState>((set, get) => ({
           agentVersion: msg.version,
           error: null,
         });
+        // Update saved account name from server's agent_name
+        const aid = accountId ?? get().activeAccountId;
+        if (aid && msg.agent_name) {
+          const updated = get().accounts.map((a) =>
+            a.id === aid ? { ...a, name: msg.agent_name } : a
+          );
+          set({ accounts: updated });
+          storage.setItem(STORAGE_KEY, JSON.stringify(updated));
+        }
       } else if (msg.type === 'auth_error') {
         set({ isConnected: false, error: msg.reason });
       }

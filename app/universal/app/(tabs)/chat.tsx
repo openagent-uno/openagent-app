@@ -12,7 +12,6 @@ import { useChat } from '../../stores/chat';
 
 export default function ChatScreen() {
   const ws = useConnection((s) => s.ws);
-  const agentName = useConnection((s) => s.agentName);
   const {
     sessions, activeSessionId, createSession, setActiveSession, removeSession,
     addUserMessage,
@@ -37,8 +36,6 @@ export default function ChatScreen() {
     <View style={styles.container}>
       {/* Sidebar */}
       <View style={styles.sidebar}>
-        <Text style={styles.sidebarTitle}>{agentName || 'OpenAgent'}</Text>
-
         <TouchableOpacity style={styles.newChatBtn} onPress={createSession}>
           <Text style={styles.newChatText}>+ New Chat</Text>
         </TouchableOpacity>
@@ -139,12 +136,6 @@ const styles = StyleSheet.create({
     borderRightWidth: 1,
     borderRightColor: '#EBEBEB',
     padding: 16,
-  },
-  sidebarTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#1a1a1a',
-    marginBottom: 16,
   },
   newChatBtn: {
     backgroundColor: '#D97757',

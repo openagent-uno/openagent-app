@@ -19,12 +19,10 @@ export default function LoginScreen() {
   const [host, setHost] = useState('localhost');
   const [port, setPort] = useState('8765');
   const [token, setToken] = useState('');
-  const [name, setName] = useState('');
 
   const handleSaveAndConnect = () => {
-    const displayName = name.trim() || `${host}:${port}`;
     saveAccount({
-      name: displayName,
+      name: `${host}:${port}`,  // auto-updated from server on auth_ok
       host,
       port: parseInt(port, 10),
       token,
@@ -99,16 +97,6 @@ export default function LoginScreen() {
         )}
 
         <View style={styles.card}>
-          <View style={styles.field}>
-            <Text style={styles.label}>Name</Text>
-            <TextInput
-              style={styles.input}
-              value={name}
-              onChangeText={setName}
-              placeholder="My Agent (optional)"
-              placeholderTextColor="#999"
-            />
-          </View>
           <View style={styles.field}>
             <Text style={styles.label}>Host</Text>
             <TextInput

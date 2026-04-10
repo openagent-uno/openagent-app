@@ -53,7 +53,9 @@ export default function Header() {
 
   const handleAdd = () => {
     setDropdownOpen(false);
-    router.push('/');
+    // Disconnect so the login screen doesn't auto-redirect back to tabs
+    useConnection.getState().disconnect();
+    router.replace('/');
   };
 
   return (
