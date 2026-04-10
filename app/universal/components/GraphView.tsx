@@ -12,7 +12,7 @@
 import { useRef, useEffect, useCallback, useState } from 'react';
 import { View, StyleSheet, Platform } from 'react-native';
 import type { GraphData } from '../../common/types';
-import { colors, font } from '../../common/theme';
+import { colors, font } from '../theme';
 
 interface Props {
   data: GraphData;

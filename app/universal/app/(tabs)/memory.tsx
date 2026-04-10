@@ -16,7 +16,7 @@ import { useVault } from '../../stores/vault';
 import { setBaseUrl } from '../../services/api';
 import GraphView from '../../components/GraphView';
 import Markdown from '../../components/Markdown';
-import { colors } from '../../../common/theme';
+import { colors } from '../../theme';
 
 export default function MemoryScreen() {
   const config = useConnection((s) => s.config);
