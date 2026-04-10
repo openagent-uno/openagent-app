@@ -5,8 +5,10 @@ set -euo pipefail
 # Build production artifacts for a given platform.
 #
 # Usage:
-#   ./build.sh web          Export static web build (universal/web-build/)
-#   ./build.sh desktop      Build Electron app (desktop/release/)
+#   ./build.sh web          Export static web build (universal/dist/)
+#   ./build.sh macos        Build Electron .dmg for macOS
+#   ./build.sh windows      Build Electron .exe/.nsis for Windows
+#   ./build.sh linux        Build Electron .AppImage for Linux
 #   ./build.sh ios          Build iOS archive (requires Xcode)
 #   ./build.sh android      Build Android APK/AAB
 
@@ -16,29 +18,43 @@ PLATFORM="${1:-web}"
 echo "🏗️  OpenAgent App — Build ($PLATFORM)"
 echo ""
 
+build_web() {
+    cd "$SCRIPT_DIR/universal"
+    npx expo export --platform web
+    echo ""
+    echo "✅ Web build ready at universal/dist/"
+}
+
+build_desktop() {
+    local TARGET="$1"   # --mac, --win, --linux
+
+    # 1. Build the web app
+    build_web
+
+    # 2. Copy into desktop/
+    rm -rf "$SCRIPT_DIR/desktop/web-build"
+    cp -r "$SCRIPT_DIR/universal/dist" "$SCRIPT_DIR/desktop/web-build"
+
+    # 3. Package with electron-builder
+    cd "$SCRIPT_DIR/desktop"
+    echo "📦 Packaging Electron app ($TARGET)..."
+    npx electron-builder "$TARGET"
+    echo ""
+    echo "✅ Desktop build ready at desktop/release/"
+}
+
 case "$PLATFORM" in
     web)
-        cd "$SCRIPT_DIR/universal"
-        npx expo export --platform web
-        echo ""
-        echo "✅ Web build ready at universal/dist/"
+        build_web
         ;;
-    desktop)
-        # First build the web app, then package with Electron
-        cd "$SCRIPT_DIR/universal"
-        echo "📦 Building web app..."
-        npx expo export --platform web
-        echo ""
-
-        # Copy web build into desktop/
-        rm -rf "$SCRIPT_DIR/desktop/web-build"
-        cp -r dist "$SCRIPT_DIR/desktop/web-build"
-
-        cd "$SCRIPT_DIR/desktop"
-        echo "📦 Packaging Electron app..."
-        npm run build
-        echo ""
-        echo "✅ Desktop build ready at desktop/release/"
+    macos)
+        build_desktop "--mac"
+        ;;
+    windows)
+        build_desktop "--win"
+        ;;
+    linux)
+        build_desktop "--linux"
         ;;
     ios)
         cd "$SCRIPT_DIR/universal"
@@ -50,7 +66,7 @@ case "$PLATFORM" in
         ;;
     *)
         echo "❌ Unknown platform: $PLATFORM"
-        echo "Usage: ./build.sh [web|desktop|ios|android]"
+        echo "Usage: ./build.sh [web|macos|windows|linux|ios|android]"
         exit 1
         ;;
 esac
