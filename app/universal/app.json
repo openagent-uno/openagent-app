@@ -1,0 +1,14 @@
+{
+  "expo": {
+    "name": "OpenAgent",
+    "slug": "openagent-app",
+    "version": "0.1.0",
+    "scheme": "openagent",
+    "web": {
+      "bundler": "metro",
+      "output": "single",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": ["expo-router"]
+  }
+}
