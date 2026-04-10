@@ -3,10 +3,12 @@
  *
  * Loads the web build from universal/ (dev: localhost:8081, prod: file://).
  * Injects desktop-only services via preload.ts context bridge.
+ * Auto-updates from GitHub Releases via electron-updater.
  */
 
-import { app, BrowserWindow, shell } from 'electron';
+import { app, BrowserWindow, shell, dialog } from 'electron';
 import * as path from 'path';
+import { registerStorageHandlers } from './services/storage';
 
 const isDev = !app.isPackaged;
 
@@ -34,15 +36,12 @@ function createWindow(): void {
   });
 
   if (isDev) {
-    // In dev, load from Expo web dev server
     mainWindow.loadURL('http://localhost:8081');
     mainWindow.webContents.openDevTools();
   } else {
-    // In prod, load the built web app
     mainWindow.loadFile(path.join(__dirname, '..', 'web-build', 'index.html'));
   }
 
-  // Open external links in browser
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
@@ -53,7 +52,49 @@ function createWindow(): void {
   });
 }
 
-app.on('ready', createWindow);
+// ── Auto-updater (production only) ──
+function setupAutoUpdater(): void {
+  if (isDev) return;
+
+  // Dynamic import so dev doesn't need electron-updater resolved
+  const { autoUpdater } = require('electron-updater');
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('update-available', (info: any) => {
+    console.log('Update available:', info.version);
+  });
+
+  autoUpdater.on('update-downloaded', (info: any) => {
+    dialog
+      .showMessageBox({
+        type: 'info',
+        title: 'Update Ready',
+        message: `OpenAgent ${info.version} is ready to install.`,
+        buttons: ['Restart Now', 'Later'],
+        defaultId: 0,
+      })
+      .then(({ response }) => {
+        if (response === 0) {
+          autoUpdater.quitAndInstall();
+        }
+      });
+  });
+
+  autoUpdater.on('error', (err: Error) => {
+    console.error('Auto-updater error:', err.message);
+  });
+
+  // Check for updates after window is ready
+  autoUpdater.checkForUpdatesAndNotify();
+}
+
+app.on('ready', () => {
+  registerStorageHandlers();
+  createWindow();
+  setupAutoUpdater();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
@@ -67,7 +108,6 @@ app.on('activate', () => {
   }
 });
 
-// Second instance: focus existing window
 app.on('second-instance', () => {
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore();
