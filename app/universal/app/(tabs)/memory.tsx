@@ -1,24 +1,27 @@
 /**
- * Memory screen — file tree (left) + graph view (main).
- * Clicking a note navigates to the editor screen.
+ * Memory screen — master-detail layout:
+ *   Sidebar (always visible): file tree + search
+ *   Main area: graph view (default) or editor (when note selected)
+ *
+ * The sidebar never disappears — clicking a note swaps the main area
+ * from graph to editor. "← Back to graph" returns to graph view.
  */
 
-import { useEffect } from 'react';
+import { useEffect, useCallback } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet,
+  View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Platform,
 } from 'react-native';
-import { useRouter } from 'expo-router';
 import { useConnection } from '../../stores/connection';
 import { useVault } from '../../stores/vault';
 import { setBaseUrl } from '../../services/api';
 import GraphView from '../../components/GraphView';
 
 export default function MemoryScreen() {
-  const router = useRouter();
   const config = useConnection((s) => s.config);
   const {
-    notes, graph, searchQuery, searchResults, loading,
-    loadNotes, loadGraph, search, clearSearch,
+    notes, graph, selectedPath, editorContent, editorDirty,
+    searchQuery, searchResults, loading,
+    loadNotes, loadGraph, selectNote, updateEditor, saveNote, search, clearSearch,
   } = useVault();
 
   useEffect(() => {
@@ -29,11 +32,31 @@ export default function MemoryScreen() {
     }
   }, [config]);
 
-  const openNote = (path: string) => {
-    router.push({ pathname: '/editor', params: { path } });
-  };
+  const handleSave = useCallback(() => {
+    saveNote().then(() => loadNotes());
+  }, [saveNote, loadNotes]);
+
+  const handleClose = useCallback(() => {
+    useVault.setState({ selectedPath: null, editorContent: '', editorDirty: false });
+  }, []);
+
+  const openNote = (path: string) => selectNote(path);
+
+  // Ctrl/Cmd+S
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !selectedPath) return;
+    const handler = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault();
+        handleSave();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [handleSave, selectedPath]);
 
   const displayNotes = searchQuery.trim() ? searchResults : notes;
+  const selectedNote = notes.find((n) => n.path === selectedPath);
 
   // Group by folder
   const folders = new Map<string, typeof notes>();
@@ -46,8 +69,8 @@ export default function MemoryScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Left panel: file tree */}
-      <View style={styles.leftPanel}>
+      {/* ── Sidebar: always visible ── */}
+      <View style={styles.sidebar}>
         <TextInput
           style={styles.searchInput}
           value={searchQuery}
@@ -65,10 +88,19 @@ export default function MemoryScreen() {
               {folderNotes.map((n) => (
                 <TouchableOpacity
                   key={n.path}
-                  style={styles.fileItem}
+                  style={[
+                    styles.fileItem,
+                    n.path === selectedPath && styles.fileItemActive,
+                  ]}
                   onPress={() => openNote(n.path)}
                 >
-                  <Text style={styles.fileName} numberOfLines={1}>
+                  <Text
+                    style={[
+                      styles.fileName,
+                      n.path === selectedPath && styles.fileNameActive,
+                    ]}
+                    numberOfLines={1}
+                  >
                     {n.title || n.path.split('/').pop()?.replace('.md', '')}
                   </Text>
                   {n.tags && n.tags.length > 0 && (
@@ -92,16 +124,73 @@ export default function MemoryScreen() {
         </View>
       </View>
 
-      {/* Main: graph view */}
+      {/* ── Main area: graph OR editor ── */}
       <View style={styles.mainArea}>
-        {graph && graph.nodes.length > 0 ? (
-          <GraphView data={graph} onSelectNode={openNote} />
-        ) : (
-          <View style={styles.graphEmpty}>
-            <Text style={styles.emptyText}>
-              {loading ? 'Loading graph...' : 'No notes to visualize'}
-            </Text>
+        {selectedPath ? (
+          /* Editor mode */
+          <View style={styles.editorContainer}>
+            <View style={styles.editorHeader}>
+              <TouchableOpacity onPress={handleClose} style={styles.backBtn}>
+                <Text style={styles.backBtnText}>← Graph</Text>
+              </TouchableOpacity>
+              <Text style={styles.editorTitle} numberOfLines={1}>
+                {selectedNote?.title || selectedPath.split('/').pop()?.replace('.md', '')}
+              </Text>
+              <View style={styles.editorActions}>
+                {editorDirty && <Text style={styles.unsavedBadge}>unsaved</Text>}
+                <TouchableOpacity
+                  style={[styles.saveBtn, !editorDirty && styles.saveBtnDisabled]}
+                  onPress={handleSave}
+                  disabled={!editorDirty}
+                >
+                  <Text style={styles.saveBtnText}>Save</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+            {Platform.OS === 'web' ? (
+              <textarea
+                value={editorContent}
+                onChange={(e: any) => updateEditor(e.target.value)}
+                style={{
+                  flex: 1,
+                  width: '100%',
+                  height: '100%',
+                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                  fontSize: 13,
+                  lineHeight: '1.7',
+                  padding: 24,
+                  border: 'none',
+                  outline: 'none',
+                  resize: 'none',
+                  backgroundColor: '#FFFFFF',
+                  color: '#1a1a1a',
+                  boxSizing: 'border-box',
+                } as any}
+                spellCheck={false}
+              />
+            ) : (
+              <ScrollView style={{ flex: 1, backgroundColor: '#FFFFFF' }}>
+                <TextInput
+                  style={styles.editorInput}
+                  value={editorContent}
+                  onChangeText={updateEditor}
+                  multiline
+                  textAlignVertical="top"
+                />
+              </ScrollView>
+            )}
           </View>
+        ) : (
+          /* Graph mode */
+          graph && graph.nodes.length > 0 ? (
+            <GraphView data={graph} onSelectNode={openNote} />
+          ) : (
+            <View style={styles.graphEmpty}>
+              <Text style={styles.emptyText}>
+                {loading ? 'Loading graph...' : 'No notes to visualize'}
+              </Text>
+            </View>
+          )
         )}
       </View>
     </View>
@@ -110,7 +199,9 @@ export default function MemoryScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, flexDirection: 'row', backgroundColor: '#FAFAFA' },
-  leftPanel: {
+
+  // Sidebar
+  sidebar: {
     width: 220,
     backgroundColor: '#F5F5F5',
     borderRightWidth: 1,
@@ -130,30 +221,41 @@ const styles = StyleSheet.create({
   },
   fileTree: { flex: 1, paddingHorizontal: 6 },
   folderName: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: '#999',
-    paddingHorizontal: 10,
-    paddingTop: 12,
-    paddingBottom: 4,
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
+    fontSize: 11, fontWeight: '600', color: '#999',
+    paddingHorizontal: 10, paddingTop: 12, paddingBottom: 4,
+    textTransform: 'uppercase', letterSpacing: 0.3,
   },
-  fileItem: {
-    paddingVertical: 6,
-    paddingHorizontal: 10,
-    borderRadius: 6,
-    marginVertical: 1,
-  },
+  fileItem: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 6, marginVertical: 1 },
+  fileItemActive: { backgroundColor: '#EBEBEB' },
   fileName: { fontSize: 13, color: '#333' },
+  fileNameActive: { color: '#D97757', fontWeight: '500' },
   fileTags: { fontSize: 10, color: '#AAA', marginTop: 1 },
-  noteCount: {
-    padding: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#EBEBEB',
-  },
+  noteCount: { padding: 10, borderTopWidth: 1, borderTopColor: '#EBEBEB' },
   noteCountText: { fontSize: 11, color: '#999', textAlign: 'center' },
+
+  // Main area
   mainArea: { flex: 1 },
   graphEmpty: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+
+  // Editor
+  editorContainer: { flex: 1, flexDirection: 'column' },
+  editorHeader: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 16, paddingVertical: 10,
+    borderBottomWidth: 1, borderBottomColor: '#EBEBEB',
+    backgroundColor: '#FAFAFA',
+  },
+  backBtn: { paddingVertical: 4, paddingHorizontal: 8, marginRight: 12 },
+  backBtnText: { fontSize: 13, color: '#D97757', fontWeight: '500' },
+  editorTitle: { fontSize: 14, fontWeight: '600', color: '#1a1a1a', flex: 1 },
+  editorActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  unsavedBadge: {
+    fontSize: 10, color: '#D97757', backgroundColor: '#FFF3EE',
+    paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, overflow: 'hidden',
+  },
+  saveBtn: { backgroundColor: '#D97757', paddingHorizontal: 14, paddingVertical: 5, borderRadius: 6 },
+  saveBtnDisabled: { opacity: 0.3 },
+  saveBtnText: { color: '#FFFFFF', fontSize: 12, fontWeight: '600' },
+  editorInput: { padding: 24, fontFamily: 'monospace', fontSize: 13, color: '#1a1a1a', lineHeight: 22 },
   emptyText: { color: '#999', fontSize: 13, padding: 16 },
 });

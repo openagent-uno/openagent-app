@@ -10,18 +10,15 @@ export default function RootLayout() {
   const handleServerMessage = useChat((s) => s.handleServerMessage);
   const loadAccounts = useConnection((s) => s.loadAccounts);
 
-  useEffect(() => {
-    loadAccounts();
-  }, []);
+  useEffect(() => { loadAccounts(); }, []);
 
   useEffect(() => {
     if (!ws) return;
-    const unsub = ws.onMessage((msg) => {
+    return ws.onMessage((msg) => {
       if (msg.type === 'status' || msg.type === 'response' || msg.type === 'error') {
         handleServerMessage(msg);
       }
     });
-    return unsub;
   }, [ws, handleServerMessage]);
 
   return (
@@ -31,15 +28,6 @@ export default function RootLayout() {
         <Stack screenOptions={{ headerShown: false }}>
           <Stack.Screen name="index" />
           <Stack.Screen name="(tabs)" />
-          <Stack.Screen
-            name="editor"
-            options={{
-              headerShown: true,
-              presentation: 'modal',
-              headerStyle: { backgroundColor: '#FAFAFA' },
-              headerTintColor: '#D97757',
-            }}
-          />
         </Stack>
       </View>
     </View>
