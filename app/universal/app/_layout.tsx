@@ -1,4 +1,4 @@
-import { Slot } from 'expo-router';
+import { Stack } from 'expo-router';
 import { useEffect } from 'react';
 import { View, StyleSheet, Platform } from 'react-native';
 import { useConnection } from '../stores/connection';
@@ -10,12 +10,10 @@ export default function RootLayout() {
   const handleServerMessage = useChat((s) => s.handleServerMessage);
   const loadAccounts = useConnection((s) => s.loadAccounts);
 
-  // Load saved accounts on app start
   useEffect(() => {
     loadAccounts();
   }, []);
 
-  // Wire WS messages into chat store
   useEffect(() => {
     if (!ws) return;
     const unsub = ws.onMessage((msg) => {
@@ -30,18 +28,25 @@ export default function RootLayout() {
     <View style={styles.root}>
       {Platform.OS === 'web' && <Header />}
       <View style={styles.content}>
-        <Slot />
+        <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="index" />
+          <Stack.Screen name="(tabs)" />
+          <Stack.Screen
+            name="editor"
+            options={{
+              headerShown: true,
+              presentation: 'modal',
+              headerStyle: { backgroundColor: '#FAFAFA' },
+              headerTintColor: '#D97757',
+            }}
+          />
+        </Stack>
       </View>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: '#FAFAFA',
-  },
-  content: {
-    flex: 1,
-  },
+  root: { flex: 1, backgroundColor: '#FAFAFA' },
+  content: { flex: 1 },
 });

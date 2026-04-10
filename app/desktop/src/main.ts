@@ -24,8 +24,8 @@ function createWindow(): void {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    minWidth: 800,
-    minHeight: 600,
+    minWidth: 375,
+    minHeight: 500,
     title: 'OpenAgent',
     titleBarStyle: 'hiddenInset',
     webPreferences: {

@@ -1,14 +1,15 @@
 /**
  * Chat screen — ChatGPT-style interface with multi-session support.
- * Light theme inspired by Claude Code.
+ * Light theme inspired by Claude Code. Markdown rendering in assistant bubbles.
  */
 
 import { useState, useRef, useEffect } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet,
+  View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Platform,
 } from 'react-native';
 import { useConnection } from '../../stores/connection';
 import { useChat } from '../../stores/chat';
+import Markdown from '../../components/Markdown';
 
 export default function ChatScreen() {
   const ws = useConnection((s) => s.ws);
@@ -30,6 +31,14 @@ export default function ChatScreen() {
     addUserMessage(activeSessionId, input.trim());
     ws.sendMessage(input.trim(), activeSessionId);
     setInput('');
+  };
+
+  // Web: Enter sends, Shift+Enter inserts newline
+  const handleKeyDown = (e: any) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
   };
 
   return (
@@ -77,12 +86,13 @@ export default function ChatScreen() {
                     msg.role === 'user' ? styles.userBubble : styles.assistantBubble,
                   ]}
                 >
-                  <Text style={[
-                    styles.bubbleText,
-                    msg.role === 'user' && styles.userText,
-                  ]}>
-                    {msg.text}
-                  </Text>
+                  {msg.role === 'assistant' ? (
+                    <Markdown text={msg.text} />
+                  ) : (
+                    <Text style={[styles.bubbleText, styles.userText]}>
+                      {msg.text}
+                    </Text>
+                  )}
                 </View>
               ))}
 
@@ -97,16 +107,42 @@ export default function ChatScreen() {
 
             {/* Input bar */}
             <View style={styles.inputBar}>
-              <TextInput
-                style={styles.textInput}
-                value={input}
-                onChangeText={setInput}
-                placeholder="Send a message..."
-                placeholderTextColor="#999"
-                onSubmitEditing={handleSend}
-                returnKeyType="send"
-                multiline
-              />
+              {Platform.OS === 'web' ? (
+                <textarea
+                  value={input}
+                  onChange={(e: any) => setInput(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder="Send a message... (Shift+Enter for newline)"
+                  rows={1}
+                  style={{
+                    flex: 1,
+                    backgroundColor: '#F5F5F5',
+                    borderRadius: 20,
+                    border: '1px solid #E8E8E8',
+                    paddingLeft: 16,
+                    paddingRight: 16,
+                    paddingTop: 10,
+                    paddingBottom: 10,
+                    color: '#1a1a1a',
+                    fontSize: 14,
+                    fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
+                    maxHeight: 120,
+                    resize: 'none',
+                    outline: 'none',
+                  } as any}
+                />
+              ) : (
+                <TextInput
+                  style={styles.textInput}
+                  value={input}
+                  onChangeText={setInput}
+                  placeholder="Send a message..."
+                  placeholderTextColor="#999"
+                  onSubmitEditing={handleSend}
+                  returnKeyType="send"
+                  multiline
+                />
+              )}
               <TouchableOpacity
                 style={[styles.sendBtn, !input.trim() && styles.sendBtnDisabled]}
                 onPress={handleSend}
@@ -128,8 +164,6 @@ export default function ChatScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, flexDirection: 'row', backgroundColor: '#FAFAFA' },
-
-  // Sidebar
   sidebar: {
     width: 240,
     backgroundColor: '#F5F5F5',
@@ -156,8 +190,6 @@ const styles = StyleSheet.create({
   sessionActive: { backgroundColor: '#EBEBEB' },
   sessionTitle: { color: '#444', flex: 1, fontSize: 13 },
   processingDot: { color: '#D97757', fontSize: 10, marginLeft: 6 },
-
-  // Chat
   chatArea: { flex: 1, flexDirection: 'column' },
   messages: { flex: 1 },
   messagesContent: { padding: 24, paddingBottom: 8 },
@@ -167,10 +199,7 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 10,
   },
-  userBubble: {
-    backgroundColor: '#D97757',
-    alignSelf: 'flex-end',
-  },
+  userBubble: { backgroundColor: '#D97757', alignSelf: 'flex-end' },
   assistantBubble: {
     backgroundColor: '#FFFFFF',
     alignSelf: 'flex-start',
@@ -185,8 +214,6 @@ const styles = StyleSheet.create({
   bubbleText: { color: '#1a1a1a', fontSize: 14, lineHeight: 21 },
   userText: { color: '#FFFFFF' },
   statusText: { color: '#999', fontSize: 13, fontStyle: 'italic' },
-
-  // Input
   inputBar: {
     flexDirection: 'row',
     alignItems: 'flex-end',
@@ -219,8 +246,6 @@ const styles = StyleSheet.create({
   },
   sendBtnDisabled: { opacity: 0.3 },
   sendText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-
-  // Empty
   emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   emptyText: { color: '#999', fontSize: 15 },
 });
