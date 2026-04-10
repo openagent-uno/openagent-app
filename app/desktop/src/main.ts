@@ -1,13 +1,13 @@
 /**
  * Electron main process.
  *
- * Loads the web build from universal/ (dev: localhost:8081, prod: file://).
- * Injects desktop-only services via preload.ts context bridge.
- * Auto-updates from GitHub Releases via electron-updater.
+ * Dev:  loads from Expo web dev server (localhost:8081)
+ * Prod: loads from bundled web-build/index.html
  */
 
 import { app, BrowserWindow, shell, dialog } from 'electron';
 import * as path from 'path';
+import * as fs from 'fs';
 import { registerStorageHandlers } from './services/storage';
 
 const isDev = !app.isPackaged;
@@ -38,8 +38,9 @@ function createWindow(): void {
     minHeight: 500,
     title: 'OpenAgent',
     titleBarStyle: 'hiddenInset',
+    show: false, // show after content loads to avoid flash
     webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
+      preload: path.resolve(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
     },
@@ -47,10 +48,20 @@ function createWindow(): void {
 
   if (isDev) {
     mainWindow.loadURL('http://localhost:8081');
-    mainWindow.webContents.openDevTools();
   } else {
-    mainWindow.loadFile(path.join(__dirname, '..', 'web-build', 'index.html'));
+    const webBuild = path.resolve(__dirname, '..', 'web-build', 'index.html');
+    if (fs.existsSync(webBuild)) {
+      mainWindow.loadFile(webBuild);
+    } else {
+      console.error('web-build not found at:', webBuild);
+      mainWindow.loadURL(`data:text/html,<h2>Build not found</h2><p>${webBuild}</p>`);
+    }
   }
+
+  // Show window once content is ready (avoids white flash)
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show();
+  });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
@@ -63,18 +74,13 @@ function createWindow(): void {
 }
 
 // ── Auto-updater (production only) ──
+
 function setupAutoUpdater(): void {
   if (isDev) return;
 
-  // Dynamic import so dev doesn't need electron-updater resolved
   const { autoUpdater } = require('electron-updater');
-
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
-
-  autoUpdater.on('update-available', (info: any) => {
-    console.log('Update available:', info.version);
-  });
 
   autoUpdater.on('update-downloaded', (info: any) => {
     dialog
@@ -85,10 +91,8 @@ function setupAutoUpdater(): void {
         buttons: ['Restart Now', 'Later'],
         defaultId: 0,
       })
-      .then(({ response }) => {
-        if (response === 0) {
-          autoUpdater.quitAndInstall();
-        }
+      .then(({ response }: { response: number }) => {
+        if (response === 0) autoUpdater.quitAndInstall();
       });
   });
 
@@ -96,11 +100,12 @@ function setupAutoUpdater(): void {
     console.error('Auto-updater error:', err.message);
   });
 
-  // Check for updates after window is ready
   autoUpdater.checkForUpdatesAndNotify();
 }
 
-app.on('ready', () => {
+// ── App lifecycle ──
+
+app.whenReady().then(() => {
   registerStorageHandlers();
   createWindow();
   setupAutoUpdater();
@@ -112,15 +117,22 @@ app.on('window-all-closed', () => {
   }
 });
 
+// macOS: clicking dock icon restores/focuses the window
 app.on('activate', () => {
   if (mainWindow === null) {
     createWindow();
+  } else {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
   }
 });
 
+// Second instance: focus existing window
 app.on('second-instance', () => {
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
     mainWindow.focus();
   }
 });
