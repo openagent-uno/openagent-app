@@ -5,6 +5,7 @@
 import { create } from 'zustand';
 import type { ConnectionConfig } from '../../common/types';
 import { OpenAgentWS } from '../services/ws';
+import { setBaseUrl } from '../services/api';
 
 interface ConnectionState {
   config: ConnectionConfig | null;
@@ -44,6 +45,7 @@ export const useConnection = create<ConnectionState>((set, get) => ({
     });
 
     ws.connect();
+    setBaseUrl(config.host, config.port);
     set({ config, ws, isConnected: false, error: null });
   },
 

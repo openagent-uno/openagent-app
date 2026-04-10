@@ -1,0 +1,69 @@
+/**
+ * REST API client for OpenAgent vault operations.
+ */
+
+import type { VaultNote, GraphData } from '../../common/types';
+
+let baseUrl = '';
+
+export function setBaseUrl(host: string, port: number) {
+  baseUrl = `http://${host}:${port}`;
+}
+
+async function get<T>(path: string): Promise<T> {
+  const res = await fetch(`${baseUrl}${path}`);
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+async function put<T>(path: string, body: object): Promise<T> {
+  const res = await fetch(`${baseUrl}${path}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+async function del(path: string): Promise<void> {
+  const res = await fetch(`${baseUrl}${path}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+}
+
+// ── Vault API ──
+
+export async function listNotes(): Promise<VaultNote[]> {
+  const data = await get<{ notes: VaultNote[] }>('/api/vault/notes');
+  return data.notes;
+}
+
+export async function readNote(path: string): Promise<{
+  path: string;
+  content: string;
+  frontmatter: Record<string, any>;
+  body: string;
+  links: string[];
+  modified: number;
+}> {
+  return get(`/api/vault/notes/${encodeURIComponent(path)}`);
+}
+
+export async function writeNote(path: string, content: string): Promise<void> {
+  await put(`/api/vault/notes/${encodeURIComponent(path)}`, { content });
+}
+
+export async function deleteNote(path: string): Promise<void> {
+  await del(`/api/vault/notes/${encodeURIComponent(path)}`);
+}
+
+export async function searchNotes(query: string): Promise<VaultNote[]> {
+  const data = await get<{ results: VaultNote[] }>(
+    `/api/vault/search?q=${encodeURIComponent(query)}`
+  );
+  return data.results;
+}
+
+export async function getGraph(): Promise<GraphData> {
+  return get<GraphData>('/api/vault/graph');
+}
