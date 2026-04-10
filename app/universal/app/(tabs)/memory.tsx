@@ -1,8 +1,8 @@
 /**
- * Memory screen — 3-panel layout:
- *   Left:   file tree + search
- *   Center: markdown editor (raw text for now, WYSIWYG later)
- *   Right:  force-directed graph view
+ * Memory screen — 2-panel + overlay:
+ *   Left:    file tree + search (always visible)
+ *   Main:    graph view (default) OR editor (when a note is selected)
+ *   Editor:  opens on click (file tree or graph node), close button to go back
  */
 
 import { useEffect, useCallback } from 'react';
@@ -22,7 +22,6 @@ export default function MemoryScreen() {
     loadNotes, loadGraph, selectNote, updateEditor, saveNote, search, clearSearch,
   } = useVault();
 
-  // Set API base URL from connection config
   useEffect(() => {
     if (config) {
       setBaseUrl(config.host, config.port);
@@ -35,7 +34,11 @@ export default function MemoryScreen() {
     saveNote().then(() => loadNotes());
   }, [saveNote, loadNotes]);
 
-  // Keyboard shortcut: Ctrl/Cmd+S to save
+  const handleClose = useCallback(() => {
+    useVault.setState({ selectedPath: null, editorContent: '', editorDirty: false });
+  }, []);
+
+  // Ctrl/Cmd+S to save
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     const handler = (e: KeyboardEvent) => {
@@ -74,8 +77,8 @@ export default function MemoryScreen() {
 
         <ScrollView style={styles.fileTree}>
           {Array.from(folders.entries()).map(([folder, folderNotes]) => (
-            <View key={folder}>
-              {folder && (
+            <View key={folder || '__root'}>
+              {folder !== '' && (
                 <Text style={styles.folderName}>📁 {folder}</Text>
               )}
               {folderNotes.map((n) => (
@@ -118,11 +121,31 @@ export default function MemoryScreen() {
         </View>
       </View>
 
-      {/* ── Center panel: editor ── */}
-      <View style={styles.centerPanel}>
-        {selectedPath ? (
-          <>
+      {/* ── Main area: graph (always) + editor overlay (when selected) ── */}
+      <View style={styles.mainArea}>
+        {/* Graph view — always rendered behind */}
+        <View style={selectedPath ? styles.graphHidden : styles.graphFull}>
+          {graph && graph.nodes.length > 0 ? (
+            <GraphView
+              data={graph}
+              onSelectNode={(id) => selectNote(id)}
+            />
+          ) : (
+            <View style={styles.graphEmpty}>
+              <Text style={styles.emptyText}>
+                {loading ? 'Loading graph...' : 'No notes to visualize'}
+              </Text>
+            </View>
+          )}
+        </View>
+
+        {/* Editor overlay — slides in when a note is selected */}
+        {selectedPath && (
+          <View style={styles.editorOverlay}>
             <View style={styles.editorHeader}>
+              <TouchableOpacity onPress={handleClose} style={styles.backBtn}>
+                <Text style={styles.backBtnText}>← Back</Text>
+              </TouchableOpacity>
               <Text style={styles.editorTitle} numberOfLines={1}>
                 {selectedNote?.title || selectedPath}
               </Text>
@@ -139,55 +162,41 @@ export default function MemoryScreen() {
                 </TouchableOpacity>
               </View>
             </View>
-            {Platform.OS === 'web' ? (
-              <textarea
-                value={editorContent}
-                onChange={(e: any) => updateEditor(e.target.value)}
-                style={{
-                  flex: 1,
-                  fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                  fontSize: 13,
-                  lineHeight: '1.6',
-                  padding: 20,
-                  border: 'none',
-                  outline: 'none',
-                  resize: 'none',
-                  backgroundColor: '#FFFFFF',
-                  color: '#1a1a1a',
-                  width: '100%',
-                  height: '100%',
-                } as any}
-                spellCheck={false}
-              />
-            ) : (
-              <TextInput
-                style={styles.editorInput}
-                value={editorContent}
-                onChangeText={updateEditor}
-                multiline
-                textAlignVertical="top"
-              />
-            )}
-          </>
-        ) : (
-          <View style={styles.editorEmpty}>
-            <Text style={styles.emptyText}>Select a note to edit</Text>
-          </View>
-        )}
-      </View>
 
-      {/* ── Right panel: graph view ── */}
-      <View style={styles.rightPanel}>
-        {graph && graph.nodes.length > 0 ? (
-          <GraphView
-            data={graph}
-            onSelectNode={(id) => selectNote(id)}
-          />
-        ) : (
-          <View style={styles.graphEmpty}>
-            <Text style={styles.emptyText}>
-              {loading ? 'Loading graph...' : 'No notes to visualize'}
-            </Text>
+            <View style={styles.editorBody}>
+              {Platform.OS === 'web' ? (
+                <textarea
+                  value={editorContent}
+                  onChange={(e: any) => updateEditor(e.target.value)}
+                  style={{
+                    flex: 1,
+                    width: '100%',
+                    height: '100%',
+                    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+                    fontSize: 13,
+                    lineHeight: '1.7',
+                    padding: 24,
+                    border: 'none',
+                    outline: 'none',
+                    resize: 'none',
+                    backgroundColor: '#FFFFFF',
+                    color: '#1a1a1a',
+                    boxSizing: 'border-box',
+                  } as any}
+                  spellCheck={false}
+                />
+              ) : (
+                <ScrollView style={{ flex: 1 }}>
+                  <TextInput
+                    style={styles.editorInput}
+                    value={editorContent}
+                    onChangeText={updateEditor}
+                    multiline
+                    textAlignVertical="top"
+                  />
+                </ScrollView>
+              )}
+            </View>
           </View>
         )}
       </View>
@@ -198,7 +207,7 @@ export default function MemoryScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, flexDirection: 'row', backgroundColor: '#FAFAFA' },
 
-  // Left panel (file tree)
+  // Left panel
   leftPanel: {
     width: 220,
     backgroundColor: '#F5F5F5',
@@ -234,49 +243,52 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     marginVertical: 1,
   },
-  fileItemActive: {
-    backgroundColor: '#EBEBEB',
-  },
-  fileName: {
-    fontSize: 13,
-    color: '#333',
-  },
-  fileNameActive: {
-    color: '#D97757',
-    fontWeight: '500',
-  },
-  fileTags: {
-    fontSize: 10,
-    color: '#AAA',
-    marginTop: 1,
-  },
+  fileItemActive: { backgroundColor: '#EBEBEB' },
+  fileName: { fontSize: 13, color: '#333' },
+  fileNameActive: { color: '#D97757', fontWeight: '500' },
+  fileTags: { fontSize: 10, color: '#AAA', marginTop: 1 },
   noteCount: {
     padding: 10,
     borderTopWidth: 1,
     borderTopColor: '#EBEBEB',
   },
-  noteCountText: {
-    fontSize: 11,
-    color: '#999',
-    textAlign: 'center',
-  },
+  noteCountText: { fontSize: 11, color: '#999', textAlign: 'center' },
 
-  // Center panel (editor)
-  centerPanel: {
-    flex: 1,
+  // Main area
+  mainArea: { flex: 1, position: 'relative' },
+  graphFull: { flex: 1 },
+  graphHidden: { flex: 1, display: 'none' },
+  graphEmpty: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+
+  // Editor overlay
+  editorOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: '#FFFFFF',
     flexDirection: 'column',
-    borderRightWidth: 1,
-    borderRightColor: '#EBEBEB',
+    zIndex: 10,
   },
   editorHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: '#EBEBEB',
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#FAFAFA',
+  },
+  backBtn: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    marginRight: 12,
+  },
+  backBtnText: {
+    fontSize: 13,
+    color: '#D97757',
+    fontWeight: '500',
   },
   editorTitle: {
     fontSize: 14,
@@ -304,41 +316,15 @@ const styles = StyleSheet.create({
     paddingVertical: 5,
     borderRadius: 6,
   },
-  saveBtnDisabled: {
-    opacity: 0.3,
-  },
-  saveBtnText: {
-    color: '#FFFFFF',
-    fontSize: 12,
-    fontWeight: '600',
-  },
+  saveBtnDisabled: { opacity: 0.3 },
+  saveBtnText: { color: '#FFFFFF', fontSize: 12, fontWeight: '600' },
+  editorBody: { flex: 1 },
   editorInput: {
-    flex: 1,
-    padding: 20,
+    padding: 24,
     fontFamily: 'monospace',
     fontSize: 13,
     color: '#1a1a1a',
-    backgroundColor: '#FFFFFF',
+    lineHeight: 22,
   },
-  editorEmpty: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  // Right panel (graph)
-  rightPanel: {
-    width: 350,
-    backgroundColor: '#FAFAFA',
-  },
-  graphEmpty: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  emptyText: {
-    color: '#999',
-    fontSize: 13,
-  },
+  emptyText: { color: '#999', fontSize: 13, padding: 16 },
 });

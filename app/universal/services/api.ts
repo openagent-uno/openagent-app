@@ -46,15 +46,15 @@ export async function readNote(path: string): Promise<{
   links: string[];
   modified: number;
 }> {
-  return get(`/api/vault/notes/${encodeURIComponent(path)}`);
+  return get(`/api/vault/notes/${path.split('/').map(encodeURIComponent).join('/')}`);
 }
 
 export async function writeNote(path: string, content: string): Promise<void> {
-  await put(`/api/vault/notes/${encodeURIComponent(path)}`, { content });
+  await put(`/api/vault/notes/${path.split('/').map(encodeURIComponent).join('/')}`, { content });
 }
 
 export async function deleteNote(path: string): Promise<void> {
-  await del(`/api/vault/notes/${encodeURIComponent(path)}`);
+  await del(`/api/vault/notes/${path.split('/').map(encodeURIComponent).join('/')}`);
 }
 
 export async function searchNotes(query: string): Promise<VaultNote[]> {
