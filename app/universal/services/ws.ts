@@ -26,6 +26,7 @@ export class OpenAgentWS {
     this.ws = new WebSocket(this.url);
 
     this.ws.onopen = () => {
+      console.log('[WS] connected, sending auth...');
       this.send({ type: 'auth', token: this.token });
     };
 
@@ -38,13 +39,15 @@ export class OpenAgentWS {
       }
     };
 
-    this.ws.onclose = () => {
+    this.ws.onclose = (event) => {
+      console.log(`[WS] closed: code=${event.code} reason=${event.reason}`);
       if (this.shouldReconnect) {
         this.reconnectTimer = setTimeout(() => this.connect(), 3000);
       }
     };
 
-    this.ws.onerror = () => {
+    this.ws.onerror = (event) => {
+      console.error('[WS] error:', event);
       this.ws?.close();
     };
   }

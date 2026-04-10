@@ -96,7 +96,8 @@ function createWindow(): void {
     minHeight: 500,
     title: 'OpenAgent',
     titleBarStyle: 'hiddenInset',
-    show: false,
+    show: true,
+    backgroundColor: '#FFF9F5',  // match theme bg, avoids white flash
     webPreferences: {
       preload: path.resolve(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -109,10 +110,6 @@ function createWindow(): void {
   } else {
     mainWindow.loadURL(`http://127.0.0.1:${staticPort}`);
   }
-
-  mainWindow.once('ready-to-show', () => {
-    mainWindow?.show();
-  });
 
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
