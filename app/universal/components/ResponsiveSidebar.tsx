@@ -8,10 +8,10 @@
  * native-quality animations on all platforms.
  */
 
-import { useRef, useCallback } from 'react';
+import { useCallback } from 'react';
 import { View, StyleSheet } from 'react-native';
 import { createDrawerNavigator, DrawerContentComponentProps } from '@react-navigation/drawer';
-import { NavigationContainer, NavigationContainerRef } from '@react-navigation/native';
+import { NavigationIndependentTree } from '@react-navigation/native';
 import { useIsWideScreen } from '../hooks/useLayout';
 
 const Drawer = createDrawerNavigator();
@@ -24,8 +24,6 @@ interface Props {
 
 export default function ResponsiveSidebar({ sidebar, children, sidebarWidth = 240 }: Props) {
   const isWide = useIsWideScreen();
-  const navRef = useRef<NavigationContainerRef<any>>(null);
-
   const renderDrawerContent = useCallback(
     (_props: DrawerContentComponentProps) => (
       <View style={styles.drawerContent}>{sidebar}</View>
@@ -39,7 +37,7 @@ export default function ResponsiveSidebar({ sidebar, children, sidebarWidth = 24
   );
 
   return (
-    <NavigationContainer independent ref={navRef}>
+    <NavigationIndependentTree>
       <Drawer.Navigator
         screenOptions={{
           headerShown: false,
@@ -57,7 +55,7 @@ export default function ResponsiveSidebar({ sidebar, children, sidebarWidth = 24
       >
         <Drawer.Screen name="__main__" component={MainScreen} />
       </Drawer.Navigator>
-    </NavigationContainer>
+    </NavigationIndependentTree>
   );
 }
 
