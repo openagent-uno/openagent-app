@@ -1,13 +1,14 @@
 /**
  * Chat screen — ChatGPT-style interface with multi-session support.
+ * Light theme inspired by Claude Code.
  */
 
 import { useState, useRef, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet,
 } from 'react-native';
-import { useConnection } from '../stores/connection';
-import { useChat } from '../stores/chat';
+import { useConnection } from '../../stores/connection';
+import { useChat } from '../../stores/chat';
 
 export default function ChatScreen() {
   const ws = useConnection((s) => s.ws);
@@ -21,7 +22,6 @@ export default function ChatScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
-  // Auto-scroll on new messages
   useEffect(() => {
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
   }, [activeSession?.messages.length, activeSession?.statusText]);
@@ -54,15 +54,10 @@ export default function ChatScreen() {
               onPress={() => setActiveSession(ses.id)}
               onLongPress={() => removeSession(ses.id)}
             >
-              <Text
-                style={styles.sessionTitle}
-                numberOfLines={1}
-              >
+              <Text style={styles.sessionTitle} numberOfLines={1}>
                 {ses.title}
               </Text>
-              {ses.isProcessing && (
-                <Text style={styles.processingDot}>●</Text>
-              )}
+              {ses.isProcessing && <Text style={styles.processingDot}>●</Text>}
             </TouchableOpacity>
           ))}
         </ScrollView>
@@ -85,7 +80,12 @@ export default function ChatScreen() {
                     msg.role === 'user' ? styles.userBubble : styles.assistantBubble,
                   ]}
                 >
-                  <Text style={styles.bubbleText}>{msg.text}</Text>
+                  <Text style={[
+                    styles.bubbleText,
+                    msg.role === 'user' && styles.userText,
+                  ]}>
+                    {msg.text}
+                  </Text>
                 </View>
               ))}
 
@@ -104,8 +104,8 @@ export default function ChatScreen() {
                 style={styles.textInput}
                 value={input}
                 onChangeText={setInput}
-                placeholder="Type a message..."
-                placeholderTextColor="#666"
+                placeholder="Send a message..."
+                placeholderTextColor="#999"
                 onSubmitEditing={handleSend}
                 returnKeyType="send"
                 multiline
@@ -121,9 +121,7 @@ export default function ChatScreen() {
           </>
         ) : (
           <View style={styles.emptyState}>
-            <Text style={styles.emptyText}>
-              Select a chat or create a new one
-            </Text>
+            <Text style={styles.emptyText}>Select a chat or create a new one</Text>
           </View>
         )}
       </View>
@@ -132,101 +130,106 @@ export default function ChatScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, flexDirection: 'row', backgroundColor: '#1a1a2e' },
+  container: { flex: 1, flexDirection: 'row', backgroundColor: '#FAFAFA' },
 
   // Sidebar
   sidebar: {
-    width: 260,
-    backgroundColor: '#16213e',
+    width: 240,
+    backgroundColor: '#F5F5F5',
     borderRightWidth: 1,
-    borderRightColor: '#0f3460',
+    borderRightColor: '#EBEBEB',
     padding: 16,
   },
   sidebarTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#e0e0e0',
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#1a1a1a',
     marginBottom: 16,
   },
   newChatBtn: {
-    backgroundColor: '#533483',
+    backgroundColor: '#D97757',
     borderRadius: 8,
     padding: 10,
     alignItems: 'center',
     marginBottom: 16,
   },
-  newChatText: { color: '#e0e0e0', fontWeight: '600' },
+  newChatText: { color: '#FFFFFF', fontWeight: '600', fontSize: 13 },
   sessionList: { flex: 1 },
   sessionItem: {
     padding: 10,
     borderRadius: 8,
-    marginBottom: 4,
+    marginBottom: 2,
     flexDirection: 'row',
     alignItems: 'center',
   },
-  sessionActive: { backgroundColor: '#0f3460' },
-  sessionTitle: { color: '#ccc', flex: 1, fontSize: 13 },
-  processingDot: { color: '#2ecc71', fontSize: 10, marginLeft: 6 },
+  sessionActive: { backgroundColor: '#EBEBEB' },
+  sessionTitle: { color: '#444', flex: 1, fontSize: 13 },
+  processingDot: { color: '#D97757', fontSize: 10, marginLeft: 6 },
 
   // Chat
   chatArea: { flex: 1, flexDirection: 'column' },
   messages: { flex: 1 },
-  messagesContent: { padding: 20, paddingBottom: 8 },
+  messagesContent: { padding: 24, paddingBottom: 8 },
   bubble: {
     maxWidth: '75%',
     borderRadius: 12,
-    padding: 12,
-    marginBottom: 8,
+    padding: 14,
+    marginBottom: 10,
   },
   userBubble: {
-    backgroundColor: '#533483',
+    backgroundColor: '#D97757',
     alignSelf: 'flex-end',
   },
   assistantBubble: {
-    backgroundColor: '#16213e',
+    backgroundColor: '#FFFFFF',
     alignSelf: 'flex-start',
     borderWidth: 1,
-    borderColor: '#0f3460',
+    borderColor: '#EBEBEB',
   },
   statusBubble: {
     backgroundColor: 'transparent',
     alignSelf: 'flex-start',
+    padding: 8,
   },
-  bubbleText: { color: '#e0e0e0', fontSize: 14, lineHeight: 20 },
-  statusText: { color: '#888', fontSize: 13, fontStyle: 'italic' },
+  bubbleText: { color: '#1a1a1a', fontSize: 14, lineHeight: 21 },
+  userText: { color: '#FFFFFF' },
+  statusText: { color: '#999', fontSize: 13, fontStyle: 'italic' },
 
   // Input
   inputBar: {
     flexDirection: 'row',
     alignItems: 'flex-end',
     padding: 12,
+    paddingHorizontal: 20,
     borderTopWidth: 1,
-    borderTopColor: '#0f3460',
-    backgroundColor: '#16213e',
+    borderTopColor: '#EBEBEB',
+    backgroundColor: '#FFFFFF',
   },
   textInput: {
     flex: 1,
-    backgroundColor: '#0f3460',
+    backgroundColor: '#F5F5F5',
     borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E8E8E8',
     paddingHorizontal: 16,
     paddingVertical: 10,
-    color: '#e0e0e0',
+    color: '#1a1a1a',
     fontSize: 14,
     maxHeight: 120,
   },
   sendBtn: {
-    backgroundColor: '#533483',
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    backgroundColor: '#D97757',
+    width: 36,
+    height: 36,
+    borderRadius: 18,
     alignItems: 'center',
     justifyContent: 'center',
     marginLeft: 8,
   },
-  sendBtnDisabled: { opacity: 0.4 },
-  sendText: { color: '#fff', fontSize: 18, fontWeight: '700' },
+  sendBtnDisabled: { opacity: 0.3 },
+  sendText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 
   // Empty
   emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  emptyText: { color: '#666', fontSize: 16 },
+  emptyText: { color: '#999', fontSize: 15 },
 });

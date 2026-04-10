@@ -26,10 +26,9 @@ export default function LoginScreen() {
     });
   };
 
-  // Auto-navigate on successful connection
   if (isConnected && agentName) {
     createSession();
-    router.replace('/chat');
+    router.replace('/(tabs)/chat');
     return null;
   }
 
@@ -46,7 +45,7 @@ export default function LoginScreen() {
             value={host}
             onChangeText={setHost}
             placeholder="localhost"
-            placeholderTextColor="#666"
+            placeholderTextColor="#999"
           />
         </View>
 
@@ -58,7 +57,7 @@ export default function LoginScreen() {
             onChangeText={setPort}
             placeholder="8765"
             keyboardType="numeric"
-            placeholderTextColor="#666"
+            placeholderTextColor="#999"
           />
         </View>
 
@@ -70,7 +69,7 @@ export default function LoginScreen() {
             onChangeText={setToken}
             placeholder="(optional)"
             secureTextEntry
-            placeholderTextColor="#666"
+            placeholderTextColor="#999"
           />
         </View>
 
@@ -86,7 +85,7 @@ export default function LoginScreen() {
             setHost('localhost');
             setPort('8765');
             setToken('');
-            handleConnect();
+            setTimeout(handleConnect, 50);
           }}
         >
           <Text style={styles.buttonText}>Connect to Local</Text>
@@ -99,21 +98,27 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1a1a2e',
+    backgroundColor: '#FAFAFA',
     justifyContent: 'center',
     alignItems: 'center',
   },
   card: {
-    backgroundColor: '#16213e',
-    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
     padding: 32,
-    width: 400,
+    width: 380,
     maxWidth: '90%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 12,
+    // @ts-ignore
+    elevation: 3,
   },
   title: {
-    fontSize: 28,
-    fontWeight: '700',
-    color: '#e0e0e0',
+    fontSize: 24,
+    fontWeight: '600',
+    color: '#1a1a1a',
     textAlign: 'center',
     marginBottom: 4,
   },
@@ -121,42 +126,47 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#888',
     textAlign: 'center',
-    marginBottom: 24,
+    marginBottom: 28,
   },
   field: {
     marginBottom: 16,
   },
   label: {
     fontSize: 13,
-    color: '#aaa',
+    color: '#666',
     marginBottom: 4,
+    fontWeight: '500',
   },
   input: {
-    backgroundColor: '#0f3460',
+    backgroundColor: '#F5F5F5',
     borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E8E8E8',
     padding: 12,
-    color: '#e0e0e0',
-    fontSize: 15,
+    color: '#1a1a1a',
+    fontSize: 14,
   },
   error: {
-    color: '#e74c3c',
+    color: '#D94F4F',
     fontSize: 13,
     marginBottom: 12,
     textAlign: 'center',
   },
   button: {
-    backgroundColor: '#533483',
+    backgroundColor: '#D97757',
     borderRadius: 8,
-    padding: 14,
+    padding: 13,
     marginTop: 8,
     alignItems: 'center',
   },
   localButton: {
-    backgroundColor: '#0f3460',
+    backgroundColor: '#F5F5F5',
+    borderWidth: 1,
+    borderColor: '#E0E0E0',
   },
   buttonText: {
-    color: '#e0e0e0',
-    fontSize: 15,
+    color: '#FFFFFF',
+    fontSize: 14,
     fontWeight: '600',
   },
 });
