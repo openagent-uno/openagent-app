@@ -15,6 +15,7 @@
     "web": {
       "bundler": "metro",
       "output": "single",
+      "baseUrl": ".",
       "favicon": "./assets/favicon.png",
       "name": "OpenAgent",
       "shortName": "OpenAgent",

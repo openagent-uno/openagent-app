@@ -31,9 +31,14 @@ build_desktop() {
     # 1. Build the web app
     build_web
 
-    # 2. Copy into desktop/
+    # 2. Copy into desktop/ and fix paths for file:// protocol
     rm -rf "$SCRIPT_DIR/desktop/web-build"
     cp -r "$SCRIPT_DIR/universal/dist" "$SCRIPT_DIR/desktop/web-build"
+
+    # Expo generates absolute paths (/favicon.ico, /_expo/...) which
+    # don't work with Electron's file:// loading. Make them relative.
+    sed -i.bak 's|href="/|href="./|g; s|src="/|src="./|g' "$SCRIPT_DIR/desktop/web-build/index.html"
+    rm -f "$SCRIPT_DIR/desktop/web-build/index.html.bak"
 
     # 3. Package with electron-builder
     cd "$SCRIPT_DIR/desktop"

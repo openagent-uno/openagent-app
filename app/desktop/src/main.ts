@@ -2,12 +2,14 @@
  * Electron main process.
  *
  * Dev:  loads from Expo web dev server (localhost:8081)
- * Prod: loads from bundled web-build/index.html
+ * Prod: serves web-build via a local HTTP server (Expo Router needs
+ *       proper URL routing which file:// can't provide)
  */
 
-import { app, BrowserWindow, shell, dialog } from 'electron';
+import { app, BrowserWindow, shell, dialog, protocol } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
+import * as http from 'http';
 import { registerStorageHandlers } from './services/storage';
 
 const isDev = !app.isPackaged;
@@ -22,13 +24,69 @@ if (process.platform === 'win32') {
   app.setAppUserModelId('ai.openagent.desktop');
 }
 
-// Single instance lock
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 }
 
 let mainWindow: BrowserWindow | null = null;
+let staticServer: http.Server | null = null;
+let staticPort = 0;
+
+// ── Static file server for production ──
+
+function startStaticServer(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const webBuildDir = path.resolve(__dirname, '..', 'web-build');
+
+    const mimeTypes: Record<string, string> = {
+      '.html': 'text/html',
+      '.js': 'application/javascript',
+      '.css': 'text/css',
+      '.json': 'application/json',
+      '.png': 'image/png',
+      '.jpg': 'image/jpeg',
+      '.svg': 'image/svg+xml',
+      '.ico': 'image/x-icon',
+      '.woff': 'font/woff',
+      '.woff2': 'font/woff2',
+      '.ttf': 'font/ttf',
+      '.map': 'application/json',
+    };
+
+    const server = http.createServer((req, res) => {
+      let filePath = path.join(webBuildDir, req.url === '/' ? 'index.html' : req.url!);
+
+      // If file doesn't exist, serve index.html (SPA fallback)
+      if (!fs.existsSync(filePath)) {
+        filePath = path.join(webBuildDir, 'index.html');
+      }
+
+      const ext = path.extname(filePath).toLowerCase();
+      const contentType = mimeTypes[ext] || 'application/octet-stream';
+
+      try {
+        const content = fs.readFileSync(filePath);
+        res.writeHead(200, { 'Content-Type': contentType });
+        res.end(content);
+      } catch {
+        res.writeHead(404);
+        res.end('Not found');
+      }
+    });
+
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address();
+      const port = typeof addr === 'object' && addr ? addr.port : 0;
+      staticServer = server;
+      resolve(port);
+    });
+
+    server.on('error', reject);
+  });
+}
+
+// ── Window ──
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -38,7 +96,7 @@ function createWindow(): void {
     minHeight: 500,
     title: 'OpenAgent',
     titleBarStyle: 'hiddenInset',
-    show: false, // show after content loads to avoid flash
+    show: false,
     webPreferences: {
       preload: path.resolve(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -49,16 +107,9 @@ function createWindow(): void {
   if (isDev) {
     mainWindow.loadURL('http://localhost:8081');
   } else {
-    const webBuild = path.resolve(__dirname, '..', 'web-build', 'index.html');
-    if (fs.existsSync(webBuild)) {
-      mainWindow.loadFile(webBuild);
-    } else {
-      console.error('web-build not found at:', webBuild);
-      mainWindow.loadURL(`data:text/html,<h2>Build not found</h2><p>${webBuild}</p>`);
-    }
+    mainWindow.loadURL(`http://127.0.0.1:${staticPort}`);
   }
 
-  // Show window once content is ready (avoids white flash)
   mainWindow.once('ready-to-show', () => {
     mainWindow?.show();
   });
@@ -73,27 +124,24 @@ function createWindow(): void {
   });
 }
 
-// ── Auto-updater (production only) ──
+// ── Auto-updater ──
 
 function setupAutoUpdater(): void {
   if (isDev) return;
-
   const { autoUpdater } = require('electron-updater');
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
   autoUpdater.on('update-downloaded', (info: any) => {
-    dialog
-      .showMessageBox({
-        type: 'info',
-        title: 'Update Ready',
-        message: `OpenAgent ${info.version} is ready to install.`,
-        buttons: ['Restart Now', 'Later'],
-        defaultId: 0,
-      })
-      .then(({ response }: { response: number }) => {
-        if (response === 0) autoUpdater.quitAndInstall();
-      });
+    dialog.showMessageBox({
+      type: 'info',
+      title: 'Update Ready',
+      message: `OpenAgent ${info.version} is ready to install.`,
+      buttons: ['Restart Now', 'Later'],
+      defaultId: 0,
+    }).then(({ response }: { response: number }) => {
+      if (response === 0) autoUpdater.quitAndInstall();
+    });
   });
 
   autoUpdater.on('error', (err: Error) => {
@@ -103,21 +151,28 @@ function setupAutoUpdater(): void {
   autoUpdater.checkForUpdatesAndNotify();
 }
 
-// ── App lifecycle ──
+// ── Lifecycle ──
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   registerStorageHandlers();
+
+  // In production, start a local HTTP server for the web build
+  // (Expo Router needs proper URL routing that file:// can't do)
+  if (!isDev) {
+    staticPort = await startStaticServer();
+  }
+
   createWindow();
   setupAutoUpdater();
 });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
+    if (staticServer) staticServer.close();
     app.quit();
   }
 });
 
-// macOS: clicking dock icon restores/focuses the window
 app.on('activate', () => {
   if (mainWindow === null) {
     createWindow();
@@ -128,11 +183,14 @@ app.on('activate', () => {
   }
 });
 
-// Second instance: focus existing window
 app.on('second-instance', () => {
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
     mainWindow.focus();
   }
+});
+
+app.on('before-quit', () => {
+  if (staticServer) staticServer.close();
 });
