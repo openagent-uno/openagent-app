@@ -7,6 +7,7 @@
   "homepage": "https://openagent.uno/",
   "author": {
     "name": "OpenAgent",
+    "email": "geroale2000@gmail.com",
     "url": "https://openagent.uno/"
   },
   "main": "dist/main.js",
