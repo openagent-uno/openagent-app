@@ -10,7 +10,7 @@ import {
 import { useRouter } from 'expo-router';
 import { useConnection } from '../../stores/connection';
 import { useConfig } from '../../stores/config';
-import { setBaseUrl } from '../../services/api';
+import { setBaseUrl, triggerUpdate, triggerRestart } from '../../services/api';
 import { useConfirm } from '../../components/ConfirmDialog';
 import PrimaryButton from '../../components/PrimaryButton';
 import ThemedSwitch from '../../components/ThemedSwitch';
@@ -221,6 +221,38 @@ export default function SettingsScreen() {
         <Text style={[styles.label, { marginTop: 12 }]}>Check Interval (cron)</Text>
         <TextInput style={styles.input} value={autoUpdateInterval} onChangeText={setAutoUpdateInterval} placeholder="17 */6 * * *" placeholderTextColor={colors.textMuted} />
         <SaveBtn label="Save Auto-Update" saved={saved === 'auto_update'} onPress={() => saveSection('auto_update', { enabled: autoUpdateEnabled, mode: autoUpdateMode, check_interval: autoUpdateInterval }, 'auto_update')} />
+      </View>
+
+      {/* Controls */}
+      <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Controls</Text>
+      <View style={styles.card}>
+        <PrimaryButton style={{ marginBottom: 8 }} onPress={async () => {
+          try {
+            const res = await triggerUpdate();
+            if (res.updated) {
+              setSaved('update');
+              setTimeout(() => setSaved(null), 5000);
+              alert(`Updated: v${res.old} → v${res.new}. Restarting...`);
+            } else {
+              alert(`Already up-to-date (v${res.version}).`);
+            }
+          } catch (e: any) { alert(`Update failed: ${e.message}`); }
+        }}>
+          <Text style={styles.saveBtnText}>Check for Updates</Text>
+        </PrimaryButton>
+        <PrimaryButton style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }} onPress={async () => {
+          const confirmed = await confirm({
+            title: 'Restart Agent',
+            message: 'This will restart the OpenAgent server. You may need to reconnect.',
+            confirmLabel: 'Restart',
+          });
+          if (!confirmed) return;
+          try {
+            await triggerRestart();
+          } catch { /* connection will drop */ }
+        }}>
+          <Text style={[styles.saveBtnText, { color: colors.text }]}>Restart Agent</Text>
+        </PrimaryButton>
       </View>
 
       {/* Connection */}

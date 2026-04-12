@@ -2,10 +2,11 @@
  * Chat screen — multi-session, file attach, voice recording.
  */
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Platform,
 } from 'react-native';
+import type { ToolInfo } from '../../common/types';
 import { useConnection } from '../../stores/connection';
 import { useChat } from '../../stores/chat';
 import Markdown from '../../components/Markdown';
@@ -164,10 +165,7 @@ export default function ChatScreen() {
             <ScrollView ref={scrollRef} style={styles.messages} contentContainerStyle={styles.messagesContent}>
               {activeSession.messages.map((msg) => (
                 msg.role === 'tool' ? (
-                  <View key={msg.id} style={styles.toolBlock}>
-                    <Text style={styles.toolIcon}>⚙️</Text>
-                    <Text style={styles.toolText}>{msg.text}</Text>
-                  </View>
+                  <ToolCard key={msg.id} toolInfo={msg.toolInfo} fallbackText={msg.text} />
                 ) : (
                   <View key={msg.id} style={[styles.bubble, msg.role === 'user' ? styles.userBubble : styles.assistantBubble]}>
                     {msg.role === 'assistant' ? (
@@ -254,6 +252,79 @@ export default function ChatScreen() {
   );
 }
 
+/** Collapsible tool card showing name, params, status, and result. */
+function ToolCard({ toolInfo, fallbackText }: { toolInfo?: ToolInfo; fallbackText: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (!toolInfo) {
+    // Legacy plain text tool pill
+    return (
+      <View style={styles.toolBlock}>
+        <Text style={styles.toolIcon}>⚙️</Text>
+        <Text style={styles.toolText}>{fallbackText}</Text>
+      </View>
+    );
+  }
+
+  const isRunning = toolInfo.status === 'running';
+  const isError = toolInfo.status === 'error';
+  const statusIcon = isRunning ? '⏳' : isError ? '✗' : '✓';
+  const statusLabel = isRunning ? 'Running' : isError ? 'Error' : 'Done';
+  const statusColor = isError ? colors.error : isRunning ? colors.textMuted : '#34A853';
+
+  return (
+    <TouchableOpacity
+      activeOpacity={0.7}
+      onPress={() => setExpanded(!expanded)}
+      style={[styles.toolCard, isError && styles.toolCardError]}
+    >
+      {/* Header */}
+      <View style={styles.toolCardHeader}>
+        <Text style={styles.toolCardIcon}>⚙️</Text>
+        <Text style={styles.toolCardName}>{toolInfo.tool}</Text>
+        <View style={[styles.toolBadge, { backgroundColor: statusColor + '18' }]}>
+          <Text style={[styles.toolBadgeText, { color: statusColor }]}>{statusIcon} {statusLabel}</Text>
+        </View>
+        <Text style={styles.toolChevron}>{expanded ? '▾' : '▸'}</Text>
+      </View>
+
+      {/* Expanded content */}
+      {expanded && (
+        <View style={styles.toolCardBody}>
+          {toolInfo.params && Object.keys(toolInfo.params).length > 0 && (
+            <>
+              <Text style={styles.toolSectionTitle}>Parameters</Text>
+              <View style={styles.toolCodeBlock}>
+                {Object.entries(toolInfo.params).map(([k, v]) => (
+                  <Text key={k} style={styles.toolCodeText}>
+                    <Text style={{ fontWeight: '600' }}>{k}:</Text> {typeof v === 'string' ? v : JSON.stringify(v)}
+                  </Text>
+                ))}
+              </View>
+            </>
+          )}
+          {toolInfo.result && (
+            <>
+              <Text style={styles.toolSectionTitle}>Result</Text>
+              <View style={styles.toolCodeBlock}>
+                <Text style={styles.toolCodeText} numberOfLines={8}>{toolInfo.result}</Text>
+              </View>
+            </>
+          )}
+          {toolInfo.error && (
+            <>
+              <Text style={[styles.toolSectionTitle, { color: colors.error }]}>Error</Text>
+              <View style={[styles.toolCodeBlock, { borderColor: colors.error + '40' }]}>
+                <Text style={[styles.toolCodeText, { color: colors.error }]}>{toolInfo.error}</Text>
+              </View>
+            </>
+          )}
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+}
+
 const styles = StyleSheet.create({
   sidebarInner: { flex: 1, padding: 16 },
   newChatBtn: { marginBottom: 16 },
@@ -278,6 +349,33 @@ const styles = StyleSheet.create({
   },
   toolIcon: { fontSize: 12, marginRight: 6 },
   toolText: { fontSize: 12, color: colors.primary, fontWeight: '500' },
+
+  // ToolCard
+  toolCard: {
+    alignSelf: 'center', width: '85%', maxWidth: 500,
+    backgroundColor: colors.surface, borderRadius: 10,
+    borderWidth: 1, borderColor: colors.border,
+    marginVertical: 6, overflow: 'hidden',
+  },
+  toolCardError: { borderColor: colors.error + '60' },
+  toolCardHeader: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 8, paddingHorizontal: 12,
+  },
+  toolCardIcon: { fontSize: 13, marginRight: 6 },
+  toolCardName: { fontSize: 13, fontWeight: '600', color: colors.text, flex: 1 },
+  toolBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
+  toolBadgeText: { fontSize: 11, fontWeight: '600' },
+  toolChevron: { fontSize: 11, color: colors.textMuted, marginLeft: 8 },
+  toolCardBody: { paddingHorizontal: 12, paddingBottom: 10 },
+  toolSectionTitle: { fontSize: 11, fontWeight: '600', color: colors.textMuted, marginTop: 6, marginBottom: 4 },
+  toolCodeBlock: {
+    backgroundColor: colors.inputBg, borderRadius: 6,
+    borderWidth: 1, borderColor: colors.border,
+    padding: 8,
+  },
+  toolCodeText: { fontSize: 11, color: colors.text, fontFamily: Platform.OS === 'web' ? 'monospace' : undefined },
+
   bubbleText: { color: colors.text, fontSize: 14, lineHeight: 21 },
   userText: { color: colors.textInverse },
   statusText: { color: colors.textMuted, fontSize: 13, fontStyle: 'italic' },

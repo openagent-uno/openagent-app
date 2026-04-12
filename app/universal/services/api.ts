@@ -100,3 +100,17 @@ export async function updateConfigSection(
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
   return res.json();
 }
+
+// ── Control API ──
+
+export async function triggerUpdate(): Promise<{ updated: boolean; version?: string; old?: string; new?: string }> {
+  const res = await fetch(`${baseUrl}/api/update`, { method: 'POST' });
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+export async function triggerRestart(): Promise<{ ok: boolean }> {
+  const res = await fetch(`${baseUrl}/api/restart`, { method: 'POST' });
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  return res.json();
+}

@@ -3,7 +3,7 @@
  */
 
 import { create } from 'zustand';
-import type { ChatMessage, ChatSession, ServerMessage } from '../../common/types';
+import type { ChatMessage, ChatSession, ServerMessage, ToolInfo } from '../../common/types';
 
 let nextMsgId = 1;
 const genId = () => `msg-${nextMsgId++}-${Date.now()}`;
@@ -69,11 +69,50 @@ export const useChat = create<ChatState>((set, get) => ({
   handleServerMessage: (msg) => set((s) => {
     if (msg.type === 'status') {
       const text = msg.text || '';
+
+      // Try to parse as structured tool event
+      let toolInfo: ToolInfo | undefined;
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && parsed.tool) toolInfo = parsed as ToolInfo;
+      } catch { /* plain text status */ }
+
+      if (toolInfo) {
+        return {
+          sessions: s.sessions.map((ses) => {
+            if (ses.id !== msg.session_id) return ses;
+            if (toolInfo!.status === 'running') {
+              // New tool → add message
+              return {
+                ...ses,
+                statusText: `Using ${toolInfo!.tool}...`,
+                messages: [...ses.messages, {
+                  id: genId(),
+                  role: 'tool' as const,
+                  text: `Using ${toolInfo!.tool}...`,
+                  timestamp: Date.now(),
+                  toolInfo,
+                }],
+              };
+            }
+            // done/error → update the existing running tool message
+            const msgs = [...ses.messages];
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if (msgs[i].toolInfo?.tool === toolInfo!.tool && msgs[i].toolInfo?.status === 'running') {
+                msgs[i] = { ...msgs[i], toolInfo: toolInfo! };
+                break;
+              }
+            }
+            return { ...ses, messages: msgs };
+          }),
+        };
+      }
+
+      // Legacy plain text tool status ("Using ...")
       const isTool = text.startsWith('Using ');
       return {
         sessions: s.sessions.map((ses) => {
           if (ses.id !== msg.session_id) return ses;
-          // Tool use → add as inline "tool" message
           if (isTool) {
             return {
               ...ses,

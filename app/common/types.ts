@@ -8,7 +8,7 @@
 export type ClientMessage =
   | { type: 'auth'; token: string; client_id?: string }
   | { type: 'message'; text: string; session_id: string }
-  | { type: 'command'; name: 'stop' | 'new' | 'status' | 'queue' | 'help' | 'usage' }
+  | { type: 'command'; name: 'stop' | 'new' | 'status' | 'queue' | 'help' | 'usage' | 'update' | 'restart' }
   | { type: 'ping' };
 
 export type ServerMessage =
@@ -29,12 +29,21 @@ export interface Attachment {
 
 // ── Chat State ──
 
+export interface ToolInfo {
+  tool: string;
+  params?: Record<string, any>;
+  status: 'running' | 'done' | 'error';
+  result?: string;
+  error?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'tool';
   text: string;
   timestamp: number;
   attachments?: Attachment[];
+  toolInfo?: ToolInfo;
 }
 
 export interface ChatSession {
