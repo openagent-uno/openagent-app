@@ -45,10 +45,10 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="model"
+        name="automations"
         options={{
-          title: 'Model',
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 18, color }}>🤖</Text>,
+          title: 'Automations',
+          tabBarIcon: ({ color }) => <Text style={{ fontSize: 18, color }}>⚡</Text>,
         }}
       />
       <Tabs.Screen
@@ -56,6 +56,13 @@ export default function TabsLayout() {
         options={{
           title: 'Tasks',
           tabBarIcon: ({ color }) => <Text style={{ fontSize: 18, color }}>📋</Text>,
+        }}
+      />
+      <Tabs.Screen
+        name="model"
+        options={{
+          title: 'Model',
+          tabBarIcon: ({ color }) => <Text style={{ fontSize: 18, color }}>🤖</Text>,
         }}
       />
       <Tabs.Screen
