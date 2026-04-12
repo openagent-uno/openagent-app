@@ -68,10 +68,26 @@ export const useChat = create<ChatState>((set, get) => ({
 
   handleServerMessage: (msg) => set((s) => {
     if (msg.type === 'status') {
+      const text = msg.text || '';
+      const isTool = text.startsWith('Using ');
       return {
-        sessions: s.sessions.map((ses) =>
-          ses.id !== msg.session_id ? ses : { ...ses, statusText: msg.text },
-        ),
+        sessions: s.sessions.map((ses) => {
+          if (ses.id !== msg.session_id) return ses;
+          // Tool use → add as inline "tool" message
+          if (isTool) {
+            return {
+              ...ses,
+              statusText: text,
+              messages: [...ses.messages, {
+                id: genId(),
+                role: 'tool' as const,
+                text,
+                timestamp: Date.now(),
+              }],
+            };
+          }
+          return { ...ses, statusText: text };
+        }),
       };
     }
 

@@ -31,7 +31,7 @@ export interface Attachment {
 
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'tool';
   text: string;
   timestamp: number;
   attachments?: Attachment[];

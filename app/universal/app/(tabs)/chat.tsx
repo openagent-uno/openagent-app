@@ -163,13 +163,20 @@ export default function ChatScreen() {
           <>
             <ScrollView ref={scrollRef} style={styles.messages} contentContainerStyle={styles.messagesContent}>
               {activeSession.messages.map((msg) => (
-                <View key={msg.id} style={[styles.bubble, msg.role === 'user' ? styles.userBubble : styles.assistantBubble]}>
-                  {msg.role === 'assistant' ? (
-                    <Markdown text={msg.text} />
-                  ) : (
-                    <Text style={[styles.bubbleText, styles.userText]}>{msg.text}</Text>
-                  )}
-                </View>
+                msg.role === 'tool' ? (
+                  <View key={msg.id} style={styles.toolBlock}>
+                    <Text style={styles.toolIcon}>⚙️</Text>
+                    <Text style={styles.toolText}>{msg.text}</Text>
+                  </View>
+                ) : (
+                  <View key={msg.id} style={[styles.bubble, msg.role === 'user' ? styles.userBubble : styles.assistantBubble]}>
+                    {msg.role === 'assistant' ? (
+                      <Markdown text={msg.text} />
+                    ) : (
+                      <Text style={[styles.bubbleText, styles.userText]}>{msg.text}</Text>
+                    )}
+                  </View>
+                )
               ))}
               {activeSession.isProcessing && (
                 <View style={[styles.bubble, styles.statusBubble]}>
@@ -264,6 +271,13 @@ const styles = StyleSheet.create({
   userBubble: { backgroundColor: colors.primary, alignSelf: 'flex-end' },
   assistantBubble: { backgroundColor: colors.surface, alignSelf: 'flex-start', borderWidth: 1, borderColor: colors.border },
   statusBubble: { backgroundColor: 'transparent', alignSelf: 'flex-start', padding: 8 },
+  toolBlock: {
+    flexDirection: 'row', alignItems: 'center', alignSelf: 'center',
+    paddingVertical: 4, paddingHorizontal: 12, marginVertical: 4,
+    backgroundColor: colors.primaryLight, borderRadius: 16,
+  },
+  toolIcon: { fontSize: 12, marginRight: 6 },
+  toolText: { fontSize: 12, color: colors.primary, fontWeight: '500' },
   bubbleText: { color: colors.text, fontSize: 14, lineHeight: 21 },
   userText: { color: colors.textInverse },
   statusText: { color: colors.textMuted, fontSize: 13, fontStyle: 'italic' },
