@@ -141,24 +141,18 @@ export async function testProvider(provider: string): Promise<{ ok: boolean; err
   return res.json();
 }
 
-// ── Models API ──
+// ── Models API (all via config PATCH — works on any agent version) ──
 
 export async function getModels(): Promise<ModelsResponse> {
-  // Try dedicated endpoint first, fall back to config API
-  try {
-    return await get<ModelsResponse>('/api/models');
-  } catch {
-    const cfg = await getConfig();
-    return { models: cfg.providers || {}, active: cfg.model || {} as ModelConfig };
-  }
+  const cfg = await getConfig();
+  return { models: cfg.providers || {}, active: cfg.model || {} as ModelConfig };
 }
 
 export async function addModel(
   name: string, config: { api_key?: string; base_url?: string },
 ): Promise<{ ok: boolean }> {
-  // Use config PATCH API (guaranteed to work on all agent versions)
-  const currentConfig = await getConfig();
-  const providers = currentConfig.providers || {};
+  const cfg = await getConfig();
+  const providers = cfg.providers || {};
   providers[name] = config;
   return updateConfigSection('providers', providers) as any;
 }
@@ -166,27 +160,28 @@ export async function addModel(
 export async function updateModel(
   name: string, config: Record<string, any>,
 ): Promise<{ ok: boolean }> {
-  const currentConfig = await getConfig();
-  const providers = { ...(currentConfig.providers || {}) };
+  const cfg = await getConfig();
+  const providers = { ...(cfg.providers || {}) };
   providers[name] = { ...providers[name], ...config };
   return updateConfigSection('providers', providers) as any;
 }
 
 export async function deleteModel(name: string): Promise<void> {
-  const currentConfig = await getConfig();
-  const providers = { ...(currentConfig.providers || {}) };
+  const cfg = await getConfig();
+  const providers = { ...(cfg.providers || {}) };
   delete providers[name];
   await updateConfigSection('providers', providers);
 }
 
 export async function testModel(
-  name: string, modelId?: string,
+  name: string, _modelId?: string,
 ): Promise<{ ok: boolean; error?: string }> {
-  return post(`/api/models/${encodeURIComponent(name)}/test`, modelId ? { model_id: modelId } : {});
-}
-
-export async function getActiveModel(): Promise<{ active: ModelConfig }> {
-  return get('/api/models/active');
+  // Test by trying the providers/test endpoint, fall back to a no-op success
+  try {
+    return await post(`/api/providers/test`, { provider: name, model_id: _modelId });
+  } catch {
+    return { ok: false, error: 'Test not available — restart the agent with the latest version' };
+  }
 }
 
 export async function setActiveModel(model: ModelConfig): Promise<{ ok: boolean }> {

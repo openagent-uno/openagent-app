@@ -34,6 +34,7 @@ export default function ModelScreen() {
   const [newName, setNewName] = useState('');
   const [newKey, setNewKey] = useState('');
   const [newUrl, setNewUrl] = useState('');
+  const [newUseCli, setNewUseCli] = useState(false);
 
   const [budget, setBudget] = useState('20');
   // Per-provider disabled models
@@ -93,12 +94,16 @@ export default function ModelScreen() {
     if (!newName.trim()) return;
     if (!connConfig) { alert('Not connected to agent'); return; }
     try {
-      await addModel(newName.trim(), {
-        api_key: newKey.trim() || undefined,
-        base_url: newUrl.trim() || undefined,
-      });
+      const entry: any = {};
+      if (newKey.trim()) entry.api_key = newKey.trim();
+      if (newUrl.trim()) entry.base_url = newUrl.trim();
+      // For Anthropic with CLI, add claude-cli to models list
+      if (newName === 'anthropic' && newUseCli) {
+        entry.models = ['claude-cli'];
+      }
+      await addModel(newName.trim(), entry);
       setAdding(false);
-      setNewName(''); setNewKey(''); setNewUrl('');
+      setNewName(''); setNewKey(''); setNewUrl(''); setNewUseCli(false);
       await reload();
     } catch (e: any) {
       alert(`Failed to add provider: ${e.message}`);
@@ -122,30 +127,10 @@ export default function ModelScreen() {
   };
 
   const handleSave = async () => {
-    // Check if only claude-cli is enabled (all API models disabled)
-    let onlyCli = false;
-    const allEnabled: string[] = [];
-    for (const [prov, cfg] of Object.entries(providers)) {
-      const catalog = catalogCache[prov] || [];
-      const disabled = disabledModels[prov] || [];
-      for (const m of catalog) {
-        const shortId = m.model_id.replace(`${prov}/`, '');
-        if (!disabled.includes(shortId)) allEnabled.push(m.model_id);
-      }
-      if (prov === 'anthropic' && !disabled.includes('claude-cli')) {
-        allEnabled.push('claude-cli');
-      }
-    }
-
-    let model: ModelConfig;
-    if (allEnabled.length === 1 && allEnabled[0] === 'claude-cli') {
-      model = { provider: 'claude-cli', model_id: 'claude-sonnet-4-6', permission_mode: 'bypass' };
-    } else if (allEnabled.length === 1 && allEnabled[0] !== 'claude-cli') {
-      model = { provider: 'litellm', model_id: allEnabled[0] };
-    } else {
-      model = { provider: 'smart', monthly_budget: parseFloat(budget) || 20 };
-    }
-
+    const model: ModelConfig = {
+      provider: 'smart',
+      monthly_budget: parseFloat(budget) || 20,
+    };
     await setActiveModel(model);
     setSaved(true);
     setTimeout(() => setSaved(false), 3000);
@@ -220,7 +205,9 @@ export default function ModelScreen() {
             </View>
 
             <Text style={styles.keyDisplay}>
-              Key: {cfg.api_key_display || '—'}
+              Key: {cfg.api_key
+                ? (cfg.api_key.startsWith('${') ? cfg.api_key : '****' + cfg.api_key.slice(-4))
+                : '—'}
             </Text>
             {cfg.base_url && <Text style={styles.keyDisplay}>URL: {cfg.base_url}</Text>}
 
@@ -283,9 +270,28 @@ export default function ModelScreen() {
               </TouchableOpacity>
             ))}
           </View>
-          <Text style={styles.label}>API Key</Text>
-          <TextInput style={styles.input} value={newKey} onChangeText={setNewKey}
-            placeholder="sk-..." placeholderTextColor={colors.textMuted} secureTextEntry />
+          {/* CLI toggle for Anthropic */}
+          {newName === 'anthropic' && (
+            <TouchableOpacity style={styles.cliToggleRow} onPress={() => setNewUseCli(!newUseCli)}>
+              <View style={[styles.toggleDot, newUseCli ? styles.toggleOn : styles.toggleOff]} />
+              <View>
+                <Text style={styles.cliToggleLabel}>Use Claude CLI (Pro/Max subscription)</Text>
+                <Text style={styles.cliToggleHint}>No API key needed — uses `claude` CLI</Text>
+              </View>
+            </TouchableOpacity>
+          )}
+
+          {/* API Key — not needed for CLI-only mode */}
+          {!(newName === 'anthropic' && newUseCli) && (
+            <>
+              <Text style={styles.label}>API Key</Text>
+              <TextInput style={styles.input} value={newKey} onChangeText={setNewKey}
+                placeholder="sk-..." placeholderTextColor={colors.textMuted} secureTextEntry />
+            </>
+          )}
+          {newName === 'anthropic' && !newUseCli && (
+            <Text style={[styles.hint, { marginTop: 4 }]}>Or toggle CLI above to use your subscription instead</Text>
+          )}
           {(newName === 'ollama' || newName === 'custom') && (
             <>
               <Text style={styles.label}>Base URL</Text>
@@ -413,6 +419,9 @@ const styles = StyleSheet.create({
   modelId: { fontSize: 13, color: colors.text },
   modelDisabled: { color: colors.textMuted, opacity: 0.5 },
   cliSubtitle: { fontSize: 10, color: colors.textMuted, marginLeft: 18, marginBottom: 4 },
+  cliToggleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12, padding: 10, backgroundColor: colors.inputBg, borderRadius: 8, borderWidth: 1, borderColor: colors.border },
+  cliToggleLabel: { fontSize: 13, fontWeight: '600', color: colors.text },
+  cliToggleHint: { fontSize: 11, color: colors.textMuted },
   modelPrice: { fontSize: 11, color: colors.textMuted },
   moreModels: { fontSize: 11, color: colors.textMuted, textAlign: 'center', marginTop: 4 },
 
