@@ -2,7 +2,7 @@
  * REST API client for OpenAgent vault operations.
  */
 
-import type { VaultNote, GraphData, AgentConfig, ProviderConfig, UsageData } from '../../common/types';
+import type { VaultNote, GraphData, AgentConfig, ModelConfig, ProviderConfig, ModelsResponse, UsageData, ModelCatalogEntry, DailyUsageEntry } from '../../common/types';
 
 let baseUrl = '';
 
@@ -19,6 +19,16 @@ async function get<T>(path: string): Promise<T> {
 async function put<T>(path: string, body: object): Promise<T> {
   const res = await fetch(`${baseUrl}${path}`, {
     method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+async function post<T>(path: string, body: object = {}): Promise<T> {
+  const res = await fetch(`${baseUrl}${path}`, {
+    method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
@@ -131,8 +141,66 @@ export async function testProvider(provider: string): Promise<{ ok: boolean; err
   return res.json();
 }
 
+// ── Models API ──
+
+export async function getModels(): Promise<ModelsResponse> {
+  return get<ModelsResponse>('/api/models');
+}
+
+export async function addModel(
+  name: string, config: { api_key?: string; base_url?: string },
+): Promise<{ ok: boolean }> {
+  return post('/api/models', { name, ...config });
+}
+
+export async function updateModel(
+  name: string, config: { api_key?: string; base_url?: string },
+): Promise<{ ok: boolean }> {
+  return put(`/api/models/${encodeURIComponent(name)}`, config);
+}
+
+export async function deleteModel(name: string): Promise<void> {
+  return del(`/api/models/${encodeURIComponent(name)}`);
+}
+
+export async function testModel(
+  name: string, modelId?: string,
+): Promise<{ ok: boolean; error?: string }> {
+  return post(`/api/models/${encodeURIComponent(name)}/test`, modelId ? { model_id: modelId } : {});
+}
+
+export async function getActiveModel(): Promise<{ active: ModelConfig }> {
+  return get('/api/models/active');
+}
+
+export async function setActiveModel(model: ModelConfig): Promise<{ ok: boolean }> {
+  return put('/api/models/active', model);
+}
+
 // ── Usage API ──
 
 export async function getUsage(): Promise<UsageData> {
   return get<UsageData>('/api/usage');
+}
+
+export async function getDailyUsage(days: number = 7): Promise<DailyUsageEntry[]> {
+  const data = await get<{ entries: DailyUsageEntry[] }>(`/api/usage/daily?days=${days}`);
+  return data.entries;
+}
+
+export async function getModelPricing(): Promise<Record<string, { input: number; output: number }>> {
+  const data = await get<{ pricing: Record<string, { input_cost_per_million: number; output_cost_per_million: number }> }>('/api/usage/pricing');
+  const result: Record<string, { input: number; output: number }> = {};
+  for (const [k, v] of Object.entries(data.pricing)) {
+    result[k] = { input: v.input_cost_per_million, output: v.output_cost_per_million };
+  }
+  return result;
+}
+
+// ── Model Catalog API ──
+
+export async function getModelCatalog(provider?: string): Promise<ModelCatalogEntry[]> {
+  const q = provider ? `?provider=${encodeURIComponent(provider)}` : '';
+  const data = await get<{ models: ModelCatalogEntry[] }>(`/api/models/catalog${q}`);
+  return data.models;
 }

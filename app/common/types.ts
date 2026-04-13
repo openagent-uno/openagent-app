@@ -86,6 +86,27 @@ export interface ProviderConfig {
   api_key?: string;
   api_key_display?: string;
   base_url?: string;
+  models?: string[];
+}
+
+export interface ModelCatalogEntry {
+  model_id: string;
+  input_cost_per_million: number;
+  output_cost_per_million: number;
+}
+
+export interface DailyUsageEntry {
+  date: string;
+  model: string;
+  cost: number;
+  input_tokens: number;
+  output_tokens: number;
+  request_count: number;
+}
+
+export interface ModelsResponse {
+  models: Record<string, ProviderConfig>;
+  active: ModelConfig;
 }
 
 export interface UsageData {

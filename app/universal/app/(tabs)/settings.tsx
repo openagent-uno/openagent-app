@@ -34,11 +34,14 @@ export default function SettingsScreen() {
   // Channel state
   const [tgToken, setTgToken] = useState('');
   const [tgUsers, setTgUsers] = useState('');
+  const [tgModel, setTgModel] = useState('');
   const [dcToken, setDcToken] = useState('');
   const [dcUsers, setDcUsers] = useState('');
+  const [dcModel, setDcModel] = useState('');
   const [waId, setWaId] = useState('');
   const [waToken, setWaToken] = useState('');
   const [waUsers, setWaUsers] = useState('');
+  const [waModel, setWaModel] = useState('');
 
   const [saved, setSaved] = useState<string | null>(null);
 
@@ -64,13 +67,16 @@ export default function SettingsScreen() {
     const tg = ch.telegram || {};
     setTgToken(tg.token || '');
     setTgUsers((tg.allowed_users || []).join(', '));
+    setTgModel(tg.model || '');
     const dc = ch.discord || {};
     setDcToken(dc.token || '');
     setDcUsers((dc.allowed_users || []).join(', '));
+    setDcModel(dc.model || '');
     const wa = ch.whatsapp || {};
     setWaId(wa.green_api_id || '');
     setWaToken(wa.green_api_token || '');
     setWaUsers((wa.allowed_users || []).join(', '));
+    setWaModel(wa.model || '');
   }, [agentConfig]);
 
   const saveSection = async (section: string, data: any, label: string) => {
@@ -89,6 +95,7 @@ export default function SettingsScreen() {
       channels.telegram = {
         token: tgToken.trim(),
         allowed_users: tgUsers.split(',').map((s: string) => s.trim()).filter(Boolean),
+        ...(tgModel.trim() ? { model: tgModel.trim() } : {}),
       };
     } else {
       delete channels.telegram;
@@ -99,6 +106,7 @@ export default function SettingsScreen() {
       channels.discord = {
         token: dcToken.trim(),
         allowed_users: dcUsers.split(',').map((s: string) => s.trim()).filter(Boolean),
+        ...(dcModel.trim() ? { model: dcModel.trim() } : {}),
       };
     } else {
       delete channels.discord;
@@ -110,6 +118,7 @@ export default function SettingsScreen() {
         green_api_id: waId.trim(),
         green_api_token: waToken.trim(),
         allowed_users: waUsers.split(',').map((s: string) => s.trim()).filter(Boolean),
+        ...(waModel.trim() ? { model: waModel.trim() } : {}),
       };
     } else {
       delete channels.whatsapp;
@@ -166,6 +175,8 @@ export default function SettingsScreen() {
         <TextInput style={styles.input} value={tgToken} onChangeText={setTgToken} placeholder="${TELEGRAM_BOT_TOKEN}" placeholderTextColor={colors.textMuted} secureTextEntry />
         <Text style={[styles.label, { marginTop: 8 }]}>Allowed User IDs (comma-separated)</Text>
         <TextInput style={styles.input} value={tgUsers} onChangeText={setTgUsers} placeholder="123456789, 987654321" placeholderTextColor={colors.textMuted} />
+        <Text style={[styles.label, { marginTop: 8 }]}>Model Override (optional)</Text>
+        <TextInput style={styles.input} value={tgModel} onChangeText={setTgModel} placeholder="Default (global model)" placeholderTextColor={colors.textMuted} />
 
         <View style={styles.channelDivider} />
 
@@ -175,6 +186,8 @@ export default function SettingsScreen() {
         <TextInput style={styles.input} value={dcToken} onChangeText={setDcToken} placeholder="${DISCORD_BOT_TOKEN}" placeholderTextColor={colors.textMuted} secureTextEntry />
         <Text style={[styles.label, { marginTop: 8 }]}>Allowed User IDs (comma-separated)</Text>
         <TextInput style={styles.input} value={dcUsers} onChangeText={setDcUsers} placeholder="123456789012345678" placeholderTextColor={colors.textMuted} />
+        <Text style={[styles.label, { marginTop: 8 }]}>Model Override (optional)</Text>
+        <TextInput style={styles.input} value={dcModel} onChangeText={setDcModel} placeholder="Default (global model)" placeholderTextColor={colors.textMuted} />
 
         <View style={styles.channelDivider} />
 
@@ -186,6 +199,8 @@ export default function SettingsScreen() {
         <TextInput style={styles.input} value={waToken} onChangeText={setWaToken} placeholder="${GREEN_API_TOKEN}" placeholderTextColor={colors.textMuted} secureTextEntry />
         <Text style={[styles.label, { marginTop: 8 }]}>Allowed Users (comma-separated)</Text>
         <TextInput style={styles.input} value={waUsers} onChangeText={setWaUsers} placeholder="391234567890" placeholderTextColor={colors.textMuted} />
+        <Text style={[styles.label, { marginTop: 8 }]}>Model Override (optional)</Text>
+        <TextInput style={styles.input} value={waModel} onChangeText={setWaModel} placeholder="Default (global model)" placeholderTextColor={colors.textMuted} />
 
         <SaveBtn label="Save Channels" saved={saved === 'channels'} onPress={saveChannels} />
         <Text style={styles.restartHint}>Restart required after changes</Text>
