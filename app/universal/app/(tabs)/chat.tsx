@@ -141,7 +141,7 @@ export default function ChatScreen() {
     <View style={styles.sidebarInner}>
       <PrimaryButton style={styles.newChatBtn} onPress={createSession}>
         <View style={styles.newChatContent}>
-          <Feather name="plus" size={12} color={colors.textInverse} />
+          <Feather name="plus" size={13} color={colors.textInverse} />
           <Text style={styles.newChatText}>New Chat</Text>
         </View>
       </PrimaryButton>
@@ -183,7 +183,7 @@ export default function ChatScreen() {
               {activeSession.isProcessing && (
                 <View style={[styles.bubble, styles.statusBubble]}>
                   <View style={styles.statusContent}>
-                    <Feather name="clock" size={11} color={colors.textMuted} />
+                    <Feather name="clock" size={12} color={colors.textMuted} />
                     <Text style={styles.statusText}>{activeSession.statusText || 'Thinking...'}</Text>
                   </View>
                 </View>
@@ -194,11 +194,11 @@ export default function ChatScreen() {
             {pendingFile && (
               <View style={styles.pendingBar}>
                 <View style={styles.pendingContent}>
-                  <Feather name="paperclip" size={11} color={colors.primary} />
+                  <Feather name="paperclip" size={12} color={colors.primary} />
                   <Text style={styles.pendingText}>{pendingFile.filename}</Text>
                 </View>
                 <TouchableOpacity onPress={() => setPendingFile(null)}>
-                  <Feather name="x" size={12} color={colors.textMuted} style={styles.pendingRemove} />
+                  <Feather name="x" size={13} color={colors.textMuted} style={styles.pendingRemove} />
                 </TouchableOpacity>
               </View>
             )}
@@ -207,7 +207,7 @@ export default function ChatScreen() {
             <View style={styles.inputBar}>
               {Platform.OS === 'web' && (
                 <TouchableOpacity style={styles.iconBtn} onPress={handleFilePick}>
-                  <Feather name="paperclip" size={13} color={colors.textSecondary} />
+                  <Feather name="paperclip" size={15} color={colors.textSecondary} />
                 </TouchableOpacity>
               )}
               {Platform.OS === 'web' && (
@@ -217,7 +217,7 @@ export default function ChatScreen() {
                 >
                   <Feather
                     name={recording ? 'stop-circle' : 'mic'}
-                    size={13}
+                    size={15}
                     color={recording ? colors.textInverse : colors.textSecondary}
                   />
                 </TouchableOpacity>
@@ -252,7 +252,7 @@ export default function ChatScreen() {
                 onPress={handleSend}
                 disabled={(!input.trim() && !pendingFile) || activeSession.isProcessing}
               >
-                <Feather name="arrow-up" size={13} color={colors.textInverse} />
+                <Feather name="arrow-up" size={15} color={colors.textInverse} />
               </PrimaryButton>
             </View>
           </>
@@ -274,7 +274,7 @@ function ToolCard({ toolInfo, fallbackText }: { toolInfo?: ToolInfo; fallbackTex
     // Legacy plain text tool pill
     return (
       <View style={styles.toolBlock}>
-        <Feather name="tool" size={10} color={colors.primary} style={styles.toolIcon} />
+        <Feather name="tool" size={11} color={colors.primary} style={styles.toolIcon} />
         <Text style={styles.toolText}>{fallbackText}</Text>
       </View>
     );
@@ -294,15 +294,15 @@ function ToolCard({ toolInfo, fallbackText }: { toolInfo?: ToolInfo; fallbackTex
     >
       {/* Header */}
       <View style={styles.toolCardHeader}>
-        <Feather name="tool" size={12} color={colors.primary} style={styles.toolCardIcon} />
+        <Feather name="tool" size={13} color={colors.primary} style={styles.toolCardIcon} />
         <Text style={styles.toolCardName}>{toolInfo.tool}</Text>
         <View style={[styles.toolBadge, { backgroundColor: statusColor + '18' }]}>
           <View style={styles.toolBadgeContent}>
-            <Feather name={statusIconName} size={10} color={statusColor} />
+            <Feather name={statusIconName} size={11} color={statusColor} />
             <Text style={[styles.toolBadgeText, { color: statusColor }]}>{statusLabel}</Text>
           </View>
         </View>
-        <Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={12} color={colors.textMuted} />
+        <Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={13} color={colors.textMuted} />
       </View>
 
       {/* Expanded content */}
