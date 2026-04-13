@@ -3,6 +3,7 @@ import { colors } from '../../theme';
  * Settings screen — agent identity, channels, dream mode, auto-update, connection.
  */
 
+import Feather from '@expo/vector-icons/Feather';
 import { useEffect, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Platform,
@@ -296,7 +297,10 @@ export default function SettingsScreen() {
 function SaveBtn({ label, saved, onPress }: { label: string; saved: boolean; onPress: () => void }) {
   return (
     <PrimaryButton style={styles.saveBtn} onPress={onPress}>
-      <Text style={styles.saveBtnText}>{saved ? '✓ Saved' : label}</Text>
+      <View style={styles.saveBtnContent}>
+        {saved && <Feather name="check" size={14} color={colors.textInverse} />}
+        <Text style={[styles.saveBtnText, saved && styles.saveBtnTextWithIcon]}>{saved ? 'Saved' : label}</Text>
+      </View>
     </PrimaryButton>
   );
 }
@@ -328,7 +332,9 @@ const styles = StyleSheet.create({
   segmentText: { fontSize: 12, color: colors.textSecondary, fontWeight: '500' },
   segmentTextActive: { color: colors.textInverse },
   saveBtn: { marginTop: 16 },
+  saveBtnContent: { flexDirection: 'row', alignItems: 'center' },
   saveBtnText: { color: colors.textInverse, fontSize: 14, fontWeight: '700' },
+  saveBtnTextWithIcon: { marginLeft: 6 },
   row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.borderLight },
   rowLabel: { fontSize: 14, color: colors.textSecondary },
   rowValue: { fontSize: 14, color: colors.text, fontWeight: '500' },

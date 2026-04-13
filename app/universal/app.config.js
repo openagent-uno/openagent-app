@@ -29,7 +29,7 @@ module.exports = ({ config }) => ({
     splash: {
       image: './assets/splash-icon.png',
       resizeMode: 'contain',
-      backgroundColor: '#fff9f5',
+      backgroundColor: '#f5f6f8',
     },
     web: {
       bundler: 'metro',
@@ -37,8 +37,8 @@ module.exports = ({ config }) => ({
       favicon: './assets/favicon.png',
       name: 'OpenAgent',
       shortName: 'OpenAgent',
-      themeColor: '#ef4136',
-      backgroundColor: '#fff9f5',
+      themeColor: '#ffffff',
+      backgroundColor: '#f5f6f8',
     },
     plugins: ['expo-router'],
     experiments: baseUrl ? { baseUrl } : {},

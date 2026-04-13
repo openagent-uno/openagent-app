@@ -5,6 +5,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import Feather from '@expo/vector-icons/Feather';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Platform,
 } from 'react-native';
@@ -82,7 +83,12 @@ export default function MemoryScreen() {
       <ScrollView style={styles.fileTree}>
         {Array.from(folders.entries()).map(([folder, folderNotes]) => (
           <View key={folder || '__root'}>
-            {folder !== '' && <Text style={styles.folderName}>📁 {folder}</Text>}
+            {folder !== '' && (
+              <View style={styles.folderRow}>
+                <Feather name="folder" size={12} color={colors.textMuted} />
+                <Text style={styles.folderName}>{folder}</Text>
+              </View>
+            )}
             {folderNotes.map((n) => (
               <TouchableOpacity
                 key={n.path}
@@ -123,7 +129,10 @@ export default function MemoryScreen() {
           <View style={styles.editorContainer}>
             <View style={styles.editorHeader}>
               <TouchableOpacity onPress={handleClose} style={styles.backBtn}>
-                <Text style={styles.backBtnText}>← Graph</Text>
+                <View style={styles.backBtnContent}>
+                  <Feather name="arrow-left" size={14} color={colors.primary} />
+                  <Text style={styles.backBtnText}>Graph</Text>
+                </View>
               </TouchableOpacity>
               <Text style={styles.editorTitle} numberOfLines={1}>
                 {selectedNote?.title || selectedPath.split('/').pop()?.replace('.md', '')}
@@ -198,10 +207,16 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border, fontSize: 12, color: colors.text,
   },
   fileTree: { flex: 1, paddingHorizontal: 6 },
+  folderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingTop: 12,
+    paddingBottom: 4,
+  },
   folderName: {
     fontSize: 11, fontWeight: '600', color: colors.textMuted,
-    paddingHorizontal: 10, paddingTop: 12, paddingBottom: 4,
-    textTransform: 'uppercase', letterSpacing: 0.3,
+    textTransform: 'uppercase', letterSpacing: 0.3, marginLeft: 6,
   },
   fileItem: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 6, marginVertical: 1 },
   fileItemActive: { backgroundColor: colors.border },
@@ -221,7 +236,8 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.bg,
   },
   backBtn: { paddingVertical: 4, paddingHorizontal: 8, marginRight: 12 },
-  backBtnText: { fontSize: 13, color: colors.primary, fontWeight: '500' },
+  backBtnContent: { flexDirection: 'row', alignItems: 'center' },
+  backBtnText: { fontSize: 13, color: colors.primary, fontWeight: '500', marginLeft: 6 },
   editorTitle: { fontSize: 14, fontWeight: '600', color: colors.text, flex: 1 },
   editorActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   toggleBtn: {

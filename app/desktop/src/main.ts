@@ -97,7 +97,7 @@ function createWindow(): void {
     title: 'OpenAgent',
     titleBarStyle: 'hiddenInset',
     show: true,
-    backgroundColor: '#FFF9F5',  // match theme bg, avoids white flash
+    backgroundColor: '#F5F6F8',  // match theme bg, avoids white flash
     webPreferences: {
       preload: path.resolve(__dirname, 'preload.js'),
       contextIsolation: true,

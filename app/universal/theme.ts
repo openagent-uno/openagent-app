@@ -1,63 +1,63 @@
 /**
  * Shared color palette and design tokens.
- * Primary gradient: #ef4136 (red) → #fbb040 (amber/orange).
+ * Primary gradient: #d94841 (accent red) → #f3a33a (amber).
  */
 
 export const colors = {
-  // Brand — red-to-amber gradient endpoints
-  primary: '#ef4136',        // main accent (buttons, active states)
-  primaryEnd: '#fbb040',     // gradient end (amber)
-  primaryLight: '#FFF0E4',   // tinted background
-  primaryMuted: '#F4856E',   // softer red
+  // Brand — accent reserved for primary actions
+  primary: '#D94841',
+  primaryEnd: '#F3A33A',
+  primaryLight: '#F8EFEA',
+  primaryMuted: '#E47C63',
 
   // Neutrals
-  bg: '#FFF9F5',
+  bg: '#F5F6F8',
   surface: '#FFFFFF',
-  sidebar: '#FFF3EA',
-  border: '#F2DED1',
-  borderLight: '#F7E8DE',
-  inputBg: '#FFF5EE',
+  sidebar: '#F1F3F5',
+  border: '#E2E8F0',
+  borderLight: '#EDF2F7',
+  inputBg: '#FFFFFF',
 
   // Text
-  text: '#1C1612',
-  textSecondary: '#6E5A4B',
-  textMuted: '#A48C7A',
+  text: '#111827',
+  textSecondary: '#475467',
+  textMuted: '#667085',
   textInverse: '#FFFFFF',
 
   // Status
-  success: '#4CAF50',
-  error: '#D94F4F',
-  warning: '#E5A100',
+  success: '#1F9D6A',
+  error: '#C94A43',
+  warning: '#D88B1F',
 
   // Graph canvas
-  graphBg: '#FFF2E8',
-  graphEdge: '#EFC4A6',
-  graphLabel: '#6D3920',
-  graphRing: '#F7A24C',
-  graphNodeMuted: '#E97A5A',
+  graphBg: '#F8FAFC',
+  graphEdge: '#CBD5E1',
+  graphLabel: '#334155',
+  graphRing: '#F3A33A',
+  graphNodeMuted: '#94A3B8',
 
-  // Graph node palette (red → amber gradient steps)
+  // Graph node palette
   graph: [
-    '#ef4136',  // red
-    '#f15a3a',  // red-orange
-    '#f3733e',  // orange-red
-    '#f58b42',  // orange
-    '#f7a346',  // amber-orange
-    '#fbb040',  // amber
-    '#e84e3c',  // dark red
-    '#f06940',  // warm orange
-    '#f89744',  // golden
-    '#d63a30',  // deep red
+    '#D94841',
+    '#F3A33A',
+    '#2563EB',
+    '#0F766E',
+    '#7C3AED',
+    '#475569',
+    '#DC2626',
+    '#EA580C',
+    '#0284C7',
+    '#4F46E5',
   ],
 
   // Code blocks
-  codeBg: '#241912',
-  codeText: '#E8DCD2',
-  codeKeyword: '#f58b42',
+  codeBg: '#0F172A',
+  codeText: '#E2E8F0',
+  codeKeyword: '#F3A33A',
 } as const;
 
 /** CSS gradient string for web backgrounds */
-export const primaryGradient = 'linear-gradient(135deg, #ef4136 0%, #fbb040 100%)';
+export const primaryGradient = 'linear-gradient(135deg, #d94841 0%, #f3a33a 100%)';
 export const primaryGradientStops = [colors.primary, colors.primaryEnd] as const;
 
 export const spacing = {

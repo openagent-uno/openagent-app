@@ -1,6 +1,6 @@
 import { colors } from '../../theme';
+import Feather from '@expo/vector-icons/Feather';
 import { Tabs } from 'expo-router';
-import { Text } from 'react-native';
 
 export default function TabsLayout() {
   return (
@@ -27,49 +27,49 @@ export default function TabsLayout() {
         name="chat"
         options={{
           title: 'Chat',
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 18, color }}>💬</Text>,
+          tabBarIcon: ({ color }) => <Feather name="message-circle" size={10} color={color} />,
         }}
       />
       <Tabs.Screen
         name="memory"
         options={{
           title: 'Memory',
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 18, color }}>🧠</Text>,
+          tabBarIcon: ({ color }) => <Feather name="book-open" size={10} color={color} />,
         }}
       />
       <Tabs.Screen
         name="mcps"
         options={{
           title: 'MCPs',
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 18, color }}>🔌</Text>,
+          tabBarIcon: ({ color }) => <Feather name="tool" size={10} color={color} />,
         }}
       />
       <Tabs.Screen
         name="automations"
         options={{
           title: 'Automations',
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 18, color }}>⚡</Text>,
+          tabBarIcon: ({ color }) => <Feather name="zap" size={10} color={color} />,
         }}
       />
       <Tabs.Screen
         name="tasks"
         options={{
           title: 'Tasks',
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 18, color }}>📋</Text>,
+          tabBarIcon: ({ color }) => <Feather name="check-square" size={10} color={color} />,
         }}
       />
       <Tabs.Screen
         name="model"
         options={{
           title: 'Model',
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 18, color }}>🤖</Text>,
+          tabBarIcon: ({ color }) => <Feather name="cpu" size={10} color={color} />,
         }}
       />
       <Tabs.Screen
         name="settings"
         options={{
           title: 'Settings',
-          tabBarIcon: ({ color }) => <Text style={{ fontSize: 18, color }}>⚙️</Text>,
+          tabBarIcon: ({ color }) => <Feather name="settings" size={10} color={color} />,
         }}
       />
     </Tabs>

@@ -3,6 +3,7 @@ import { colors } from '../../theme';
  * Tasks screen — view and manage scheduled cron tasks.
  */
 
+import Feather from '@expo/vector-icons/Feather';
 import { useEffect, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Platform,
@@ -124,10 +125,10 @@ export default function TasksScreen() {
             </TouchableOpacity>
             <View style={styles.taskActions}>
               <TouchableOpacity onPress={() => handleEdit(i)} style={styles.editBtn}>
-                <Text style={styles.editBtnText}>✏️</Text>
+                <Feather name="edit-2" size={14} color={colors.textSecondary} />
               </TouchableOpacity>
               <TouchableOpacity onPress={() => { void handleRemove(i); }} style={styles.removeBtn}>
-                <Text style={styles.removeBtnText}>✕</Text>
+                <Feather name="x" size={14} color={colors.textMuted} />
               </TouchableOpacity>
             </View>
           </View>
@@ -189,13 +190,16 @@ export default function TasksScreen() {
             contentStyle={styles.addBtnInner}
             onPress={() => { setAdding(true); setEditIdx(null); setForm({ name: '', cron: '', prompt: '' }); }}
           >
-            <Text style={styles.addBtnText}>+ Add Task</Text>
+            <View style={styles.addBtnContent}>
+              <Feather name="plus" size={14} color={colors.textInverse} />
+              <Text style={styles.addBtnText}>Add Task</Text>
+            </View>
           </PrimaryButton>
         )}
       </View>
 
       {saved && (
-        <Text style={styles.savedMsg}>✓ Saved (restart required)</Text>
+        <Text style={styles.savedMsg}>Saved (restart required)</Text>
       )}
     </ScrollView>
   );
@@ -228,12 +232,11 @@ const styles = StyleSheet.create({
   taskPrompt: { fontSize: 12, color: colors.textSecondary, marginTop: 4, lineHeight: 18 },
   taskActions: { flexDirection: 'row', gap: 4, marginLeft: 8 },
   editBtn: { padding: 6 },
-  editBtnText: { fontSize: 14 },
   removeBtn: { padding: 6 },
-  removeBtnText: { fontSize: 12, color: colors.textMuted },
   addBtn: { padding: 12, borderTopWidth: 1, borderTopColor: colors.borderLight },
   addBtnInner: { minHeight: 40, borderRadius: 8 },
-  addBtnText: { fontSize: 13, color: colors.textInverse, fontWeight: '700' },
+  addBtnContent: { flexDirection: 'row', alignItems: 'center' },
+  addBtnText: { fontSize: 13, color: colors.textInverse, fontWeight: '700', marginLeft: 8 },
   addForm: { padding: 12, borderTopWidth: 1, borderTopColor: colors.borderLight },
   formTitle: { fontSize: 14, fontWeight: '600', color: colors.text, marginBottom: 8 },
   input: {

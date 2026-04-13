@@ -3,6 +3,7 @@
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import Feather from '@expo/vector-icons/Feather';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Platform,
 } from 'react-native';
@@ -53,7 +54,7 @@ export default function ChatScreen() {
     if (pendingFile) {
       const fileHeader = `The user attached a file:\n- ${pendingFile.kind}: ${pendingFile.filename} — local path: ${pendingFile.remotePath}\nUse the Read tool to inspect it.`;
       msg = text ? `${fileHeader}\n\nUser message: ${text}` : fileHeader;
-      displayMsg = text ? `📎 ${pendingFile.filename}\n${text}` : `📎 ${pendingFile.filename}`;
+      displayMsg = text ? `Attached file: ${pendingFile.filename}\n${text}` : `Attached file: ${pendingFile.filename}`;
     }
 
     addUserMessage(activeSessionId, displayMsg);
@@ -112,7 +113,7 @@ export default function ChatScreen() {
           const msg = transcription
             ? transcription
             : `The user sent a voice message:\n- audio: ${result.filename} — local path: ${result.path}\nUse Read to inspect it.`;
-          addUserMessage(activeSessionId, '🎙 Voice message');
+          addUserMessage(activeSessionId, 'Voice message');
           ws.sendMessage(msg, activeSessionId);
         } catch (e: any) {
           console.error('Voice upload failed:', e);
@@ -139,7 +140,10 @@ export default function ChatScreen() {
   const sidebarContent = (
     <View style={styles.sidebarInner}>
       <PrimaryButton style={styles.newChatBtn} onPress={createSession}>
-        <Text style={styles.newChatText}>+ New Chat</Text>
+        <View style={styles.newChatContent}>
+          <Feather name="plus" size={12} color={colors.textInverse} />
+          <Text style={styles.newChatText}>New Chat</Text>
+        </View>
       </PrimaryButton>
       <ScrollView style={styles.sessionList}>
         {sessions.map((ses) => (
@@ -178,7 +182,10 @@ export default function ChatScreen() {
               ))}
               {activeSession.isProcessing && (
                 <View style={[styles.bubble, styles.statusBubble]}>
-                  <Text style={styles.statusText}>⏳ {activeSession.statusText || 'Thinking...'}</Text>
+                  <View style={styles.statusContent}>
+                    <Feather name="clock" size={11} color={colors.textMuted} />
+                    <Text style={styles.statusText}>{activeSession.statusText || 'Thinking...'}</Text>
+                  </View>
                 </View>
               )}
             </ScrollView>
@@ -186,9 +193,12 @@ export default function ChatScreen() {
             {/* Pending file badge */}
             {pendingFile && (
               <View style={styles.pendingBar}>
-                <Text style={styles.pendingText}>📎 {pendingFile.filename}</Text>
+                <View style={styles.pendingContent}>
+                  <Feather name="paperclip" size={11} color={colors.primary} />
+                  <Text style={styles.pendingText}>{pendingFile.filename}</Text>
+                </View>
                 <TouchableOpacity onPress={() => setPendingFile(null)}>
-                  <Text style={styles.pendingRemove}>✕</Text>
+                  <Feather name="x" size={12} color={colors.textMuted} style={styles.pendingRemove} />
                 </TouchableOpacity>
               </View>
             )}
@@ -197,7 +207,7 @@ export default function ChatScreen() {
             <View style={styles.inputBar}>
               {Platform.OS === 'web' && (
                 <TouchableOpacity style={styles.iconBtn} onPress={handleFilePick}>
-                  <Text style={styles.iconBtnText}>📎</Text>
+                  <Feather name="paperclip" size={13} color={colors.textSecondary} />
                 </TouchableOpacity>
               )}
               {Platform.OS === 'web' && (
@@ -205,7 +215,11 @@ export default function ChatScreen() {
                   style={[styles.iconBtn, recording && styles.iconBtnActive]}
                   onPress={recording ? stopRecording : startRecording}
                 >
-                  <Text style={styles.iconBtnText}>{recording ? '⏹' : '🎙'}</Text>
+                  <Feather
+                    name={recording ? 'stop-circle' : 'mic'}
+                    size={13}
+                    color={recording ? colors.textInverse : colors.textSecondary}
+                  />
                 </TouchableOpacity>
               )}
               {Platform.OS === 'web' ? (
@@ -238,7 +252,7 @@ export default function ChatScreen() {
                 onPress={handleSend}
                 disabled={(!input.trim() && !pendingFile) || activeSession.isProcessing}
               >
-                <Text style={styles.sendText}>↑</Text>
+                <Feather name="arrow-up" size={13} color={colors.textInverse} />
               </PrimaryButton>
             </View>
           </>
@@ -260,7 +274,7 @@ function ToolCard({ toolInfo, fallbackText }: { toolInfo?: ToolInfo; fallbackTex
     // Legacy plain text tool pill
     return (
       <View style={styles.toolBlock}>
-        <Text style={styles.toolIcon}>⚙️</Text>
+        <Feather name="tool" size={10} color={colors.primary} style={styles.toolIcon} />
         <Text style={styles.toolText}>{fallbackText}</Text>
       </View>
     );
@@ -268,9 +282,9 @@ function ToolCard({ toolInfo, fallbackText }: { toolInfo?: ToolInfo; fallbackTex
 
   const isRunning = toolInfo.status === 'running';
   const isError = toolInfo.status === 'error';
-  const statusIcon = isRunning ? '⏳' : isError ? '✗' : '✓';
   const statusLabel = isRunning ? 'Running' : isError ? 'Error' : 'Done';
-  const statusColor = isError ? colors.error : isRunning ? colors.textMuted : '#34A853';
+  const statusColor = isError ? colors.error : isRunning ? colors.textMuted : colors.success;
+  const statusIconName = isRunning ? 'clock' : isError ? 'x-circle' : 'check-circle';
 
   return (
     <TouchableOpacity
@@ -280,12 +294,15 @@ function ToolCard({ toolInfo, fallbackText }: { toolInfo?: ToolInfo; fallbackTex
     >
       {/* Header */}
       <View style={styles.toolCardHeader}>
-        <Text style={styles.toolCardIcon}>⚙️</Text>
+        <Feather name="tool" size={12} color={colors.primary} style={styles.toolCardIcon} />
         <Text style={styles.toolCardName}>{toolInfo.tool}</Text>
         <View style={[styles.toolBadge, { backgroundColor: statusColor + '18' }]}>
-          <Text style={[styles.toolBadgeText, { color: statusColor }]}>{statusIcon} {statusLabel}</Text>
+          <View style={styles.toolBadgeContent}>
+            <Feather name={statusIconName} size={10} color={statusColor} />
+            <Text style={[styles.toolBadgeText, { color: statusColor }]}>{statusLabel}</Text>
+          </View>
         </View>
-        <Text style={styles.toolChevron}>{expanded ? '▾' : '▸'}</Text>
+        <Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={12} color={colors.textMuted} />
       </View>
 
       {/* Expanded content */}
@@ -328,7 +345,8 @@ function ToolCard({ toolInfo, fallbackText }: { toolInfo?: ToolInfo; fallbackTex
 const styles = StyleSheet.create({
   sidebarInner: { flex: 1, padding: 16 },
   newChatBtn: { marginBottom: 16 },
-  newChatText: { color: colors.textInverse, fontWeight: '700', fontSize: 13 },
+  newChatContent: { flexDirection: 'row', alignItems: 'center' },
+  newChatText: { color: colors.textInverse, fontWeight: '700', fontSize: 13, marginLeft: 8 },
   sessionList: { flex: 1 },
   sessionItem: { padding: 10, borderRadius: 8, marginBottom: 2, flexDirection: 'row', alignItems: 'center' },
   sessionActive: { backgroundColor: colors.primaryLight },
@@ -342,12 +360,13 @@ const styles = StyleSheet.create({
   userBubble: { backgroundColor: colors.primary, alignSelf: 'flex-end' },
   assistantBubble: { backgroundColor: colors.surface, alignSelf: 'flex-start', borderWidth: 1, borderColor: colors.border },
   statusBubble: { backgroundColor: 'transparent', alignSelf: 'flex-start', padding: 8 },
+  statusContent: { flexDirection: 'row', alignItems: 'center' },
   toolBlock: {
     flexDirection: 'row', alignItems: 'center', alignSelf: 'center',
     paddingVertical: 4, paddingHorizontal: 12, marginVertical: 4,
     backgroundColor: colors.primaryLight, borderRadius: 16,
   },
-  toolIcon: { fontSize: 12, marginRight: 6 },
+  toolIcon: { marginRight: 6 },
   toolText: { fontSize: 12, color: colors.primary, fontWeight: '500' },
 
   // ToolCard
@@ -362,11 +381,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     paddingVertical: 8, paddingHorizontal: 12,
   },
-  toolCardIcon: { fontSize: 13, marginRight: 6 },
+  toolCardIcon: { marginRight: 6 },
   toolCardName: { fontSize: 13, fontWeight: '600', color: colors.text, flex: 1 },
   toolBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
-  toolBadgeText: { fontSize: 11, fontWeight: '600' },
-  toolChevron: { fontSize: 11, color: colors.textMuted, marginLeft: 8 },
+  toolBadgeContent: { flexDirection: 'row', alignItems: 'center' },
+  toolBadgeText: { fontSize: 11, fontWeight: '600', marginLeft: 4 },
   toolCardBody: { paddingHorizontal: 12, paddingBottom: 10 },
   toolSectionTitle: { fontSize: 11, fontWeight: '600', color: colors.textMuted, marginTop: 6, marginBottom: 4 },
   toolCodeBlock: {
@@ -378,7 +397,7 @@ const styles = StyleSheet.create({
 
   bubbleText: { color: colors.text, fontSize: 14, lineHeight: 21 },
   userText: { color: colors.textInverse },
-  statusText: { color: colors.textMuted, fontSize: 13, fontStyle: 'italic' },
+  statusText: { color: colors.textMuted, fontSize: 13, fontStyle: 'italic', marginLeft: 6 },
 
   // Pending file
   pendingBar: {
@@ -386,8 +405,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20, paddingVertical: 6,
     backgroundColor: colors.primaryLight, borderTopWidth: 1, borderTopColor: colors.border,
   },
-  pendingText: { fontSize: 12, color: colors.primary, fontWeight: '500' },
-  pendingRemove: { fontSize: 14, color: colors.textMuted, padding: 4 },
+  pendingContent: { flexDirection: 'row', alignItems: 'center' },
+  pendingText: { fontSize: 12, color: colors.primary, fontWeight: '500', marginLeft: 6 },
+  pendingRemove: { padding: 4 },
 
   // Input
   inputBar: {
@@ -400,7 +420,6 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center', marginRight: 4,
   },
   iconBtnActive: { backgroundColor: colors.primary },
-  iconBtnText: { fontSize: 18 },
   textInput: {
     flex: 1, backgroundColor: colors.inputBg, borderRadius: 20,
     borderWidth: 1, borderColor: colors.border,
@@ -414,7 +433,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 0, paddingVertical: 0,
   },
   sendBtnDisabled: { opacity: 0.3 },
-  sendText: { color: colors.textInverse, fontSize: 16, fontWeight: '700' },
   emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   emptyText: { color: colors.textMuted, fontSize: 15 },
+
 });

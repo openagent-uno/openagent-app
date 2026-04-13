@@ -8,6 +8,7 @@ import { colors } from '../theme';
  * - Entire bar is draggable; interactive elements are no-drag zones
  */
 
+import Feather from '@expo/vector-icons/Feather';
 import { useState } from 'react';
 import { View, Text, TouchableOpacity, Pressable, StyleSheet, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -89,7 +90,7 @@ export default function Header() {
             { WebkitAppRegion: 'no-drag' },
           ]}
         >
-          <Text style={styles.hamburgerText}>☰</Text>
+          <Feather name="menu" size={18} color={colors.textSecondary} />
         </TouchableOpacity>
       )}
 
@@ -105,7 +106,7 @@ export default function Header() {
         >
           <View style={[styles.statusDot, isConnected ? styles.dotGreen : styles.dotGray]} />
           <Text style={styles.accountName} numberOfLines={1}>{displayName}</Text>
-          <Text style={styles.chevron}>▾</Text>
+          <Feather name="chevron-down" size={14} color={colors.textMuted} style={styles.chevron} />
         </TouchableOpacity>
       </View>
 
@@ -118,7 +119,7 @@ export default function Header() {
           { WebkitAppRegion: 'no-drag' },
         ]}
       >
-        <Text style={styles.addBtnText}>+</Text>
+        <Feather name="plus" size={16} color={colors.primary} />
       </TouchableOpacity>
 
       {/* Windows/Linux window button padding */}
@@ -142,9 +143,12 @@ export default function Header() {
                   style={styles.dropdownItem}
                   onPress={() => handleSwitch(acc.id)}
                 >
-                  <Text style={styles.radioBtn}>
-                    {acc.id === activeAccountId ? '●' : '○'}
-                  </Text>
+                  <Feather
+                    name={acc.id === activeAccountId ? 'check-circle' : 'circle'}
+                    size={14}
+                    color={acc.id === activeAccountId ? colors.primary : colors.textMuted}
+                    style={styles.radioBtn}
+                  />
                   <View style={styles.dropdownInfo}>
                     <Text style={styles.dropdownName} numberOfLines={1}>{acc.name}</Text>
                     <Text style={styles.dropdownHost}>{acc.host}:{acc.port}</Text>
@@ -154,12 +158,15 @@ export default function Header() {
                   onPress={() => { void handleRemove(acc.id, acc.name); }}
                   style={styles.removeBtn}
                 >
-                  <Text style={styles.removeBtnText}>✕</Text>
+                  <Feather name="x" size={14} color={colors.textMuted} />
                 </TouchableOpacity>
               </View>
             ))}
             <TouchableOpacity style={styles.dropdownAdd} onPress={handleAdd}>
-              <Text style={styles.dropdownAddText}>+ Add Agent</Text>
+              <View style={styles.dropdownAddContent}>
+                <Feather name="plus" size={14} color={colors.primary} />
+                <Text style={styles.dropdownAddText}>Add Agent</Text>
+              </View>
             </TouchableOpacity>
           </View>
         </>
@@ -189,10 +196,6 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     borderRadius: 6,
   },
-  hamburgerText: {
-    fontSize: 16,
-    color: colors.textSecondary,
-  },
   center: {
     flex: 1,
     alignItems: 'center',
@@ -220,8 +223,6 @@ const styles = StyleSheet.create({
     maxWidth: 200,
   },
   chevron: {
-    fontSize: 11,
-    color: colors.textMuted,
     marginLeft: 5,
   },
   addBtn: {
@@ -233,13 +234,6 @@ const styles = StyleSheet.create({
     marginRight: 8,
     backgroundColor: colors.primaryLight,
   },
-  addBtnText: {
-    fontSize: 18,
-    color: colors.primary,
-    fontWeight: '400',
-    marginTop: -1,
-  },
-
   // Dropdown
   backdrop: {
     position: 'absolute',
@@ -282,10 +276,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
   },
   radioBtn: {
-    fontSize: 10,
-    color: colors.primary,
     marginRight: 8,
-    width: 14,
   },
   dropdownInfo: { flex: 1 },
   dropdownName: {
@@ -301,10 +292,6 @@ const styles = StyleSheet.create({
   removeBtn: {
     padding: 6,
   },
-  removeBtnText: {
-    fontSize: 11,
-    color: colors.textMuted,
-  },
   emptyDropdown: {
     padding: 12,
     fontSize: 12,
@@ -318,9 +305,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     marginTop: 2,
   },
+  dropdownAddContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
   dropdownAddText: {
     fontSize: 12,
     color: colors.primary,
     fontWeight: '500',
+    marginLeft: 8,
   },
 });

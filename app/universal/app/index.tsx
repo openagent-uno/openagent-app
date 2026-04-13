@@ -3,6 +3,7 @@
  */
 
 import { colors } from '../theme';
+import Feather from '@expo/vector-icons/Feather';
 import { useState, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
 import { useRouter } from 'expo-router';
@@ -90,7 +91,7 @@ export default function LoginScreen() {
                     style={styles.deleteBtn}
                     onPress={() => { void handleRemove(acc.id, acc.name); }}
                   >
-                    <Text style={styles.deleteBtnText}>✕</Text>
+                    <Feather name="x" size={14} color={colors.textMuted} />
                   </TouchableOpacity>
                 </View>
               ))}
@@ -228,11 +229,6 @@ const styles = StyleSheet.create({
     padding: 8,
     marginLeft: 4,
   },
-  deleteBtnText: {
-    color: colors.textMuted,
-    fontSize: 12,
-  },
-
   // Form
   field: { marginBottom: 12 },
   fieldRow: { flexDirection: 'row' },

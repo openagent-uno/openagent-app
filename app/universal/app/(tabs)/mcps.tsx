@@ -3,6 +3,7 @@ import { colors } from '../../theme';
  * MCPs screen — view default MCPs (read-only) and manage custom MCPs.
  */
 
+import Feather from '@expo/vector-icons/Feather';
 import { useEffect, useState } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet,
@@ -124,7 +125,7 @@ export default function McpsScreen() {
               )}
             </View>
             <TouchableOpacity onPress={() => removeCustom(mcp.name)} style={styles.removeBtn}>
-              <Text style={styles.removeBtnText}>✕</Text>
+              <Feather name="x" size={14} color={colors.textMuted} />
             </TouchableOpacity>
           </View>
         ))}
@@ -164,7 +165,10 @@ export default function McpsScreen() {
           </View>
         ) : (
           <PrimaryButton style={styles.addBtn} contentStyle={styles.addBtnInner} onPress={() => setAddingNew(true)}>
-            <Text style={styles.addBtnText}>+ Add MCP Server</Text>
+            <View style={styles.addBtnContent}>
+              <Feather name="plus" size={14} color={colors.textInverse} />
+              <Text style={styles.addBtnText}>Add MCP Server</Text>
+            </View>
           </PrimaryButton>
         )}
       </View>
@@ -191,11 +195,11 @@ const styles = StyleSheet.create({
   mcpDesc: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
   mcpEnv: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
   removeBtn: { padding: 8 },
-  removeBtnText: { fontSize: 12, color: colors.textMuted },
   emptyText: { padding: 16, fontSize: 13, color: colors.textMuted, textAlign: 'center' },
   addBtn: { padding: 12, borderTopWidth: 1, borderTopColor: colors.borderLight },
   addBtnInner: { minHeight: 40, borderRadius: 8 },
-  addBtnText: { fontSize: 13, color: colors.textInverse, fontWeight: '700' },
+  addBtnContent: { flexDirection: 'row', alignItems: 'center' },
+  addBtnText: { fontSize: 13, color: colors.textInverse, fontWeight: '700', marginLeft: 8 },
   addForm: { padding: 12, borderTopWidth: 1, borderTopColor: colors.borderLight },
   input: {
     backgroundColor: colors.inputBg, borderRadius: 8, borderWidth: 1, borderColor: colors.border,
