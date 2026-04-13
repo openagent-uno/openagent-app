@@ -74,13 +74,29 @@ export default function ModelScreen() {
     getDailyUsage(costDays).then(setDailyUsage).catch(() => {});
   };
 
-  // Load catalog for a provider
+  // Load catalog for a provider — also backfill models in YAML if empty
   const loadCatalog = async (provider: string) => {
     if (catalogCache[provider]) return;
     try {
       const models = await getModelCatalog(provider);
       if (models && models.length > 0) {
         setCatalogCache((prev) => ({ ...prev, [provider]: models }));
+
+        // If this provider has no models in YAML yet, save them
+        const cfgModels = (providers[provider] as any)?.models;
+        if (!cfgModels || cfgModels.length === 0) {
+          const modelIds = models.slice(0, 20).map((m) => m.model_id.replace(`${provider}/`, ''));
+          // For anthropic, prepend claude-cli
+          if (provider === 'anthropic') modelIds.unshift('claude-cli');
+          try {
+            await updateModel(provider, { models: modelIds });
+            // Update local state
+            setProviders((prev) => ({
+              ...prev,
+              [provider]: { ...prev[provider], models: modelIds },
+            }));
+          } catch {}
+        }
       }
     } catch {}
   };
@@ -204,7 +220,20 @@ export default function ModelScreen() {
       <Text style={[styles.sectionTitle, { marginTop: 16 }]}>Providers</Text>
 
       {Object.entries(providers).map(([name, cfg]) => {
+        // Build model list: use YAML config models as source of truth, enrich with catalog pricing
+        const configModels: string[] = (cfg as any).models || [];
         const catalog = catalogCache[name] || [];
+        const catalogMap: Record<string, ModelCatalogEntry> = {};
+        for (const m of catalog) {
+          const short = m.model_id.replace(`${name}/`, '');
+          catalogMap[short] = m;
+        }
+        // All models to show: from config + any catalog models not in config
+        const allModels = [...new Set([
+          ...configModels,
+          ...catalog.map((m) => m.model_id.replace(`${name}/`, '')),
+        ])];
+
         return (
           <View key={name} style={styles.card}>
             <View style={styles.cardHeader}>
@@ -234,44 +263,42 @@ export default function ModelScreen() {
               </Text>
             )}
 
-            <View style={styles.modelList}>
-              {/* Claude CLI — shown first for Anthropic */}
-              {name === 'anthropic' && (() => {
-                const disabled = (disabledModels[name] || []).includes('claude-cli');
-                return (
-                  <View>
-                    <TouchableOpacity style={styles.modelRow} onPress={() => toggleModel(name, 'claude-cli')}>
-                      <View style={styles.modelToggle}>
-                        <View style={[styles.toggleDot, disabled ? styles.toggleOff : styles.toggleOn]} />
-                        <Text style={[styles.modelId, disabled && styles.modelDisabled]}>claude-cli</Text>
-                      </View>
-                      <Text style={[styles.modelPrice, disabled && styles.modelDisabled, !disabled && { color: colors.success }]}>$0 flat</Text>
-                    </TouchableOpacity>
-                    <Text style={styles.cliSubtitle}>Pro/Max subscription — no API key needed</Text>
-                  </View>
-                );
-              })()}
-
-              {/* API models from catalog */}
-              {catalog.slice(0, 15).map((m) => {
-                const shortId = m.model_id.replace(`${name}/`, '');
-                const disabled = (disabledModels[name] || []).includes(shortId);
-                return (
-                  <TouchableOpacity key={m.model_id} style={styles.modelRow} onPress={() => toggleModel(name, shortId)}>
-                    <View style={styles.modelToggle}>
-                      <View style={[styles.toggleDot, disabled ? styles.toggleOff : styles.toggleOn]} />
-                      <Text style={[styles.modelId, disabled && styles.modelDisabled]}>{shortId}</Text>
+            {allModels.length > 0 && (
+              <View style={styles.modelList}>
+                {allModels.slice(0, 20).map((modelId) => {
+                  const isCli = modelId === 'claude-cli';
+                  const disabled = (disabledModels[name] || []).includes(modelId);
+                  const pricing = catalogMap[modelId];
+                  return (
+                    <View key={modelId}>
+                      <TouchableOpacity style={styles.modelRow} onPress={() => toggleModel(name, modelId)}>
+                        <View style={styles.modelToggle}>
+                          <View style={[styles.toggleDot, disabled ? styles.toggleOff : styles.toggleOn]} />
+                          <Text style={[styles.modelId, disabled && styles.modelDisabled]}>{modelId}</Text>
+                        </View>
+                        {isCli ? (
+                          <Text style={[styles.modelPrice, disabled && styles.modelDisabled, !disabled && { color: colors.success }]}>$0 flat</Text>
+                        ) : pricing ? (
+                          <Text style={[styles.modelPrice, disabled && styles.modelDisabled]}>
+                            ${pricing.input_cost_per_million}/M in  ${pricing.output_cost_per_million}/M out
+                          </Text>
+                        ) : (
+                          <Text style={[styles.modelPrice, disabled && styles.modelDisabled]}>—</Text>
+                        )}
+                      </TouchableOpacity>
+                      {isCli && <Text style={styles.cliSubtitle}>Pro/Max subscription — no API key needed</Text>}
                     </View>
-                    <Text style={[styles.modelPrice, disabled && styles.modelDisabled]}>
-                      ${m.input_cost_per_million}/M in  ${m.output_cost_per_million}/M out
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-              {catalog.length > 15 && (
-                <Text style={styles.moreModels}>+{catalog.length - 15} more</Text>
-              )}
-            </View>
+                  );
+                })}
+                {allModels.length > 20 && (
+                  <Text style={styles.moreModels}>+{allModels.length - 20} more</Text>
+                )}
+              </View>
+            )}
+
+            {allModels.length === 0 && (
+              <Text style={[styles.keyDisplay, { marginTop: 8 }]}>No models loaded — restart agent to fetch catalog</Text>
+            )}
           </View>
         );
       })}
