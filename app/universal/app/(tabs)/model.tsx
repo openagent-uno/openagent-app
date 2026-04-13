@@ -36,9 +36,8 @@ export default function ModelScreen() {
   const [newUrl, setNewUrl] = useState('');
 
   // Mode
-  const [mode, setMode] = useState<'smart' | 'single' | 'claude-cli'>('smart');
+  const [mode, setMode] = useState<'smart' | 'single'>('smart');
   const [singleModelId, setSingleModelId] = useState('');
-  const [cliModelId, setCliModelId] = useState('claude-sonnet-4-6');
   const [budget, setBudget] = useState('20');
 
   // Usage
@@ -62,12 +61,8 @@ export default function ModelScreen() {
       setProviders(data.models || {});
       setActive(data.active || null);
       if (data.active?.provider === 'smart') setMode('smart');
-      else if (data.active?.provider === 'claude-cli') setMode('claude-cli');
       else setMode('single');
-      if (data.active?.model_id) {
-        setSingleModelId(data.active.model_id);
-        if (data.active.provider === 'claude-cli') setCliModelId(data.active.model_id || 'claude-sonnet-4-6');
-      }
+      if (data.active?.model_id) setSingleModelId(data.active.model_id);
       if (data.active?.monthly_budget) setBudget(String(data.active.monthly_budget));
     } catch {}
     getUsage().then(setUsage).catch(() => {});
@@ -122,8 +117,8 @@ export default function ModelScreen() {
     let model: ModelConfig;
     if (mode === 'smart') {
       model = { provider: 'smart', monthly_budget: parseFloat(budget) || 20 };
-    } else if (mode === 'claude-cli') {
-      model = { provider: 'claude-cli', model_id: cliModelId, permission_mode: 'bypass' };
+    } else if (singleModelId === 'claude-cli') {
+      model = { provider: 'claude-cli', model_id: 'claude-sonnet-4-6', permission_mode: 'bypass' };
     } else {
       model = { provider: 'litellm', model_id: singleModelId };
     }
@@ -144,11 +139,7 @@ export default function ModelScreen() {
         </TouchableOpacity>
         <TouchableOpacity style={[styles.modeBtn, mode === 'single' && styles.modeBtnActive]} onPress={() => setMode('single')}>
           <Text style={[styles.modeBtnText, mode === 'single' && styles.modeBtnTextActive]}>Single Model</Text>
-          <Text style={styles.modeHint}>One API model</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.modeBtn, mode === 'claude-cli' && styles.modeBtnActive]} onPress={() => setMode('claude-cli')}>
-          <Text style={[styles.modeBtnText, mode === 'claude-cli' && styles.modeBtnTextActive]}>Claude CLI</Text>
-          <Text style={styles.modeHint}>Pro/Max subscription</Text>
+          <Text style={styles.modeHint}>One model for everything</Text>
         </TouchableOpacity>
       </View>
 
@@ -156,19 +147,10 @@ export default function ModelScreen() {
         <View style={styles.singleRow}>
           <Text style={styles.label}>Model ID</Text>
           <TextInput style={styles.input} value={singleModelId} onChangeText={setSingleModelId}
-            placeholder="anthropic/claude-sonnet-4-6" placeholderTextColor={colors.textMuted} />
-        </View>
-      )}
-
-      {mode === 'claude-cli' && (
-        <View style={styles.singleRow}>
-          <Text style={styles.label}>Model</Text>
-          <TextInput style={styles.input} value={cliModelId} onChangeText={setCliModelId}
-            placeholder="claude-sonnet-4-6" placeholderTextColor={colors.textMuted} />
-          <Text style={styles.cliHint}>
-            Uses your Claude Pro/Max subscription. No API key needed.{'\n'}
-            Requires `claude` CLI installed and logged in.
-          </Text>
+            placeholder="anthropic/claude-sonnet-4-6 or claude-cli" placeholderTextColor={colors.textMuted} />
+          {singleModelId === 'claude-cli' && (
+            <Text style={styles.cliHint}>Uses Claude Pro/Max subscription. No API key needed.</Text>
+          )}
         </View>
       )}
 
