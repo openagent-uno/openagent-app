@@ -72,11 +72,27 @@ export interface SavedAccount extends ConnectionConfig {
 // ── Config ──
 
 export interface ModelConfig {
-  provider: string;        // "claude-cli" | "claude-api" | "zhipu"
-  model_id: string;
+  provider: string;        // "claude-cli" | "claude-api" | "zhipu" | "litellm" | "smart"
+  model_id?: string;
   permission_mode?: string; // "bypass" | "auto" | "default"
   api_key?: string;
   base_url?: string;
+  monthly_budget?: number;
+  routing?: { simple?: string; medium?: string; hard?: string; fallback?: string };
+  classifier_model?: string;
+}
+
+export interface ProviderConfig {
+  api_key?: string;
+  api_key_display?: string;
+  base_url?: string;
+}
+
+export interface UsageData {
+  monthly_spend: number;
+  monthly_budget: number;
+  remaining: number | null;
+  by_model: Record<string, number>;
 }
 
 export interface McpServerConfig {
@@ -92,6 +108,7 @@ export interface AgentConfig {
   name?: string;
   system_prompt?: string;
   model?: ModelConfig;
+  providers?: Record<string, ProviderConfig>;
   mcp_defaults?: boolean;
   mcp_disable?: string[];
   mcp?: McpServerConfig[];

@@ -2,7 +2,7 @@
  * REST API client for OpenAgent vault operations.
  */
 
-import type { VaultNote, GraphData, AgentConfig } from '../../common/types';
+import type { VaultNote, GraphData, AgentConfig, ProviderConfig, UsageData } from '../../common/types';
 
 let baseUrl = '';
 
@@ -113,4 +113,26 @@ export async function triggerRestart(): Promise<{ ok: boolean }> {
   const res = await fetch(`${baseUrl}/api/restart`, { method: 'POST' });
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
   return res.json();
+}
+
+// ── Provider API ──
+
+export async function getProviders(): Promise<Record<string, ProviderConfig>> {
+  const data = await get<{ providers: Record<string, ProviderConfig> }>('/api/providers');
+  return data.providers;
+}
+
+export async function testProvider(provider: string): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch(`${baseUrl}/api/providers/test`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider }),
+  });
+  return res.json();
+}
+
+// ── Usage API ──
+
+export async function getUsage(): Promise<UsageData> {
+  return get<UsageData>('/api/usage');
 }
