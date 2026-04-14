@@ -54,6 +54,7 @@
       "repo": "OpenAgent"
     },
     "mac": {
+      "artifactName": "openagent-app-${version}-macos-${arch}.${ext}",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "buildResources/entitlements.mac.plist",
@@ -80,6 +81,7 @@
       "darkModeSupport": true
     },
     "win": {
+      "artifactName": "openagent-app-${version}-windows-${arch}.${ext}",
       "icon": "buildResources/icon.ico",
       "target": [
         {
@@ -91,6 +93,7 @@
       ]
     },
     "linux": {
+      "artifactName": "openagent-app-${version}-linux-${arch}.${ext}",
       "icon": "buildResources/icon.png",
       "target": [
         {
