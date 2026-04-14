@@ -11,9 +11,9 @@ export default function TabsLayout() {
           backgroundColor: colors.surface,
           borderTopColor: colors.border,
           borderTopWidth: 1,
-          height: 52,
+          height: 60,
           paddingBottom: 6,
-          paddingTop: 6,
+          paddingTop: 8,
         },
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.textMuted,
@@ -27,49 +27,49 @@ export default function TabsLayout() {
         name="chat"
         options={{
           title: 'Chat',
-          tabBarIcon: ({ color }) => <Feather name="message-circle" size={14} color={color} />,
+          tabBarIcon: ({ color }) => <Feather name="message-circle" size={21} color={color} />,
         }}
       />
       <Tabs.Screen
         name="memory"
         options={{
           title: 'Memory',
-          tabBarIcon: ({ color }) => <Feather name="book-open" size={14} color={color} />,
+          tabBarIcon: ({ color }) => <Feather name="book-open" size={21} color={color} />,
         }}
       />
       <Tabs.Screen
         name="mcps"
         options={{
           title: 'MCPs',
-          tabBarIcon: ({ color }) => <Feather name="tool" size={14} color={color} />,
+          tabBarIcon: ({ color }) => <Feather name="tool" size={21} color={color} />,
         }}
       />
       <Tabs.Screen
         name="automations"
         options={{
           title: 'Automations',
-          tabBarIcon: ({ color }) => <Feather name="zap" size={14} color={color} />,
+          tabBarIcon: ({ color }) => <Feather name="zap" size={21} color={color} />,
         }}
       />
       <Tabs.Screen
         name="tasks"
         options={{
           title: 'Tasks',
-          tabBarIcon: ({ color }) => <Feather name="check-square" size={14} color={color} />,
+          tabBarIcon: ({ color }) => <Feather name="check-square" size={21} color={color} />,
         }}
       />
       <Tabs.Screen
         name="model"
         options={{
           title: 'Model',
-          tabBarIcon: ({ color }) => <Feather name="cpu" size={14} color={color} />,
+          tabBarIcon: ({ color }) => <Feather name="cpu" size={21} color={color} />,
         }}
       />
       <Tabs.Screen
         name="settings"
         options={{
           title: 'Settings',
-          tabBarIcon: ({ color }) => <Feather name="settings" size={14} color={color} />,
+          tabBarIcon: ({ color }) => <Feather name="settings" size={21} color={color} />,
         }}
       />
     </Tabs>

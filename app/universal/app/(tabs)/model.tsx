@@ -1,6 +1,8 @@
 import { colors } from '../../theme';
 /**
  * Model screen — provider cards grid, model catalog, cost dashboard.
+ * Uses a responsive sidebar to group the screen into categories (fixed on
+ * desktop, drawer on mobile), matching the pattern used on chat/memory.
  */
 
 import Feather from '@expo/vector-icons/Feather';
@@ -15,13 +17,32 @@ import {
   getUsage, getDailyUsage, getModelCatalog, getAvailableProviders,
 } from '../../services/api';
 import PrimaryButton from '../../components/PrimaryButton';
+import ResponsiveSidebar from '../../components/ResponsiveSidebar';
 import type { UsageData, ModelCatalogEntry, DailyUsageEntry, ModelConfig } from '../../../common/types';
 
 const FALLBACK_PROVIDERS = ['anthropic', 'openai', 'google'];
 
+type CategoryId = 'overview' | 'providers' | 'costs';
+
+interface Category {
+  id: CategoryId;
+  label: string;
+  icon: keyof typeof Feather.glyphMap;
+  description: string;
+}
+
+const CATEGORIES: Category[] = [
+  { id: 'overview', label: 'Overview', icon: 'dollar-sign', description: 'Budget and usage' },
+  { id: 'providers', label: 'Providers', icon: 'cpu', description: 'Keys and model toggles' },
+  { id: 'costs', label: 'Costs', icon: 'bar-chart-2', description: 'Daily spend breakdown' },
+];
+
 export default function ModelScreen() {
   const connConfig = useConnection((s) => s.config);
   const { config: agentConfig, loadConfig } = useConfig();
+
+  // Active category (drives what's rendered in the main area)
+  const [activeCategory, setActiveCategory] = useState<CategoryId>('overview');
 
   // Available providers from litellm
   const [availableProviders, setAvailableProviders] = useState<string[]>(FALLBACK_PROVIDERS);
@@ -191,11 +212,60 @@ export default function ModelScreen() {
     } catch {}
   };
 
-  return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>Models</Text>
+  // ── Sidebar ──
 
-      <Text style={styles.hint}>Smart routing auto-picks the best model by task difficulty and price. Enable/disable models below.</Text>
+  const sidebarContent = (
+    <View style={styles.sidebarInner}>
+      <Text style={styles.sidebarTitle}>Models</Text>
+      <ScrollView style={styles.categoryList}>
+        {CATEGORIES.map((cat) => {
+          const isActive = cat.id === activeCategory;
+          return (
+            <TouchableOpacity
+              key={cat.id}
+              style={[styles.categoryItem, isActive && styles.categoryActive]}
+              onPress={() => setActiveCategory(cat.id)}
+            >
+              <Feather
+                name={cat.icon}
+                size={14}
+                color={isActive ? colors.primary : colors.textMuted}
+                style={styles.categoryIcon}
+              />
+              <View style={styles.categoryTextWrap}>
+                <Text style={[styles.categoryLabel, isActive && styles.categoryLabelActive]} numberOfLines={1}>
+                  {cat.label}
+                </Text>
+                <Text style={styles.categoryDesc} numberOfLines={1}>
+                  {cat.description}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+
+      {/* Budget summary pinned to the bottom of the sidebar */}
+      {usage && usage.monthly_budget > 0 && (
+        <View style={styles.sidebarFooter}>
+          <Text style={styles.sidebarFooterLabel}>This Month</Text>
+          <Text style={styles.sidebarFooterValue}>
+            ${usage.monthly_spend.toFixed(2)} / ${usage.monthly_budget.toFixed(2)}
+          </Text>
+        </View>
+      )}
+    </View>
+  );
+
+  // ── Category renders ──
+
+  const renderOverview = () => (
+    <>
+      <Text style={styles.title}>Overview</Text>
+      <Text style={styles.hint}>
+        Smart routing auto-picks the best model by task difficulty and price. Configure your monthly budget here and
+        enable/disable individual models in the Providers tab.
+      </Text>
 
       <View style={styles.singleRow}>
         <Text style={styles.label}>Monthly Budget ($)</Text>
@@ -204,7 +274,7 @@ export default function ModelScreen() {
       </View>
 
       <PrimaryButton style={{ marginBottom: 20 }} onPress={handleSave}>
-        <Text style={styles.saveBtnText}>{saved ? 'Saved (restart required)' : 'Save'}</Text>
+        <Text style={styles.saveBtnText}>{saved ? 'Saved' : 'Save'}</Text>
       </PrimaryButton>
 
       {/* Usage Bar */}
@@ -222,9 +292,12 @@ export default function ModelScreen() {
           </Text>
         </View>
       )}
+    </>
+  );
 
-      {/* Provider Cards */}
-      <Text style={[styles.sectionTitle, { marginTop: 16 }]}>Providers</Text>
+  const renderProviders = () => (
+    <>
+      <Text style={styles.sectionTitle}>Providers</Text>
 
       {Object.entries(providers).map(([name, cfg]) => {
         // Only show models explicitly added by the user (from YAML config)
@@ -395,9 +468,12 @@ export default function ModelScreen() {
           </View>
         </TouchableOpacity>
       )}
+    </>
+  );
 
-      {/* Cost Dashboard */}
-      <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Costs</Text>
+  const renderCosts = () => (
+    <>
+      <Text style={styles.sectionTitle}>Costs</Text>
 
       <View style={styles.card}>
         <View style={styles.costTabs}>
@@ -450,13 +526,58 @@ export default function ModelScreen() {
           <Text style={styles.emptyText}>No usage data yet.</Text>
         )}
       </View>
+    </>
+  );
 
-      <View style={{ height: 40 }} />
-    </ScrollView>
+  const renderCategory = () => {
+    switch (activeCategory) {
+      case 'overview': return renderOverview();
+      case 'providers': return renderProviders();
+      case 'costs': return renderCosts();
+    }
+  };
+
+  return (
+    <ResponsiveSidebar sidebar={sidebarContent}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+        {renderCategory()}
+        <View style={{ height: 40 }} />
+      </ScrollView>
+    </ResponsiveSidebar>
   );
 }
 
 const styles = StyleSheet.create({
+  // Sidebar
+  sidebarInner: { flex: 1, padding: 12 },
+  sidebarTitle: {
+    fontSize: 11, fontWeight: '700', color: colors.textMuted,
+    textTransform: 'uppercase', letterSpacing: 0.5,
+    paddingHorizontal: 8, paddingVertical: 8, marginBottom: 4,
+  },
+  categoryList: { flex: 1 },
+  categoryItem: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 10, paddingHorizontal: 10,
+    borderRadius: 8, marginBottom: 2,
+  },
+  categoryActive: { backgroundColor: colors.primaryLight },
+  categoryIcon: { marginRight: 10 },
+  categoryTextWrap: { flex: 1 },
+  categoryLabel: { fontSize: 13, color: colors.textSecondary, fontWeight: '500' },
+  categoryLabelActive: { color: colors.primary, fontWeight: '600' },
+  categoryDesc: { fontSize: 11, color: colors.textMuted, marginTop: 1 },
+  sidebarFooter: {
+    borderTopWidth: 1, borderTopColor: colors.border,
+    paddingVertical: 10, paddingHorizontal: 10, marginTop: 8,
+  },
+  sidebarFooterLabel: {
+    fontSize: 10, color: colors.textMuted,
+    textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: '600',
+  },
+  sidebarFooterValue: { fontSize: 13, color: colors.text, fontWeight: '600', marginTop: 2 },
+
+  // Main content
   container: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 24, maxWidth: 540, width: '100%', alignSelf: 'center' },
   title: { fontSize: 17, fontWeight: '600', color: colors.text, marginBottom: 12 },

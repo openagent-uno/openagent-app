@@ -1,6 +1,8 @@
 import { colors } from '../../theme';
 /**
  * Settings screen — agent identity, channels, dream mode, auto-update, connection.
+ * Uses a responsive sidebar to group settings into categories (fixed on desktop,
+ * drawer on mobile), matching the pattern used on chat/memory.
  */
 
 import Feather from '@expo/vector-icons/Feather';
@@ -14,7 +16,47 @@ import { useConfig } from '../../stores/config';
 import { setBaseUrl, triggerUpdate, triggerRestart } from '../../services/api';
 import { useConfirm } from '../../components/ConfirmDialog';
 import PrimaryButton from '../../components/PrimaryButton';
+import ResponsiveSidebar from '../../components/ResponsiveSidebar';
 import ThemedSwitch from '../../components/ThemedSwitch';
+
+type CategoryId =
+  | 'identity'
+  | 'channels'
+  | 'dream'
+  | 'auto_update'
+  | 'controls'
+  | 'connection';
+
+interface Category {
+  id: CategoryId;
+  label: string;
+  icon: keyof typeof Feather.glyphMap;
+  description: string;
+}
+
+const CATEGORIES: Category[] = [
+  { id: 'identity', label: 'Agent Identity', icon: 'user', description: 'Name and system prompt' },
+  { id: 'channels', label: 'Channels', icon: 'message-square', description: 'Gateway, Telegram, Discord, WhatsApp' },
+  { id: 'dream', label: 'Dream Mode', icon: 'moon', description: 'Nightly reflection' },
+  { id: 'auto_update', label: 'Auto-Update', icon: 'refresh-cw', description: 'Release check cadence' },
+  { id: 'controls', label: 'Controls', icon: 'sliders', description: 'Update and restart' },
+  { id: 'connection', label: 'Connection', icon: 'link', description: 'Account and host' },
+];
+
+type ChannelTab = 'gateway' | 'telegram' | 'discord' | 'whatsapp';
+
+interface ChannelTabSpec {
+  id: ChannelTab;
+  label: string;
+  icon: keyof typeof Feather.glyphMap;
+}
+
+const CHANNEL_TABS: ChannelTabSpec[] = [
+  { id: 'gateway', label: 'Gateway', icon: 'wifi' },
+  { id: 'telegram', label: 'Telegram', icon: 'send' },
+  { id: 'discord', label: 'Discord', icon: 'message-square' },
+  { id: 'whatsapp', label: 'WhatsApp', icon: 'phone' },
+];
 
 export default function SettingsScreen() {
   const router = useRouter();
@@ -22,6 +64,11 @@ export default function SettingsScreen() {
   const { config: agentConfig, loadConfig, updateSection } = useConfig();
   const activeAccount = accounts.find((a) => a.id === activeAccountId);
   const confirm = useConfirm();
+
+  // Active category (drives what's rendered in the main area)
+  const [activeCategory, setActiveCategory] = useState<CategoryId>('identity');
+  // Active sub-tab inside the Channels screen
+  const [activeChannelTab, setActiveChannelTab] = useState<ChannelTab>('gateway');
 
   // Local form state
   const [name, setName] = useState('');
@@ -31,6 +78,11 @@ export default function SettingsScreen() {
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(false);
   const [autoUpdateMode, setAutoUpdateMode] = useState('auto');
   const [autoUpdateInterval, setAutoUpdateInterval] = useState('17 */6 * * *');
+
+  // Gateway (app/CLI websocket) state
+  const [gwHost, setGwHost] = useState('0.0.0.0');
+  const [gwPort, setGwPort] = useState('8765');
+  const [gwToken, setGwToken] = useState('');
 
   // Channel state
   const [tgToken, setTgToken] = useState('');
@@ -65,6 +117,10 @@ export default function SettingsScreen() {
 
     // Channels
     const ch = agentConfig.channels || {};
+    const ws = ch.websocket || {};
+    setGwHost(ws.host || '0.0.0.0');
+    setGwPort(ws.port != null ? String(ws.port) : '8765');
+    setGwToken(ws.token || '');
     const tg = ch.telegram || {};
     setTgToken(tg.token || '');
     setTgUsers((tg.allowed_users || []).join(', '));
@@ -88,10 +144,25 @@ export default function SettingsScreen() {
     }
   };
 
-  const saveChannels = async () => {
-    const channels: any = { ...(agentConfig?.channels || {}) };
+  // Each channel save reads the full channels block from the last-loaded server
+  // config and only mutates its own key — unsaved edits to other panels are NOT
+  // committed. The form state for other channels is only flushed when that
+  // specific panel's Save button is pressed.
 
-    // Telegram
+  const saveGateway = async () => {
+    const channels: any = { ...(agentConfig?.channels || {}) };
+    const port = parseInt(gwPort, 10);
+    const ws: any = {
+      host: gwHost.trim() || '0.0.0.0',
+      port: Number.isFinite(port) && port > 0 ? port : 8765,
+    };
+    if (gwToken.trim()) ws.token = gwToken.trim();
+    channels.websocket = ws;
+    await saveSection('channels', channels, 'gateway');
+  };
+
+  const saveTelegram = async () => {
+    const channels: any = { ...(agentConfig?.channels || {}) };
     if (tgToken.trim()) {
       channels.telegram = {
         token: tgToken.trim(),
@@ -101,8 +172,11 @@ export default function SettingsScreen() {
     } else {
       delete channels.telegram;
     }
+    await saveSection('channels', channels, 'telegram');
+  };
 
-    // Discord
+  const saveDiscord = async () => {
+    const channels: any = { ...(agentConfig?.channels || {}) };
     if (dcToken.trim()) {
       channels.discord = {
         token: dcToken.trim(),
@@ -112,8 +186,11 @@ export default function SettingsScreen() {
     } else {
       delete channels.discord;
     }
+    await saveSection('channels', channels, 'discord');
+  };
 
-    // WhatsApp
+  const saveWhatsapp = async () => {
+    const channels: any = { ...(agentConfig?.channels || {}) };
     if (waId.trim() && waToken.trim()) {
       channels.whatsapp = {
         green_api_id: waId.trim(),
@@ -124,9 +201,7 @@ export default function SettingsScreen() {
     } else {
       delete channels.whatsapp;
     }
-
-    // Keep websocket config untouched
-    await saveSection('channels', channels, 'channels');
+    await saveSection('channels', channels, 'whatsapp');
   };
 
   const handleDisconnect = () => { disconnect(); router.replace('/'); };
@@ -142,9 +217,45 @@ export default function SettingsScreen() {
     router.replace('/');
   };
 
-  return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      {/* Agent Identity */}
+  // ── Sidebar ──
+
+  const sidebarContent = (
+    <View style={styles.sidebarInner}>
+      <Text style={styles.sidebarTitle}>Settings</Text>
+      <ScrollView style={styles.categoryList}>
+        {CATEGORIES.map((cat) => {
+          const isActive = cat.id === activeCategory;
+          return (
+            <TouchableOpacity
+              key={cat.id}
+              style={[styles.categoryItem, isActive && styles.categoryActive]}
+              onPress={() => setActiveCategory(cat.id)}
+            >
+              <Feather
+                name={cat.icon}
+                size={14}
+                color={isActive ? colors.primary : colors.textMuted}
+                style={styles.categoryIcon}
+              />
+              <View style={styles.categoryTextWrap}>
+                <Text style={[styles.categoryLabel, isActive && styles.categoryLabelActive]} numberOfLines={1}>
+                  {cat.label}
+                </Text>
+                <Text style={styles.categoryDesc} numberOfLines={1}>
+                  {cat.description}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+    </View>
+  );
+
+  // ── Main content per category ──
+
+  const renderIdentity = () => (
+    <>
       <Text style={styles.sectionTitle}>Agent Identity</Text>
       <View style={styles.card}>
         <Text style={styles.label}>Name</Text>
@@ -164,51 +275,125 @@ export default function SettingsScreen() {
         ) : (
           <TextInput style={[styles.input, { height: 120, textAlignVertical: 'top' }]} value={systemPrompt} onChangeText={setSystemPrompt} multiline />
         )}
-        <SaveBtn label="Save Identity" saved={saved === 'identity'} onPress={() => saveSection('name', name, 'identity').then(() => saveSection('system_prompt', systemPrompt, 'identity'))} />
+        <SaveBtn
+          label="Save Identity"
+          saved={saved === 'identity'}
+          onPress={() => saveSection('name', name, 'identity').then(() => saveSection('system_prompt', systemPrompt, 'identity'))}
+        />
+      </View>
+    </>
+  );
+
+  // Each sub-panel is shown in isolation under the Channels screen; the
+  // sub-tab strip switches between Gateway/Telegram/Discord/WhatsApp.
+
+  const renderGatewayPanel = () => (
+    <View style={styles.card}>
+      <Text style={styles.channelSubtitle}>
+        Websocket endpoint used by the OpenAgent app and CLI to talk to this agent.
+      </Text>
+
+      <Text style={[styles.label, { marginTop: 8 }]}>Host</Text>
+      <TextInput style={styles.input} value={gwHost} onChangeText={setGwHost} placeholder="0.0.0.0" placeholderTextColor={colors.textMuted} autoCapitalize="none" />
+      <Text style={[styles.label, { marginTop: 8 }]}>Port</Text>
+      <TextInput style={styles.input} value={gwPort} onChangeText={setGwPort} placeholder="8765" placeholderTextColor={colors.textMuted} keyboardType="numeric" />
+      <Text style={[styles.label, { marginTop: 8 }]}>Auth Token</Text>
+      <TextInput style={styles.input} value={gwToken} onChangeText={setGwToken} placeholder="${OPENAGENT_WS_TOKEN}" placeholderTextColor={colors.textMuted} secureTextEntry />
+      <Text style={styles.channelHint}>
+        Leave blank to use the OPENAGENT_WS_TOKEN environment variable. The token must match the one saved in the client's
+        account entry.
+      </Text>
+
+      <SaveBtn label="Save Gateway" saved={saved === 'gateway'} onPress={saveGateway} />
+      <Text style={styles.restartHint}>Restart required after changes</Text>
+    </View>
+  );
+
+  const renderTelegramPanel = () => (
+    <View style={styles.card}>
+      <Text style={styles.label}>Bot Token</Text>
+      <TextInput style={styles.input} value={tgToken} onChangeText={setTgToken} placeholder="${TELEGRAM_BOT_TOKEN}" placeholderTextColor={colors.textMuted} secureTextEntry />
+      <Text style={[styles.label, { marginTop: 8 }]}>Allowed User IDs (comma-separated)</Text>
+      <TextInput style={styles.input} value={tgUsers} onChangeText={setTgUsers} placeholder="123456789, 987654321" placeholderTextColor={colors.textMuted} />
+      <Text style={[styles.label, { marginTop: 8 }]}>Model Override (optional)</Text>
+      <TextInput style={styles.input} value={tgModel} onChangeText={setTgModel} placeholder="Default (global model)" placeholderTextColor={colors.textMuted} />
+      <Text style={styles.channelHint}>Clear the bot token to disable this channel.</Text>
+
+      <SaveBtn label="Save Telegram" saved={saved === 'telegram'} onPress={saveTelegram} />
+      <Text style={styles.restartHint}>Restart required after changes</Text>
+    </View>
+  );
+
+  const renderDiscordPanel = () => (
+    <View style={styles.card}>
+      <Text style={styles.label}>Bot Token</Text>
+      <TextInput style={styles.input} value={dcToken} onChangeText={setDcToken} placeholder="${DISCORD_BOT_TOKEN}" placeholderTextColor={colors.textMuted} secureTextEntry />
+      <Text style={[styles.label, { marginTop: 8 }]}>Allowed User IDs (comma-separated)</Text>
+      <TextInput style={styles.input} value={dcUsers} onChangeText={setDcUsers} placeholder="123456789012345678" placeholderTextColor={colors.textMuted} />
+      <Text style={[styles.label, { marginTop: 8 }]}>Model Override (optional)</Text>
+      <TextInput style={styles.input} value={dcModel} onChangeText={setDcModel} placeholder="Default (global model)" placeholderTextColor={colors.textMuted} />
+      <Text style={styles.channelHint}>Clear the bot token to disable this channel.</Text>
+
+      <SaveBtn label="Save Discord" saved={saved === 'discord'} onPress={saveDiscord} />
+      <Text style={styles.restartHint}>Restart required after changes</Text>
+    </View>
+  );
+
+  const renderWhatsappPanel = () => (
+    <View style={styles.card}>
+      <Text style={styles.label}>Instance ID</Text>
+      <TextInput style={styles.input} value={waId} onChangeText={setWaId} placeholder="${GREEN_API_ID}" placeholderTextColor={colors.textMuted} />
+      <Text style={[styles.label, { marginTop: 8 }]}>API Token</Text>
+      <TextInput style={styles.input} value={waToken} onChangeText={setWaToken} placeholder="${GREEN_API_TOKEN}" placeholderTextColor={colors.textMuted} secureTextEntry />
+      <Text style={[styles.label, { marginTop: 8 }]}>Allowed Users (comma-separated)</Text>
+      <TextInput style={styles.input} value={waUsers} onChangeText={setWaUsers} placeholder="391234567890" placeholderTextColor={colors.textMuted} />
+      <Text style={[styles.label, { marginTop: 8 }]}>Model Override (optional)</Text>
+      <TextInput style={styles.input} value={waModel} onChangeText={setWaModel} placeholder="Default (global model)" placeholderTextColor={colors.textMuted} />
+      <Text style={styles.channelHint}>Clear the Instance ID or Token to disable this channel.</Text>
+
+      <SaveBtn label="Save WhatsApp" saved={saved === 'whatsapp'} onPress={saveWhatsapp} />
+      <Text style={styles.restartHint}>Restart required after changes</Text>
+    </View>
+  );
+
+  const renderChannels = () => (
+    <>
+      <Text style={styles.sectionTitle}>Channels</Text>
+
+      {/* Sub-tab strip */}
+      <View style={styles.channelTabs}>
+        {CHANNEL_TABS.map((tab) => {
+          const isActive = tab.id === activeChannelTab;
+          return (
+            <TouchableOpacity
+              key={tab.id}
+              style={[styles.channelTab, isActive && styles.channelTabActive]}
+              onPress={() => setActiveChannelTab(tab.id)}
+            >
+              <Feather
+                name={tab.icon}
+                size={13}
+                color={isActive ? colors.textInverse : colors.textSecondary}
+                style={styles.channelTabIcon}
+              />
+              <Text style={[styles.channelTabLabel, isActive && styles.channelTabLabelActive]}>
+                {tab.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
-      {/* Channels */}
-      <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Channels</Text>
-      <View style={styles.card}>
-        {/* Telegram */}
-        <Text style={styles.channelTitle}>Telegram</Text>
-        <Text style={styles.label}>Bot Token</Text>
-        <TextInput style={styles.input} value={tgToken} onChangeText={setTgToken} placeholder="${TELEGRAM_BOT_TOKEN}" placeholderTextColor={colors.textMuted} secureTextEntry />
-        <Text style={[styles.label, { marginTop: 8 }]}>Allowed User IDs (comma-separated)</Text>
-        <TextInput style={styles.input} value={tgUsers} onChangeText={setTgUsers} placeholder="123456789, 987654321" placeholderTextColor={colors.textMuted} />
-        <Text style={[styles.label, { marginTop: 8 }]}>Model Override (optional)</Text>
-        <TextInput style={styles.input} value={tgModel} onChangeText={setTgModel} placeholder="Default (global model)" placeholderTextColor={colors.textMuted} />
+      {activeChannelTab === 'gateway' && renderGatewayPanel()}
+      {activeChannelTab === 'telegram' && renderTelegramPanel()}
+      {activeChannelTab === 'discord' && renderDiscordPanel()}
+      {activeChannelTab === 'whatsapp' && renderWhatsappPanel()}
+    </>
+  );
 
-        <View style={styles.channelDivider} />
-
-        {/* Discord */}
-        <Text style={styles.channelTitle}>Discord</Text>
-        <Text style={styles.label}>Bot Token</Text>
-        <TextInput style={styles.input} value={dcToken} onChangeText={setDcToken} placeholder="${DISCORD_BOT_TOKEN}" placeholderTextColor={colors.textMuted} secureTextEntry />
-        <Text style={[styles.label, { marginTop: 8 }]}>Allowed User IDs (comma-separated)</Text>
-        <TextInput style={styles.input} value={dcUsers} onChangeText={setDcUsers} placeholder="123456789012345678" placeholderTextColor={colors.textMuted} />
-        <Text style={[styles.label, { marginTop: 8 }]}>Model Override (optional)</Text>
-        <TextInput style={styles.input} value={dcModel} onChangeText={setDcModel} placeholder="Default (global model)" placeholderTextColor={colors.textMuted} />
-
-        <View style={styles.channelDivider} />
-
-        {/* WhatsApp */}
-        <Text style={styles.channelTitle}>WhatsApp (Green API)</Text>
-        <Text style={styles.label}>Instance ID</Text>
-        <TextInput style={styles.input} value={waId} onChangeText={setWaId} placeholder="${GREEN_API_ID}" placeholderTextColor={colors.textMuted} />
-        <Text style={[styles.label, { marginTop: 8 }]}>API Token</Text>
-        <TextInput style={styles.input} value={waToken} onChangeText={setWaToken} placeholder="${GREEN_API_TOKEN}" placeholderTextColor={colors.textMuted} secureTextEntry />
-        <Text style={[styles.label, { marginTop: 8 }]}>Allowed Users (comma-separated)</Text>
-        <TextInput style={styles.input} value={waUsers} onChangeText={setWaUsers} placeholder="391234567890" placeholderTextColor={colors.textMuted} />
-        <Text style={[styles.label, { marginTop: 8 }]}>Model Override (optional)</Text>
-        <TextInput style={styles.input} value={waModel} onChangeText={setWaModel} placeholder="Default (global model)" placeholderTextColor={colors.textMuted} />
-
-        <SaveBtn label="Save Channels" saved={saved === 'channels'} onPress={saveChannels} />
-        <Text style={styles.restartHint}>Restart required after changes</Text>
-      </View>
-
-      {/* Dream Mode */}
-      <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Dream Mode</Text>
+  const renderDream = () => (
+    <>
+      <Text style={styles.sectionTitle}>Dream Mode</Text>
       <View style={styles.card}>
         <View style={styles.toggleRow}>
           <Text style={styles.toggleLabel}>Enabled</Text>
@@ -216,11 +401,18 @@ export default function SettingsScreen() {
         </View>
         <Text style={styles.label}>Time (HH:MM)</Text>
         <TextInput style={styles.input} value={dreamTime} onChangeText={setDreamTime} placeholder="3:00" placeholderTextColor={colors.textMuted} />
-        <SaveBtn label="Save Dream Mode" saved={saved === 'dream'} onPress={() => saveSection('dream_mode', { enabled: dreamEnabled, time: dreamTime }, 'dream')} />
+        <SaveBtn
+          label="Save Dream Mode"
+          saved={saved === 'dream'}
+          onPress={() => saveSection('dream_mode', { enabled: dreamEnabled, time: dreamTime }, 'dream')}
+        />
       </View>
+    </>
+  );
 
-      {/* Auto-Update */}
-      <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Auto-Update</Text>
+  const renderAutoUpdate = () => (
+    <>
+      <Text style={styles.sectionTitle}>Auto-Update</Text>
       <View style={styles.card}>
         <View style={styles.toggleRow}>
           <Text style={styles.toggleLabel}>Enabled</Text>
@@ -236,11 +428,18 @@ export default function SettingsScreen() {
         </View>
         <Text style={[styles.label, { marginTop: 12 }]}>Check Interval (cron)</Text>
         <TextInput style={styles.input} value={autoUpdateInterval} onChangeText={setAutoUpdateInterval} placeholder="17 */6 * * *" placeholderTextColor={colors.textMuted} />
-        <SaveBtn label="Save Auto-Update" saved={saved === 'auto_update'} onPress={() => saveSection('auto_update', { enabled: autoUpdateEnabled, mode: autoUpdateMode, check_interval: autoUpdateInterval }, 'auto_update')} />
+        <SaveBtn
+          label="Save Auto-Update"
+          saved={saved === 'auto_update'}
+          onPress={() => saveSection('auto_update', { enabled: autoUpdateEnabled, mode: autoUpdateMode, check_interval: autoUpdateInterval }, 'auto_update')}
+        />
       </View>
+    </>
+  );
 
-      {/* Controls */}
-      <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Controls</Text>
+  const renderControls = () => (
+    <>
+      <Text style={styles.sectionTitle}>Controls</Text>
       <View style={styles.card}>
         <PrimaryButton style={{ marginBottom: 8 }} onPress={async () => {
           try {
@@ -270,9 +469,12 @@ export default function SettingsScreen() {
           <Text style={[styles.saveBtnText, { color: colors.text }]}>Restart Agent</Text>
         </PrimaryButton>
       </View>
+    </>
+  );
 
-      {/* Connection */}
-      <Text style={[styles.sectionTitle, { marginTop: 24 }]}>Connection</Text>
+  const renderConnection = () => (
+    <>
+      <Text style={styles.sectionTitle}>Connection</Text>
       <View style={styles.card}>
         <Row label="Account" value={activeAccount?.name || '—'} />
         <Row label="Agent" value={agentName || '—'} />
@@ -288,9 +490,27 @@ export default function SettingsScreen() {
           <Text style={styles.removeText}>Remove Account</Text>
         </TouchableOpacity>
       )}
+    </>
+  );
 
-      <View style={{ height: 40 }} />
-    </ScrollView>
+  const renderCategory = () => {
+    switch (activeCategory) {
+      case 'identity': return renderIdentity();
+      case 'channels': return renderChannels();
+      case 'dream': return renderDream();
+      case 'auto_update': return renderAutoUpdate();
+      case 'controls': return renderControls();
+      case 'connection': return renderConnection();
+    }
+  };
+
+  return (
+    <ResponsiveSidebar sidebar={sidebarContent}>
+      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+        {renderCategory()}
+        <View style={{ height: 40 }} />
+      </ScrollView>
+    </ResponsiveSidebar>
   );
 }
 
@@ -315,8 +535,29 @@ function Row({ label, value }: { label: string; value: string }) {
 }
 
 const styles = StyleSheet.create({
+  // Sidebar
+  sidebarInner: { flex: 1, padding: 12 },
+  sidebarTitle: {
+    fontSize: 11, fontWeight: '700', color: colors.textMuted,
+    textTransform: 'uppercase', letterSpacing: 0.5,
+    paddingHorizontal: 8, paddingVertical: 8, marginBottom: 4,
+  },
+  categoryList: { flex: 1 },
+  categoryItem: {
+    flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 10, paddingHorizontal: 10,
+    borderRadius: 8, marginBottom: 2,
+  },
+  categoryActive: { backgroundColor: colors.primaryLight },
+  categoryIcon: { marginRight: 10 },
+  categoryTextWrap: { flex: 1 },
+  categoryLabel: { fontSize: 13, color: colors.textSecondary, fontWeight: '500' },
+  categoryLabelActive: { color: colors.primary, fontWeight: '600' },
+  categoryDesc: { fontSize: 11, color: colors.textMuted, marginTop: 1 },
+
+  // Main content
   container: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: 24, maxWidth: 500, width: "100%", alignSelf: "center" },
+  content: { padding: 24, maxWidth: 500, width: '100%', alignSelf: 'center' },
   sectionTitle: { fontSize: 13, fontWeight: '600', color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 },
   card: { backgroundColor: colors.surface, borderRadius: 10, borderWidth: 1, borderColor: colors.border, padding: 16 },
   label: { fontSize: 12, fontWeight: '600', color: colors.textSecondary, marginBottom: 4 },
@@ -344,5 +585,32 @@ const styles = StyleSheet.create({
   removeText: { color: colors.error, fontSize: 14, fontWeight: '500' },
   channelTitle: { fontSize: 15, fontWeight: '600', color: colors.text, marginBottom: 8, marginTop: 4 },
   channelDivider: { height: 1, backgroundColor: colors.borderLight, marginVertical: 16 },
+  channelSubtitle: { fontSize: 12, color: colors.textMuted, lineHeight: 17, marginBottom: 4 },
+  channelHint: { fontSize: 11, color: colors.textMuted, marginTop: 8, lineHeight: 16 },
   restartHint: { fontSize: 11, color: colors.textMuted, textAlign: 'center', marginTop: 8 },
+
+  // Channel sub-tab strip (Gateway / Telegram / Discord / WhatsApp)
+  channelTabs: {
+    flexDirection: 'row',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 10,
+    padding: 4,
+    marginBottom: 12,
+    gap: 4,
+  },
+  channelTab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+  },
+  channelTabActive: { backgroundColor: colors.primary },
+  channelTabIcon: { marginRight: 6 },
+  channelTabLabel: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },
+  channelTabLabelActive: { color: colors.textInverse },
 });
