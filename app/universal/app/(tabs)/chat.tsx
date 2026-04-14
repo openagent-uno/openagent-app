@@ -173,7 +173,10 @@ export default function ChatScreen() {
                 ) : (
                   <View key={msg.id} style={[styles.bubble, msg.role === 'user' ? styles.userBubble : styles.assistantBubble]}>
                     {msg.role === 'assistant' ? (
-                      <Markdown text={msg.text} />
+                      <>
+                        <Markdown text={msg.text} />
+                        {msg.model && <Text style={styles.modelText}>Model: {msg.model}</Text>}
+                      </>
                     ) : (
                       <Text style={[styles.bubbleText, styles.userText]}>{msg.text}</Text>
                     )}
@@ -397,6 +400,7 @@ const styles = StyleSheet.create({
 
   bubbleText: { color: colors.text, fontSize: 14, lineHeight: 21 },
   userText: { color: colors.textInverse },
+  modelText: { color: colors.textMuted, fontSize: 11, marginTop: 8 },
   statusText: { color: colors.textMuted, fontSize: 13, fontStyle: 'italic', marginLeft: 6 },
 
   // Pending file

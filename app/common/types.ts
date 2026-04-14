@@ -15,7 +15,7 @@ export type ServerMessage =
   | { type: 'auth_ok'; agent_name: string; version: string }
   | { type: 'auth_error'; reason: string }
   | { type: 'status'; text: string; session_id: string }
-  | { type: 'response'; text: string; session_id: string; attachments?: Attachment[] }
+  | { type: 'response'; text: string; session_id: string; attachments?: Attachment[]; model?: string }
   | { type: 'error'; text: string }
   | { type: 'queued'; position: number }
   | { type: 'command_result'; text: string }
@@ -44,6 +44,7 @@ export interface ChatMessage {
   timestamp: number;
   attachments?: Attachment[];
   toolInfo?: ToolInfo;
+  model?: string;
 }
 
 export interface ChatSession {

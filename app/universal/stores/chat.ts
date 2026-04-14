@@ -143,6 +143,7 @@ export const useChat = create<ChatState>((set, get) => ({
               text: msg.text,
               timestamp: Date.now(),
               attachments: msg.attachments ?? undefined,
+              model: msg.model,
             }],
           },
         ),
