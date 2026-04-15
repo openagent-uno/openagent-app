@@ -1,14 +1,13 @@
 /**
  * Theme state: light vs dark mode, persisted in localStorage.
  *
- * The actual color palette lives in `../theme.ts` as a mutable singleton.
- * This store drives the toggle UI and reloads the window on change so
- * that `StyleSheet.create(...)` blocks evaluated at module load pick up
- * the new palette.
+ * The actual color palette lives in `../theme.ts`. On web, scalar tokens
+ * are CSS custom-property references (`var(--oa-<key>)`) so flipping
+ * `data-theme` on <html> is enough for the entire UI to re-paint — no
+ * reload required.
  */
 
 import { create } from 'zustand';
-import { Platform } from 'react-native';
 import { setTheme, getThemeMode, type ThemeMode } from '../theme';
 
 interface ThemeState {
@@ -23,13 +22,6 @@ export const useThemeStore = create<ThemeState>((set, get) => ({
     if (mode === get().mode) return;
     setTheme(mode);
     set({ mode });
-    // Reload so all module-scoped StyleSheet definitions re-evaluate
-    // with the new palette. On native we just update state — native
-    // layouts can re-read colors on re-render of screens that recreate
-    // styles inside their component body.
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      window.location.reload();
-    }
   },
   toggle: () => {
     const next: ThemeMode = get().mode === 'light' ? 'dark' : 'light';

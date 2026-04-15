@@ -248,9 +248,10 @@ export default function ChatScreen() {
               )}
             </ScrollView>
 
-            {/* Pending file badges */}
-            {pendingFiles.length > 0 && (
-              <View style={styles.pendingBar}>
+            {/* Composer — pending files (if any) stack above the input row,
+                inside the same rounded container. */}
+            <View style={styles.composer}>
+              {pendingFiles.length > 0 && (
                 <View style={styles.pendingList}>
                   {pendingFiles.map((f, idx) => (
                     <View key={`${f.remotePath}-${idx}`} style={styles.pendingChip}>
@@ -264,10 +265,8 @@ export default function ChatScreen() {
                     </View>
                   ))}
                 </View>
-              </View>
-            )}
+              )}
 
-            {/* Input bar */}
             <View style={styles.inputBar}>
               {(Platform.OS === 'web' || isDesktop) && (
                 <TouchableOpacity style={styles.iconBtn} onPress={handleFilePick}>
@@ -319,6 +318,7 @@ export default function ChatScreen() {
                 <Feather name="arrow-up" size={15} color={colors.textInverse} />
               </PrimaryButton>
             </View>
+            </View>
           </>
         ) : (
           <View style={styles.emptyState}>
@@ -365,6 +365,7 @@ function ToolCard({ toolInfo, fallbackText }: { toolInfo?: ToolInfo; fallbackTex
   const isError = toolInfo.status === 'error';
   const statusLabel = isRunning ? 'Running' : isError ? 'Error' : 'Done';
   const statusColor = isError ? colors.error : isRunning ? colors.textMuted : colors.success;
+  const statusSoft = isError ? colors.errorSoft : isRunning ? colors.mutedSoft : colors.successSoft;
   const statusIconName = isRunning ? 'clock' : isError ? 'x-circle' : 'check-circle';
 
   return (
@@ -377,7 +378,7 @@ function ToolCard({ toolInfo, fallbackText }: { toolInfo?: ToolInfo; fallbackTex
       <View style={styles.toolCardHeader}>
         <Feather name="tool" size={13} color={colors.primary} style={styles.toolCardIcon} />
         <Text style={styles.toolCardName}>{toolInfo.tool}</Text>
-        <View style={[styles.toolBadge, { backgroundColor: statusColor + '18' }]}>
+        <View style={[styles.toolBadge, { backgroundColor: statusSoft }]}>
           <View style={styles.toolBadgeContent}>
             <Feather name={statusIconName} size={11} color={statusColor} />
             <Text style={[styles.toolBadgeText, { color: statusColor }]}>{statusLabel}</Text>
@@ -412,7 +413,7 @@ function ToolCard({ toolInfo, fallbackText }: { toolInfo?: ToolInfo; fallbackTex
           {toolInfo.error && (
             <>
               <Text style={[styles.toolSectionTitle, { color: colors.error }]}>Error</Text>
-              <View style={[styles.toolCodeBlock, { borderColor: colors.error + '40' }]}>
+              <View style={[styles.toolCodeBlock, { borderColor: colors.errorBorder }]}>
                 <Text style={[styles.toolCodeText, { color: colors.error }]}>{toolInfo.error}</Text>
               </View>
             </>
@@ -457,7 +458,7 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.border,
     marginVertical: 6, overflow: 'hidden',
   },
-  toolCardError: { borderColor: colors.error + '60' },
+  toolCardError: { borderColor: colors.errorBorder },
   toolCardHeader: {
     flexDirection: 'row', alignItems: 'center',
     paddingVertical: 8, paddingHorizontal: 12,
@@ -495,26 +496,28 @@ const styles = StyleSheet.create({
   modelText: { color: colors.textMuted, fontSize: 11, marginTop: 8 },
   statusText: { color: colors.textMuted, fontSize: 13, fontStyle: 'italic', marginLeft: 6 },
 
-  // Pending files
-  pendingBar: {
-    paddingHorizontal: 16, paddingVertical: 6,
-    backgroundColor: colors.primaryLight, borderTopWidth: 1, borderTopColor: colors.border,
+  // Composer (wraps pending chips + input row in one container)
+  composer: {
+    borderTopWidth: 1, borderTopColor: colors.border,
+    backgroundColor: colors.surface,
+    paddingHorizontal: 12, paddingTop: 8, paddingBottom: 10,
   },
-  pendingList: { flexDirection: 'row', flexWrap: 'wrap' },
+  pendingList: {
+    flexDirection: 'row', flexWrap: 'wrap',
+    paddingHorizontal: 4, paddingBottom: 8,
+  },
   pendingChip: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.inputBg, borderWidth: 1, borderColor: colors.border,
     borderRadius: 12, paddingHorizontal: 8, paddingVertical: 4,
     marginRight: 6, marginVertical: 2, maxWidth: 240,
   },
   pendingText: { fontSize: 12, color: colors.primary, fontWeight: '500', marginLeft: 4, marginRight: 4, flexShrink: 1 },
   pendingRemove: { padding: 2 },
 
-  // Input
+  // Input row (inside composer)
   inputBar: {
     flexDirection: 'row', alignItems: 'flex-end',
-    padding: 12, paddingHorizontal: 16,
-    borderTopWidth: 1, borderTopColor: colors.border, backgroundColor: colors.surface,
   },
   iconBtn: {
     width: 36, height: 36, borderRadius: 18,
