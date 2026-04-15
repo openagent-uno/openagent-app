@@ -13,6 +13,7 @@ import {
 import { useRouter } from 'expo-router';
 import { useConnection } from '../../stores/connection';
 import { useConfig } from '../../stores/config';
+import { useThemeStore } from '../../stores/theme';
 import { setBaseUrl, triggerUpdate, triggerRestart } from '../../services/api';
 import { useConfirm } from '../../components/ConfirmDialog';
 import PrimaryButton from '../../components/PrimaryButton';
@@ -21,6 +22,7 @@ import ThemedSwitch from '../../components/ThemedSwitch';
 
 type CategoryId =
   | 'identity'
+  | 'appearance'
   | 'channels'
   | 'dream'
   | 'auto_update'
@@ -36,6 +38,7 @@ interface Category {
 
 const CATEGORIES: Category[] = [
   { id: 'identity', label: 'Agent Identity', icon: 'user', description: 'Name and system prompt' },
+  { id: 'appearance', label: 'Appearance', icon: 'sun', description: 'Light and dark theme' },
   { id: 'channels', label: 'Channels', icon: 'message-square', description: 'Gateway, Telegram, Discord, WhatsApp' },
   { id: 'dream', label: 'Dream Mode', icon: 'moon', description: 'Nightly reflection' },
   { id: 'auto_update', label: 'Auto-Update', icon: 'refresh-cw', description: 'Release check cadence' },
@@ -62,6 +65,8 @@ export default function SettingsScreen() {
   const router = useRouter();
   const { agentName, agentVersion, config: connConfig, activeAccountId, accounts, disconnect, removeAccount } = useConnection();
   const { config: agentConfig, loadConfig, updateSection } = useConfig();
+  const themeMode = useThemeStore((s) => s.mode);
+  const setThemeMode = useThemeStore((s) => s.setMode);
   const activeAccount = accounts.find((a) => a.id === activeAccountId);
   const confirm = useConfirm();
 
@@ -284,6 +289,27 @@ export default function SettingsScreen() {
     </>
   );
 
+  const renderAppearance = () => (
+    <>
+      <Text style={styles.sectionTitle}>Appearance</Text>
+      <View style={styles.card}>
+        <View style={styles.toggleRow}>
+          <View style={{ flex: 1, paddingRight: 12 }}>
+            <Text style={styles.toggleLabel}>Dark mode</Text>
+            <Text style={styles.channelHint}>
+              Use a dark color scheme across the app. The window reloads when the
+              theme changes so all styles pick up the new palette.
+            </Text>
+          </View>
+          <ThemedSwitch
+            value={themeMode === 'dark'}
+            onValueChange={(v) => setThemeMode(v ? 'dark' : 'light')}
+          />
+        </View>
+      </View>
+    </>
+  );
+
   // Each sub-panel is shown in isolation under the Channels screen; the
   // sub-tab strip switches between Gateway/Telegram/Discord/WhatsApp.
 
@@ -496,6 +522,7 @@ export default function SettingsScreen() {
   const renderCategory = () => {
     switch (activeCategory) {
       case 'identity': return renderIdentity();
+      case 'appearance': return renderAppearance();
       case 'channels': return renderChannels();
       case 'dream': return renderDream();
       case 'auto_update': return renderAutoUpdate();
