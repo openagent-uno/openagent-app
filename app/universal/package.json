@@ -1,6 +1,6 @@
 {
   "name": "openagent-app",
-  "version": "0.5.10",
+  "version": "0.5.11",
   "private": true,
   "main": "expo-router/entry",
   "scripts": {
