@@ -14,6 +14,21 @@ import { registerStorageHandlers } from './services/storage';
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.heic', '.tiff']);
 
+// Hard cap on ``dialog:readFile`` IPC payloads so a single runaway attachment
+// can't OOM the renderer. The renderer streams these into a Blob before the
+// HTTP upload; 200 MB covers any normal user attachment (PDFs, images, short
+// videos) without letting the user accidentally paste their whole Downloads
+// folder into memory.
+const MAX_READ_BYTES = 200 * 1024 * 1024;
+
+// Paths the user has explicitly picked through ``dialog:pickFiles`` in this
+// session — ``dialog:readFile`` only accepts paths that show up here. This is
+// defense-in-depth: we don't *believe* the renderer is hostile, but we also
+// don't want a malicious page loaded via file:// in dev mode (or a compromised
+// third-party script) to read ~/.ssh/id_rsa just because the renderer can
+// send arbitrary IPC args.
+const pickedPaths = new Set<string>();
+
 function registerDialogHandlers(): void {
   ipcMain.handle('dialog:pickFiles', async () => {
     const focused = BrowserWindow.getFocusedWindow();
@@ -24,11 +39,41 @@ function registerDialogHandlers(): void {
       ? await dialog.showOpenDialog(focused, opts)
       : await dialog.showOpenDialog(opts);
     if (result.canceled || !result.filePaths.length) return [];
+    for (const p of result.filePaths) pickedPaths.add(p);
     return result.filePaths.map((p) => ({
       path: p,
       filename: path.basename(p),
       kind: IMAGE_EXTS.has(path.extname(p).toLowerCase()) ? 'image' : 'file',
     }));
+  });
+
+  // Read a file's bytes so the renderer can upload it via /api/upload.
+  //
+  // The **only** way the renderer can get bytes for an arbitrary local file
+  // is via this IPC — Electron renderers with contextIsolation + no
+  // nodeIntegration don't have ``fs``. We restrict reads to paths the user
+  // has actually picked via the native dialog in this session, so the path
+  // string is effectively a capability token issued by the OS file picker
+  // rather than a free-form argument.
+  ipcMain.handle('dialog:readFile', async (_event, filePath: unknown) => {
+    if (typeof filePath !== 'string') {
+      throw new Error('readFile: path must be a string');
+    }
+    if (!pickedPaths.has(filePath)) {
+      throw new Error('readFile: path was not picked via the native dialog');
+    }
+    const stat = await fs.promises.stat(filePath);
+    if (!stat.isFile()) {
+      throw new Error(`readFile: ${filePath} is not a regular file`);
+    }
+    if (stat.size > MAX_READ_BYTES) {
+      throw new Error(
+        `readFile: ${filePath} is ${stat.size} bytes (limit ${MAX_READ_BYTES})`,
+      );
+    }
+    // Buffer crosses the IPC boundary as a Node Buffer which Electron
+    // structured-clones into the renderer as a Uint8Array. No base64.
+    return fs.promises.readFile(filePath);
   });
 }
 

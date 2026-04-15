@@ -17,9 +17,21 @@ contextBridge.exposeInMainWorld('desktop', {
   removeItem: (key: string): Promise<void> =>
     ipcRenderer.invoke('storage:remove', key),
 
-  // Native file picker — returns absolute paths for locally-selected files.
-  // On desktop the agent runs on the same machine, so the path is directly
-  // usable and no HTTP upload round-trip is needed.
+  // Native file picker — returns absolute paths plus a simple "image" vs
+  // "file" classification. The path is NOT a handle the agent can
+  // dereference directly: when the agent runs on a different machine
+  // (lyra VPS, a remote server, Linux container, etc.) the path doesn't
+  // exist there. The renderer is expected to follow up with ``readFile``
+  // to get the bytes, wrap them in a ``File``, and POST to ``/api/upload``
+  // so the gateway gives back a path valid on the agent's own filesystem.
   pickFiles: (): Promise<{ path: string; filename: string; kind: 'image' | 'file' }[]> =>
     ipcRenderer.invoke('dialog:pickFiles'),
+
+  // Read a previously-picked file's bytes. Main enforces that ``filePath``
+  // must be one of the paths the user picked via ``pickFiles`` in this
+  // session — arbitrary filesystem reads from the renderer are refused.
+  // Returns a ``Uint8Array`` (structured-cloned from the Node ``Buffer``
+  // on the main side), size-capped at 200 MB.
+  readFile: (filePath: string): Promise<Uint8Array> =>
+    ipcRenderer.invoke('dialog:readFile', filePath),
 });

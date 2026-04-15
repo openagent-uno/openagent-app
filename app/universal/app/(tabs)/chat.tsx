@@ -59,8 +59,11 @@ export default function ChatScreen() {
     }));
 
     if (pendingFiles.length > 0) {
+      // The path is on the agent's own filesystem (placed there by
+      // /api/upload), so any filesystem-MCP read call will work even when
+      // the agent runs on a different machine than the client.
       const lines = pendingFiles.map(
-        (f) => `- ${f.kind}: ${f.filename} — local path: ${f.remotePath}`,
+        (f) => `- ${f.kind}: ${f.filename} — server path: ${f.remotePath}`,
       );
       const noun = pendingFiles.length === 1 ? 'a file' : `${pendingFiles.length} files`;
       const fileHeader = `The user attached ${noun}:\n${lines.join('\n')}\nUse the Read tool to inspect ${pendingFiles.length === 1 ? 'it' : 'them'}.`;
@@ -85,10 +88,74 @@ export default function ChatScreen() {
 
   // ── File picker ──
 
+  const guessMimeType = (filename: string, kind: 'image' | 'file'): string => {
+    // The upload endpoint doesn't strictly need the MIME type — it stores
+    // bytes verbatim — but setting one means the server can auto-transcribe
+    // audio attachments and the LLM sees a nicer label in logs.
+    const ext = filename.toLowerCase().split('.').pop() || '';
+    const mimes: Record<string, string> = {
+      png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+      webp: 'image/webp', bmp: 'image/bmp', heic: 'image/heic', tiff: 'image/tiff',
+      pdf: 'application/pdf', txt: 'text/plain', md: 'text/markdown',
+      csv: 'text/csv', json: 'application/json', yaml: 'application/x-yaml',
+      yml: 'application/x-yaml', log: 'text/plain',
+      py: 'text/x-python', js: 'application/javascript', ts: 'application/typescript',
+      webm: 'audio/webm', ogg: 'audio/ogg', mp3: 'audio/mpeg',
+      wav: 'audio/wav', m4a: 'audio/mp4',
+    };
+    return mimes[ext] || (kind === 'image' ? 'application/octet-stream' : 'application/octet-stream');
+  };
+
   const handleFilePick = async () => {
-    // Desktop: use Electron's native dialog + skip the HTTP upload entirely.
-    // The agent runs locally, so the real file path is directly usable by
-    // the Read tool — no tmp-copy, no CORS/port worries.
+    // Desktop: pick natively → read bytes via IPC → upload via /api/upload.
+    //
+    // The *local* path from the native picker isn't usable by the agent
+    // unless the agent happens to run on the same machine — a remote agent
+    // (lyra, a VPS, a Linux box on the LAN) has no way to dereference
+    // ``/Users/alice/Documents/foo.pdf`` because that path doesn't exist
+    // on its filesystem. We used to short-circuit the upload in desktop
+    // mode; that broke every non-localhost deployment. Now we upload
+    // unconditionally and use the *returned* server-side path, matching
+    // what the browser path already does. The localhost overhead (a loopback
+    // HTTP round-trip for a 5 MB file) is well under 100 ms on any hardware
+    // this app runs on.
+    if (isDesktop && window.desktop?.pickFiles && window.desktop?.readFile) {
+      let picked: { path: string; filename: string; kind: 'image' | 'file' }[] = [];
+      try {
+        picked = await window.desktop.pickFiles();
+      } catch (e: any) {
+        console.error('Native picker failed:', e);
+        return;
+      }
+      if (!picked.length) return;
+
+      const uploads = await Promise.allSettled(
+        picked.map(async (p) => {
+          const bytes = await window.desktop!.readFile!(p.path);
+          // ``File`` is available in the renderer (Electron uses Chromium's
+          // web APIs). Wrapping in File rather than raw Blob lets the
+          // gateway see the filename in the multipart field.
+          const blob = new Blob([bytes as BlobPart], { type: guessMimeType(p.filename, p.kind) });
+          const file = new File([blob], p.filename, { type: blob.type });
+          const result = await uploadFile(file);
+          return { filename: result.filename, remotePath: result.path, kind: p.kind };
+        }),
+      );
+      const next: PendingFile[] = [];
+      uploads.forEach((u, i) => {
+        if (u.status === 'fulfilled') {
+          next.push(u.value);
+        } else {
+          console.error('Desktop upload failed:', picked[i].filename, u.reason);
+        }
+      });
+      if (next.length) setPendingFiles((prev) => [...prev, ...next]);
+      return;
+    }
+
+    // Desktop client missing the readFile IPC (older Electron build):
+    // fall through to the pathname-only legacy path. Works only when the
+    // agent is on the same machine.
     if (isDesktop && window.desktop?.pickFiles) {
       try {
         const picked = await window.desktop.pickFiles();
