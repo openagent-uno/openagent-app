@@ -32,6 +32,9 @@ interface SimNode {
   vx: number;
   vy: number;
   radius: number;
+  /** Number of edges touching this node — drives both size and color so
+   *  hubs pop in brand red while leaves fade into warm gray. */
+  degree: number;
   pinned: boolean;
 }
 
@@ -42,22 +45,43 @@ interface SimEdge {
 
 /** Palette must be passed in (not imported) because Canvas 2D can't
  *  resolve the `var(--oa-*)` references on the web `colors` proxy — we
- *  need actual hex values from `getRawColors()`. */
-function tagColor(tags: string[], palette: ReturnType<typeof getRawColors>): string {
-  if (!tags.length) return palette.graphNodeMuted;
-  let hash = 0;
-  for (const c of tags[0]) hash = ((hash << 5) - hash + c.charCodeAt(0)) | 0;
-  return palette.graph[Math.abs(hash) % palette.graph.length];
+ *  need actual hex values from `getRawColors()`.
+ *
+ *  Degree-based coloring: highly-connected hubs get brand red, mid-degree
+ *  nodes step down through the warm palette, and isolated leaves render
+ *  in muted gray. The previous tag-hash scheme inverted this visually
+ *  (hubs happened to hash onto neutrals), so degree-ranking is the
+ *  intent-matching approach. */
+function degreeColor(
+  degree: number,
+  maxDegree: number,
+  palette: ReturnType<typeof getRawColors>,
+): string {
+  if (maxDegree === 0 || degree === 0) return palette.graphNodeMuted;
+  const t = degree / maxDegree; // 0..1 — higher = more connected
+  if (t >= 0.66) return palette.primary;      // hubs
+  if (t >= 0.33) return palette.primaryMuted; // mid
+  return palette.primaryEnd;                   // lightly-connected leaves
 }
 
 // ── Force simulation (runs in requestAnimationFrame) ──
 
-function buildSim(data: GraphData): { nodes: SimNode[]; edges: SimEdge[] } {
+function buildSim(data: GraphData): { nodes: SimNode[]; edges: SimEdge[]; maxDegree: number } {
   const idxMap = new Map<string, number>();
+  // Compute degree up front in a single pass — the old code re-scanned
+  // data.edges once per node in an O(N*E) loop.
+  const degreeById = new Map<string, number>();
+  for (const e of data.edges) {
+    degreeById.set(e.source, (degreeById.get(e.source) || 0) + 1);
+    degreeById.set(e.target, (degreeById.get(e.target) || 0) + 1);
+  }
+  let maxDegree = 0;
   const nodes: SimNode[] = data.nodes.map((n, i) => {
     idxMap.set(n.id, i);
     const angle = (i / data.nodes.length) * Math.PI * 2;
     const r = 120 + Math.random() * 80;
+    const degree = degreeById.get(n.id) || 0;
+    if (degree > maxDegree) maxDegree = degree;
     return {
       id: n.id,
       label: n.label,
@@ -66,7 +90,8 @@ function buildSim(data: GraphData): { nodes: SimNode[]; edges: SimEdge[] } {
       y: Math.sin(angle) * r,
       vx: 0,
       vy: 0,
-      radius: 6 + Math.min((data.edges.filter(e => e.source === n.id || e.target === n.id).length) * 1.5, 12),
+      radius: 6 + Math.min(degree * 1.5, 12),
+      degree,
       pinned: false,
     };
   });
@@ -76,7 +101,7 @@ function buildSim(data: GraphData): { nodes: SimNode[]; edges: SimEdge[] } {
     const ti = idxMap.get(e.target);
     if (si !== undefined && ti !== undefined) edges.push({ source: si, target: ti });
   }
-  return { nodes, edges };
+  return { nodes, edges, maxDegree };
 }
 
 function tick(nodes: SimNode[], edges: SimEdge[], alpha: number) {
@@ -135,7 +160,7 @@ function tick(nodes: SimNode[], edges: SimEdge[], alpha: number) {
 
 export default function GraphView({ data, onSelectNode, width, height }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const simRef = useRef<{ nodes: SimNode[]; edges: SimEdge[] }>({ nodes: [], edges: [] });
+  const simRef = useRef<{ nodes: SimNode[]; edges: SimEdge[]; maxDegree: number }>({ nodes: [], edges: [], maxDegree: 0 });
   const frameRef = useRef<number>(0);
   const alphaRef = useRef(1);
 
@@ -198,7 +223,7 @@ export default function GraphView({ data, onSelectNode, width, height }: Props) 
 
     const render = () => {
       if (!running) return;
-      const { nodes, edges } = simRef.current;
+      const { nodes, edges, maxDegree } = simRef.current;
       const cam = camRef.current;
       const W = containerSize.w, H = containerSize.h;
       const dpr = window.devicePixelRatio || 1;
@@ -240,10 +265,12 @@ export default function GraphView({ data, onSelectNode, width, height }: Props) 
       ctx.stroke();
 
       // Nodes — solid fill on hover, 72% alpha otherwise (softer in-field).
+      // Color is driven by connectivity: hubs render in brand red, leaves
+      // in muted gray.
       for (let i = 0; i < nodes.length; i++) {
         const n = nodes[i];
         const isHover = i === hoverRef.current;
-        const c = tagColor(n.tags, palette);
+        const c = degreeColor(n.degree, maxDegree, palette);
         ctx.beginPath();
         ctx.arc(n.x, n.y, n.radius + (isHover ? 2 : 0), 0, Math.PI * 2);
         ctx.fillStyle = isHover ? c : c + 'B8';
