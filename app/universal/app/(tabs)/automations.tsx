@@ -107,25 +107,27 @@ export default function AutomationsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
   title: {
-    fontSize: 18, fontWeight: '700', color: colors.text,
-    textAlign: 'center', paddingTop: 16, paddingBottom: 2,
+    fontSize: 20, fontWeight: '500', color: colors.text,
+    textAlign: 'center', paddingTop: 18, paddingBottom: 2,
+    letterSpacing: -0.4,
   },
   subtitle: {
-    fontSize: 13, color: colors.textMuted, textAlign: 'center',
-    paddingBottom: 12,
+    fontSize: 12, color: colors.textMuted, textAlign: 'center',
+    paddingBottom: 12, fontStyle: 'italic',
   },
   canvas: {
     flex: 1,
-    backgroundColor: colors.inputBg,
-    borderTopWidth: 1, borderTopColor: colors.border,
+    backgroundColor: colors.sidebar,
+    borderTopWidth: 1, borderTopColor: colors.borderLight,
   },
   nativeContent: {
     alignItems: 'center', justifyContent: 'center',
     minHeight: '100%',
   },
   hint: {
-    fontSize: 11, color: colors.textMuted, textAlign: 'center',
+    fontSize: 10, color: colors.textMuted, textAlign: 'center',
     paddingVertical: 8, backgroundColor: colors.surface,
-    borderTopWidth: 1, borderTopColor: colors.border,
+    borderTopWidth: 1, borderTopColor: colors.borderLight,
+    letterSpacing: 0.2,
   },
 });

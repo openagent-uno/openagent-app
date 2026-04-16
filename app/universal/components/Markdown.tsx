@@ -1,15 +1,13 @@
-import { colors } from '../theme';
+import { colors, font, radius } from '../theme';
 /**
- * Lightweight markdown renderer for chat bubbles.
+ * Lightweight markdown renderer — editorial prose style matched to the
+ * refined Geist typography and paper-soft code blocks.
  * Handles: **bold**, *italic*, `inline code`, ```code blocks```,
  * [links](url), # headers, - bullet lists, > blockquotes.
- *
- * Pure RN Text components — no WebView, no dangerouslySetInnerHTML.
- * Works on web and native.
  */
 
 import type { ReactElement } from 'react';
-import { Text, View, StyleSheet, Linking } from 'react-native';
+import { Text, View, StyleSheet, Linking, Platform } from 'react-native';
 
 interface Props {
   text: string;
@@ -23,8 +21,6 @@ export default function Markdown({ text }: Props) {
     </View>
   );
 }
-
-// ── Block-level parsing ──
 
 type Block =
   | { type: 'paragraph'; text: string }
@@ -41,7 +37,6 @@ function parseBlocks(text: string): Block[] {
   while (i < lines.length) {
     const line = lines[i];
 
-    // Code block
     if (line.trimStart().startsWith('```')) {
       const lang = line.trimStart().slice(3).trim();
       const codeLines: string[] = [];
@@ -50,12 +45,11 @@ function parseBlocks(text: string): Block[] {
         codeLines.push(lines[i]);
         i++;
       }
-      i++; // skip closing ```
+      i++;
       blocks.push({ type: 'code', lang, text: codeLines.join('\n') });
       continue;
     }
 
-    // Heading
     const headingMatch = line.match(/^(#{1,4})\s+(.+)/);
     if (headingMatch) {
       blocks.push({ type: 'heading', level: headingMatch[1].length, text: headingMatch[2] });
@@ -63,7 +57,6 @@ function parseBlocks(text: string): Block[] {
       continue;
     }
 
-    // Blockquote
     if (line.startsWith('> ')) {
       const quoteLines: string[] = [];
       while (i < lines.length && lines[i].startsWith('> ')) {
@@ -74,7 +67,6 @@ function parseBlocks(text: string): Block[] {
       continue;
     }
 
-    // List
     if (/^[\s]*[-*•]\s/.test(line)) {
       const items: string[] = [];
       while (i < lines.length && /^[\s]*[-*•]\s/.test(lines[i])) {
@@ -85,13 +77,11 @@ function parseBlocks(text: string): Block[] {
       continue;
     }
 
-    // Empty line — skip
     if (!line.trim()) {
       i++;
       continue;
     }
 
-    // Paragraph — collect consecutive non-empty lines
     const paraLines: string[] = [];
     while (i < lines.length && lines[i].trim() && !lines[i].startsWith('```')
       && !lines[i].match(/^#{1,4}\s/) && !lines[i].startsWith('> ')
@@ -107,14 +97,16 @@ function parseBlocks(text: string): Block[] {
   return blocks;
 }
 
-// ── Block rendering ──
-
 function renderBlock(block: Block, key: number) {
   switch (block.type) {
     case 'code':
       return (
         <View key={key} style={styles.codeBlock}>
-          {block.lang ? <Text style={styles.codeLang}>{block.lang}</Text> : null}
+          {block.lang ? (
+            <View style={styles.codeHeader}>
+              <Text style={styles.codeLang}>{block.lang}</Text>
+            </View>
+          ) : null}
           <Text style={styles.codeText} selectable>{block.text}</Text>
         </View>
       );
@@ -140,7 +132,7 @@ function renderBlock(block: Block, key: number) {
         <View key={key} style={styles.list}>
           {block.items.map((item, j) => (
             <View key={j} style={styles.listItem}>
-              <Text style={styles.bullet}>•</Text>
+              <Text style={styles.bullet}>—</Text>
               <Text style={styles.listText}>{renderInline(item)}</Text>
             </View>
           ))}
@@ -155,11 +147,8 @@ function renderBlock(block: Block, key: number) {
   }
 }
 
-// ── Inline parsing (bold, italic, code, links) ──
-
 function renderInline(text: string): (string | ReactElement)[] {
   const parts: (string | ReactElement)[] = [];
-  // Regex matches: **bold**, *italic*, `code`, [text](url)
   const re = /(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`([^`]+)`)|(\[([^\]]+)\]\(([^)]+)\))/g;
   let last = 0;
   let match: RegExpExecArray | null;
@@ -171,16 +160,12 @@ function renderInline(text: string): (string | ReactElement)[] {
     }
 
     if (match[2]) {
-      // **bold**
       parts.push(<Text key={`b${idx++}`} style={styles.bold}>{match[2]}</Text>);
     } else if (match[4]) {
-      // *italic*
       parts.push(<Text key={`i${idx++}`} style={styles.italic}>{match[4]}</Text>);
     } else if (match[6]) {
-      // `code`
       parts.push(<Text key={`c${idx++}`} style={styles.inlineCode}>{match[6]}</Text>);
     } else if (match[8] && match[9]) {
-      // [text](url)
       parts.push(
         <Text
           key={`l${idx++}`}
@@ -203,50 +188,82 @@ function renderInline(text: string): (string | ReactElement)[] {
 }
 
 const styles = StyleSheet.create({
-  paragraph: { fontSize: 14, lineHeight: 21, color: colors.text, marginBottom: 8 },
-  heading: { fontWeight: '700', color: colors.text, marginBottom: 6, marginTop: 4 },
-  h1: { fontSize: 20 },
-  h2: { fontSize: 17 },
-  h3: { fontSize: 15 },
-  bold: { fontWeight: '700' },
+  paragraph: {
+    fontSize: 14, lineHeight: 23, color: colors.text,
+    marginBottom: 10, fontFamily: font.sans,
+  },
+  heading: {
+    fontWeight: '600', color: colors.text,
+    marginBottom: 8, marginTop: 8,
+    fontFamily: font.display,
+    letterSpacing: -0.3,
+  },
+  h1: { fontSize: 22, fontWeight: '600' },
+  h2: { fontSize: 18, fontWeight: '600' },
+  h3: { fontSize: 15, fontWeight: '600' },
+  bold: { fontWeight: '600' },
   italic: { fontStyle: 'italic' },
   inlineCode: {
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    fontSize: 13,
-    backgroundColor: colors.primaryLight,
-    paddingHorizontal: 4,
-    borderRadius: 3,
+    fontFamily: font.mono,
+    fontSize: 12.5,
+    backgroundColor: colors.codeBg,
+    paddingHorizontal: 5,
+    paddingVertical: 1,
+    borderRadius: radius.xs,
     color: colors.primary,
   },
-  link: { color: colors.primary, textDecorationLine: 'underline' },
+  link: {
+    color: colors.primary,
+    textDecorationLine: 'underline',
+    // @ts-ignore
+    textDecorationStyle: 'dotted',
+  },
   codeBlock: {
     backgroundColor: colors.codeBg,
-    borderRadius: 8,
-    padding: 14,
-    marginVertical: 6,
+    borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.codeBorder,
+    marginVertical: 8,
+    overflow: 'hidden',
+  },
+  codeHeader: {
+    paddingHorizontal: 12, paddingVertical: 5,
+    borderBottomWidth: 1, borderBottomColor: colors.codeBorder,
+    backgroundColor: Platform.OS === 'web' ? 'transparent' : colors.codeBg,
   },
   codeLang: {
-    fontSize: 10,
-    color: colors.textMuted,
-    marginBottom: 6,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    fontSize: 10, color: colors.textMuted,
+    textTransform: 'uppercase', letterSpacing: 0.8,
+    fontFamily: font.mono, fontWeight: '500',
   },
   codeText: {
-    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-    fontSize: 12,
-    lineHeight: 18,
+    fontFamily: font.mono,
+    fontSize: 12.5,
+    lineHeight: 19,
     color: colors.codeText,
+    padding: 12,
   },
   blockquote: {
-    borderLeftWidth: 3,
+    borderLeftWidth: 2,
     borderLeftColor: colors.primary,
-    paddingLeft: 12,
-    marginVertical: 6,
+    paddingLeft: 14,
+    marginVertical: 8,
+    opacity: 0.9,
   },
-  quoteText: { fontSize: 14, lineHeight: 21, color: colors.textSecondary, fontStyle: 'italic' },
-  list: { marginVertical: 4 },
-  listItem: { flexDirection: 'row', marginBottom: 4, paddingLeft: 4 },
-  bullet: { color: colors.primary, marginRight: 8, fontSize: 14 },
-  listText: { flex: 1, fontSize: 14, lineHeight: 21, color: colors.text },
+  quoteText: {
+    fontSize: 14, lineHeight: 22, color: colors.textSecondary,
+    fontStyle: 'italic',
+    fontFamily: font.serif,
+  },
+  list: { marginVertical: 6 },
+  listItem: {
+    flexDirection: 'row', marginBottom: 4, paddingLeft: 2,
+  },
+  bullet: {
+    color: colors.primary, marginRight: 10, fontSize: 14,
+    fontWeight: '600',
+  },
+  listText: {
+    flex: 1, fontSize: 14, lineHeight: 22, color: colors.text,
+    fontFamily: font.sans,
+  },
 });

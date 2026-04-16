@@ -3,9 +3,6 @@
  *
  * Wide (>= 768px): permanently open sidebar.
  * Narrow (< 768px): slide-in drawer with gesture support.
- *
- * Uses React Context to pass sidebar/children content to stable screen
- * components — avoids component identity changes that cause remounting.
  */
 
 import { createContext, useContext, useEffect, useRef } from 'react';
@@ -19,16 +16,14 @@ import { useIsWideScreen } from '../hooks/useLayout';
 import { useDrawer } from '../stores/drawer';
 import { colors } from '../theme';
 
-const SIDEBAR_WIDTH = 260;
+const SIDEBAR_WIDTH = 248;
 const Nav = createDrawerNavigator();
 
-// Context to pass dynamic content without changing component identity
 const ContentCtx = createContext<{ sidebar: React.ReactNode; children: React.ReactNode }>({
   sidebar: null,
   children: null,
 });
 
-// Stable components — never change identity, read content from context
 function SidebarContent(_props: DrawerContentComponentProps) {
   const { sidebar } = useContext(ContentCtx);
   return <View style={styles.drawerContent}>{sidebar}</View>;
@@ -77,11 +72,11 @@ export default function ResponsiveSidebar({ sidebar, children }: Props) {
               width: SIDEBAR_WIDTH,
               backgroundColor: colors.sidebar,
               borderRightWidth: 1,
-              borderRightColor: colors.border,
+              borderRightColor: colors.borderLight,
               borderRadius: 0,
             },
             sceneStyle: { borderRadius: 0 } as any,
-            overlayColor: 'rgba(0,0,0,0.3)',
+            overlayColor: 'rgba(14, 13, 11, 0.35)',
             swipeEnabled: !isWide,
             drawerStatusBarAnimation: 'none',
           }}

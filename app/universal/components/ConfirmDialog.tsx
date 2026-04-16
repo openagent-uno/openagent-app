@@ -1,8 +1,8 @@
 import type { ReactNode } from 'react';
 import { createContext, useCallback, useContext, useState } from 'react';
 import { Alert, Modal, Pressable, StyleSheet, Text, View, Platform } from 'react-native';
-import { colors } from '../theme';
-import PrimaryButton from './PrimaryButton';
+import { colors, font, radius } from '../theme';
+import Button from './Button';
 
 type ConfirmOptions = {
   title?: string;
@@ -75,20 +75,24 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
       >
         <View style={styles.overlay}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => close(false)} />
-          <View style={styles.dialog}>
+          <View
+            style={styles.dialog}
+            // @ts-ignore
+            {...(Platform.OS === 'web' ? { className: 'oa-slide-up' } : {})}
+          >
             <Text style={styles.title}>{request?.title}</Text>
             <Text style={styles.message}>{request?.message}</Text>
             <View style={styles.actions}>
-              <Pressable onPress={() => close(false)} style={styles.cancelBtn}>
-                <Text style={styles.cancelText}>{request?.cancelLabel}</Text>
-              </Pressable>
-              <PrimaryButton
-                style={styles.confirmBtn}
-                contentStyle={styles.confirmBtnInner}
+              <Button
+                variant="secondary"
+                label={request?.cancelLabel}
+                onPress={() => close(false)}
+              />
+              <Button
+                variant="primary"
+                label={request?.confirmLabel}
                 onPress={() => close(true)}
-              >
-                <Text style={styles.confirmText}>{request?.confirmLabel}</Text>
-              </PrimaryButton>
+              />
             </View>
           </View>
         </View>
@@ -111,61 +115,65 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
-    backgroundColor: 'rgba(12, 8, 4, 0.28)',
+    backgroundColor: 'rgba(14, 13, 11, 0.30)',
+    // @ts-ignore
+    ...(Platform.OS === 'web' ? { backdropFilter: 'blur(6px)' } : {}),
   },
   dialog: {
-    width: 420,
+    width: 400,
     maxWidth: '100%',
-    borderRadius: 18,
+    borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surface,
     padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 20 },
-    shadowOpacity: 0.14,
-    shadowRadius: 32,
+    shadowColor: 'rgba(0,0,0,0.18)',
+    shadowOffset: { width: 0, height: 24 },
+    shadowOpacity: 1,
+    shadowRadius: 48,
   },
   title: {
-    fontSize: 18,
-    fontWeight: '700',
+    fontSize: 16,
+    fontWeight: '600',
     color: colors.text,
-    marginBottom: 8,
+    marginBottom: 6,
+    fontFamily: font.display,
+    letterSpacing: -0.2,
   },
   message: {
-    fontSize: 14,
-    lineHeight: 21,
+    fontSize: 13,
+    lineHeight: 20,
     color: colors.textSecondary,
   },
   actions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    gap: 10,
+    gap: 8,
     marginTop: 18,
   },
   cancelBtn: {
-    minHeight: 40,
+    minHeight: 36,
     paddingHorizontal: 14,
     justifyContent: 'center',
-    borderRadius: 10,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surface,
   },
   cancelText: {
     color: colors.textSecondary,
-    fontSize: 14,
-    fontWeight: '600',
+    fontSize: 13,
+    fontWeight: '500',
   },
   confirmBtn: {},
   confirmBtnInner: {
-    minHeight: 40,
-    paddingHorizontal: 16,
-    borderRadius: 10,
+    minHeight: 36,
+    paddingHorizontal: 14,
+    borderRadius: radius.md,
   },
   confirmText: {
     color: colors.textInverse,
-    fontSize: 14,
-    fontWeight: '700',
+    fontSize: 13,
+    fontWeight: '600',
   },
 });

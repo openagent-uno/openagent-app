@@ -14,9 +14,9 @@ import { useVault } from '../../stores/vault';
 import { setBaseUrl } from '../../services/api';
 import GraphView from '../../components/GraphView';
 import Markdown from '../../components/Markdown';
-import PrimaryButton from '../../components/PrimaryButton';
+import Button from '../../components/Button';
 import ResponsiveSidebar from '../../components/ResponsiveSidebar';
-import { colors } from '../../theme';
+import { colors, font, radius } from '../../theme';
 
 export default function MemoryScreen() {
   const config = useConnection((s) => s.config);
@@ -143,13 +143,13 @@ export default function MemoryScreen() {
                 </TouchableOpacity>
                 {rawMode && editorDirty && <Text style={styles.unsavedBadge}>unsaved</Text>}
                 {rawMode && (
-                  <PrimaryButton
-                    style={[styles.saveBtn, !editorDirty && styles.saveBtnDisabled]}
-                    contentStyle={styles.saveBtnInner}
-                    onPress={handleSave} disabled={!editorDirty}
-                  >
-                    <Text style={styles.saveBtnText}>Save</Text>
-                  </PrimaryButton>
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    label="Save"
+                    onPress={handleSave}
+                    disabled={!editorDirty}
+                  />
                 )}
               </View>
             </View>
@@ -202,59 +202,64 @@ export default function MemoryScreen() {
 const styles = StyleSheet.create({
   sidebarInner: { flex: 1 },
   searchInput: {
-    margin: 10, padding: 8, paddingHorizontal: 12,
-    backgroundColor: colors.surface, borderRadius: 6,
-    borderWidth: 1, borderColor: colors.border, fontSize: 12, color: colors.text,
+    margin: 10, padding: 8, paddingHorizontal: 11,
+    backgroundColor: colors.surface, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.border,
+    fontSize: 12, color: colors.text, fontFamily: font.sans,
   },
   fileTree: { flex: 1, paddingHorizontal: 6 },
   folderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingTop: 12,
-    paddingBottom: 4,
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 10, paddingTop: 10, paddingBottom: 4,
   },
   folderName: {
-    fontSize: 11, fontWeight: '600', color: colors.textMuted,
-    textTransform: 'uppercase', letterSpacing: 0.3, marginLeft: 6,
+    fontSize: 10, fontWeight: '600', color: colors.textMuted,
+    textTransform: 'uppercase', letterSpacing: 0.8, marginLeft: 6,
   },
-  fileItem: { paddingVertical: 6, paddingHorizontal: 10, borderRadius: 6, marginVertical: 1 },
-  fileItemActive: { backgroundColor: colors.border },
-  fileName: { fontSize: 13, color: colors.text },
-  fileNameActive: { color: colors.primary, fontWeight: '500' },
-  fileTags: { fontSize: 10, color: colors.textMuted, marginTop: 1 },
-  noteCount: { padding: 10, borderTopWidth: 1, borderTopColor: colors.border },
-  noteCountText: { fontSize: 11, color: colors.textMuted, textAlign: 'center' },
+  fileItem: { paddingVertical: 5, paddingHorizontal: 10, borderRadius: radius.sm, marginVertical: 0 },
+  fileItemActive: { backgroundColor: colors.hover },
+  fileName: { fontSize: 12.5, color: colors.textSecondary, fontWeight: '400' },
+  fileNameActive: { color: colors.text, fontWeight: '500' },
+  fileTags: { fontSize: 10, color: colors.textMuted, marginTop: 1, fontFamily: font.mono },
+  noteCount: {
+    padding: 10, borderTopWidth: 1, borderTopColor: colors.borderLight,
+  },
+  noteCountText: { fontSize: 10, color: colors.textMuted, textAlign: 'center', fontFamily: font.mono },
 
   mainArea: { flex: 1, backgroundColor: colors.bg },
   graphEmpty: { flex: 1, justifyContent: 'center', alignItems: 'center' },
 
-  editorContainer: { flex: 1, flexDirection: 'column' },
+  editorContainer: { flex: 1, flexDirection: 'column', backgroundColor: colors.surface },
   editorHeader: {
     flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 16, paddingVertical: 8,
-    borderBottomWidth: 1, borderBottomColor: colors.border, backgroundColor: colors.bg,
+    paddingHorizontal: 14, paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: colors.borderLight,
+    backgroundColor: colors.bg,
   },
-  backBtn: { paddingVertical: 4, paddingHorizontal: 8, marginRight: 12 },
+  backBtn: { paddingVertical: 4, paddingHorizontal: 6, marginRight: 10 },
   backBtnContent: { flexDirection: 'row', alignItems: 'center' },
-  backBtnText: { fontSize: 13, color: colors.primary, fontWeight: '500', marginLeft: 6 },
-  editorTitle: { fontSize: 14, fontWeight: '600', color: colors.text, flex: 1 },
-  editorActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  backBtnText: { fontSize: 12, color: colors.textSecondary, fontWeight: '500', marginLeft: 5 },
+  editorTitle: {
+    fontSize: 14, fontWeight: '500', color: colors.text, flex: 1,
+    fontFamily: font.display, letterSpacing: -0.2,
+  },
+  editorActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   toggleBtn: {
-    paddingHorizontal: 10, paddingVertical: 4, borderRadius: 6,
+    paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.sm,
     borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface,
   },
-  toggleBtnText: { fontSize: 12, color: colors.textSecondary, fontWeight: '500' },
+  toggleBtnText: { fontSize: 11, color: colors.textSecondary, fontWeight: '500' },
   unsavedBadge: {
-    fontSize: 10, color: colors.primary, backgroundColor: colors.primaryLight,
-    paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4, overflow: 'hidden',
+    fontSize: 9, color: colors.primary, backgroundColor: colors.primaryLight,
+    paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.xs, overflow: 'hidden',
+    fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5,
   },
   saveBtn: {},
-  saveBtnInner: { minHeight: 34, paddingHorizontal: 14, paddingVertical: 5, borderRadius: 8 },
+  saveBtnInner: { minHeight: 30, paddingHorizontal: 12, paddingVertical: 5, borderRadius: radius.sm },
   saveBtnDisabled: { opacity: 0.3 },
-  saveBtnText: { color: colors.textInverse, fontSize: 12, fontWeight: '700' },
-  editorInput: { padding: 24, fontFamily: 'monospace', fontSize: 13, color: colors.text, lineHeight: 22 },
+  saveBtnText: { color: colors.textInverse, fontSize: 11, fontWeight: '600' },
+  editorInput: { padding: 24, fontFamily: font.mono, fontSize: 13, color: colors.text, lineHeight: 22 },
   previewScroll: { flex: 1, backgroundColor: colors.surface },
-  previewContent: { padding: 24 },
-  emptyText: { color: colors.textMuted, fontSize: 13, padding: 16 },
+  previewContent: { padding: 24, maxWidth: 720, width: '100%', alignSelf: 'center' },
+  emptyText: { color: colors.textMuted, fontSize: 12, padding: 14 },
 });

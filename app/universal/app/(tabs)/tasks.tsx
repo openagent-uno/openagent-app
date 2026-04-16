@@ -1,4 +1,4 @@
-import { colors } from '../../theme';
+import { colors, font, radius } from '../../theme';
 /**
  * Tasks screen — view and manage scheduled cron tasks.
  *
@@ -20,7 +20,8 @@ import { useConfig } from '../../stores/config';
 import { useTasks } from '../../stores/tasks';
 import { setBaseUrl } from '../../services/api';
 import { useConfirm } from '../../components/ConfirmDialog';
-import PrimaryButton from '../../components/PrimaryButton';
+import Button from '../../components/Button';
+import Card from '../../components/Card';
 import ThemedSwitch from '../../components/ThemedSwitch';
 import type { ScheduledTask } from '../../../common/types';
 
@@ -105,16 +106,16 @@ export default function TasksScreen() {
       </Text>
 
       {/* Scheduler toggle */}
-      <View style={styles.toggleCard}>
+      <Card padded={false} style={styles.toggleCard}>
         <Text style={styles.toggleLabel}>Scheduler Enabled</Text>
         <ThemedSwitch
           value={schedulerEnabled}
           onValueChange={toggleScheduler}
         />
-      </View>
+      </Card>
 
       {/* Task list */}
-      <View style={styles.card}>
+      <Card padded={false}>
         {tasks.length === 0 && !adding && (
           <Text style={styles.emptyText}>No scheduled tasks</Text>
         )}
@@ -183,27 +184,27 @@ export default function TasksScreen() {
               />
             )}
             <View style={styles.formActions}>
-              <TouchableOpacity onPress={handleCancel} style={styles.cancelBtn}>
-                <Text style={styles.cancelBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <PrimaryButton style={styles.saveBtn} contentStyle={styles.saveBtnInner} onPress={handleSaveForm}>
-                <Text style={styles.saveBtnText}>{editId !== null ? 'Update' : 'Add Task'}</Text>
-              </PrimaryButton>
+              <Button variant="ghost" size="sm" label="Cancel" onPress={handleCancel} />
+              <Button
+                variant="primary"
+                size="sm"
+                label={editId !== null ? 'Update' : 'Add Task'}
+                onPress={handleSaveForm}
+              />
             </View>
           </View>
         ) : (
-          <PrimaryButton
-            style={styles.addBtn}
-            contentStyle={styles.addBtnInner}
-            onPress={() => { setAdding(true); setEditId(null); setForm(EMPTY_FORM); }}
-          >
-            <View style={styles.addBtnContent}>
-              <Feather name="plus" size={14} color={colors.textInverse} />
-              <Text style={styles.addBtnText}>Add Task</Text>
-            </View>
-          </PrimaryButton>
+          <View style={{ padding: 10, borderTopWidth: 1, borderTopColor: colors.borderLight }}>
+            <Button
+              variant="primary"
+              label="Add Task"
+              icon="plus"
+              fullWidth
+              onPress={() => { setAdding(true); setEditId(null); setForm(EMPTY_FORM); }}
+            />
+          </View>
         )}
-      </View>
+      </Card>
 
       {saved && (
         <Text style={styles.savedMsg}>Saved</Text>
@@ -217,48 +218,57 @@ export default function TasksScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: 24, maxWidth: 600, width: "100%", alignSelf: "center" },
-  title: { fontSize: 17, fontWeight: '600', color: colors.text, marginBottom: 4 },
-  hint: { fontSize: 12, color: colors.textMuted, marginBottom: 16 },
+  content: { padding: 24, maxWidth: 640, width: "100%", alignSelf: "center" },
+  title: {
+    fontSize: 18, fontWeight: '500', color: colors.text, marginBottom: 4,
+    fontFamily: font.display, letterSpacing: -0.3,
+  },
+  hint: { fontSize: 12, color: colors.textMuted, marginBottom: 14 },
   toggleCard: {
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    backgroundColor: colors.surface, borderRadius: 10, borderWidth: 1, borderColor: colors.border,
-    padding: 16, marginBottom: 16,
+    backgroundColor: colors.surface, borderRadius: radius.lg,
+    borderWidth: 1, borderColor: colors.border,
+    paddingHorizontal: 14, paddingVertical: 12, marginBottom: 12,
   },
-  toggleLabel: { fontSize: 14, color: colors.text, fontWeight: '500' },
+  toggleLabel: { fontSize: 13, color: colors.text, fontWeight: '500' },
   card: {
-    backgroundColor: colors.surface, borderRadius: 10,
-    borderWidth: 1, borderColor: colors.border, padding: 4,
+    backgroundColor: colors.surface, borderRadius: radius.lg,
+    borderWidth: 1, borderColor: colors.border, padding: 2,
   },
-  emptyText: { padding: 16, fontSize: 13, color: colors.textMuted, textAlign: 'center' },
+  emptyText: { padding: 14, fontSize: 12, color: colors.textMuted, textAlign: 'center' },
   taskRow: {
     flexDirection: 'row', alignItems: 'flex-start',
-    paddingVertical: 12, paddingHorizontal: 12,
+    paddingVertical: 11, paddingHorizontal: 12,
   },
   taskRowBorder: { borderTopWidth: 1, borderTopColor: colors.borderLight },
   taskInfo: { flex: 1 },
-  taskName: { fontSize: 14, fontWeight: '600', color: colors.text },
-  taskCron: { fontSize: 12, color: colors.primary, fontFamily: 'monospace', marginTop: 2 },
-  taskPrompt: { fontSize: 12, color: colors.textSecondary, marginTop: 4, lineHeight: 18 },
-  taskActions: { flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 8 },
+  taskName: { fontSize: 13, fontWeight: '600', color: colors.text, letterSpacing: -0.1 },
+  taskCron: { fontSize: 11, color: colors.primary, fontFamily: font.mono, marginTop: 2 },
+  taskPrompt: { fontSize: 11.5, color: colors.textSecondary, marginTop: 4, lineHeight: 17 },
+  taskActions: { flexDirection: 'row', alignItems: 'center', gap: 2, marginLeft: 8 },
   editBtn: { padding: 6 },
   removeBtn: { padding: 6 },
-  addBtn: { padding: 12, borderTopWidth: 1, borderTopColor: colors.borderLight },
-  addBtnInner: { minHeight: 40, borderRadius: 8 },
+  addBtn: { padding: 10, borderTopWidth: 1, borderTopColor: colors.borderLight },
+  addBtnInner: { minHeight: 34, borderRadius: radius.sm },
   addBtnContent: { flexDirection: 'row', alignItems: 'center' },
-  addBtnText: { fontSize: 13, color: colors.textInverse, fontWeight: '700', marginLeft: 8 },
+  addBtnText: { fontSize: 12, color: colors.textInverse, fontWeight: '600', marginLeft: 6 },
   addForm: { padding: 12, borderTopWidth: 1, borderTopColor: colors.borderLight },
-  formTitle: { fontSize: 14, fontWeight: '600', color: colors.text, marginBottom: 8 },
-  input: {
-    backgroundColor: colors.inputBg, borderRadius: 8, borderWidth: 1, borderColor: colors.border,
-    padding: 10, color: colors.text, fontSize: 13, marginBottom: 8,
+  formTitle: {
+    fontSize: 12, fontWeight: '600', color: colors.textSecondary, marginBottom: 8,
+    textTransform: 'uppercase', letterSpacing: 0.5,
   },
-  formActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 4 },
-  cancelBtn: { padding: 8 },
-  cancelBtnText: { color: colors.textMuted, fontSize: 13 },
+  input: {
+    backgroundColor: colors.inputBg, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.border,
+    paddingHorizontal: 11, paddingVertical: 9,
+    color: colors.text, fontSize: 12, marginBottom: 6, fontFamily: font.mono,
+  },
+  formActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 6, marginTop: 4 },
+  cancelBtn: { padding: 6 },
+  cancelBtnText: { color: colors.textMuted, fontSize: 12 },
   saveBtn: {},
-  saveBtnInner: { minHeight: 34, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8 },
-  saveBtnText: { color: colors.textInverse, fontSize: 13, fontWeight: '700' },
-  savedMsg: { marginTop: 12, fontSize: 13, color: colors.success, textAlign: 'center' },
-  errorMsg: { marginTop: 12, fontSize: 13, color: '#e55', textAlign: 'center' },
+  saveBtnInner: { minHeight: 30, paddingHorizontal: 12, paddingVertical: 6, borderRadius: radius.sm },
+  saveBtnText: { color: colors.textInverse, fontSize: 12, fontWeight: '600' },
+  savedMsg: { marginTop: 10, fontSize: 12, color: colors.success, textAlign: 'center' },
+  errorMsg: { marginTop: 10, fontSize: 12, color: colors.error, textAlign: 'center' },
 });

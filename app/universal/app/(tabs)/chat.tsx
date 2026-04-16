@@ -1,20 +1,24 @@
 /**
- * Chat screen — multi-session, file attach, voice recording.
+ * Chat screen — editorial single-column flow, no left/right bubbles.
+ * Inspired by Claude Code / Codex: messages read like a document, with
+ * user prompts as left-rule quotes and assistant replies as full-width
+ * prose. Tool invocations inline as compact rows.
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Feather from '@expo/vector-icons/Feather';
 import {
-  View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Platform,
+  View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Platform, Image,
 } from 'react-native';
+
+const logoIcon = require('../../assets/openagent-icon.png');
 import type { Attachment, ToolInfo } from '../../common/types';
 import { useConnection } from '../../stores/connection';
 import { useChat } from '../../stores/chat';
 import Markdown from '../../components/Markdown';
-import PrimaryButton from '../../components/PrimaryButton';
 import ResponsiveSidebar from '../../components/ResponsiveSidebar';
 import { uploadFile, downloadFile } from '../../services/api';
-import { colors } from '../../theme';
+import { colors, font, radius } from '../../theme';
 
 interface PendingFile {
   filename: string;
@@ -42,8 +46,6 @@ export default function ChatScreen() {
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
   }, [activeSession?.messages.length, activeSession?.statusText]);
 
-  // ── Send message (with optional attached file) ──
-
   const handleSend = () => {
     if (!ws || !activeSessionId) return;
     const text = input.trim();
@@ -59,17 +61,12 @@ export default function ChatScreen() {
     }));
 
     if (pendingFiles.length > 0) {
-      // The path is on the agent's own filesystem (placed there by
-      // /api/upload), so any filesystem-MCP read call will work even when
-      // the agent runs on a different machine than the client.
       const lines = pendingFiles.map(
         (f) => `- ${f.kind}: ${f.filename} — server path: ${f.remotePath}`,
       );
       const noun = pendingFiles.length === 1 ? 'a file' : `${pendingFiles.length} files`;
       const fileHeader = `The user attached ${noun}:\n${lines.join('\n')}\nUse the Read tool to inspect ${pendingFiles.length === 1 ? 'it' : 'them'}.`;
       msg = text ? `${fileHeader}\n\nUser message: ${text}` : fileHeader;
-      // Keep the user bubble's text to just the typed message; the
-      // attachments render as chips/thumbnails below the text.
       displayMsg = text;
     }
 
@@ -86,12 +83,7 @@ export default function ChatScreen() {
     }
   };
 
-  // ── File picker ──
-
   const guessMimeType = (filename: string, kind: 'image' | 'file'): string => {
-    // The upload endpoint doesn't strictly need the MIME type — it stores
-    // bytes verbatim — but setting one means the server can auto-transcribe
-    // audio attachments and the LLM sees a nicer label in logs.
     const ext = filename.toLowerCase().split('.').pop() || '';
     const mimes: Record<string, string> = {
       png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
@@ -107,18 +99,6 @@ export default function ChatScreen() {
   };
 
   const handleFilePick = async () => {
-    // Desktop: pick natively → read bytes via IPC → upload via /api/upload.
-    //
-    // The *local* path from the native picker isn't usable by the agent
-    // unless the agent happens to run on the same machine — a remote agent
-    // (lyra, a VPS, a Linux box on the LAN) has no way to dereference
-    // ``/Users/alice/Documents/foo.pdf`` because that path doesn't exist
-    // on its filesystem. We used to short-circuit the upload in desktop
-    // mode; that broke every non-localhost deployment. Now we upload
-    // unconditionally and use the *returned* server-side path, matching
-    // what the browser path already does. The localhost overhead (a loopback
-    // HTTP round-trip for a 5 MB file) is well under 100 ms on any hardware
-    // this app runs on.
     if (isDesktop && window.desktop?.pickFiles && window.desktop?.readFile) {
       let picked: { path: string; filename: string; kind: 'image' | 'file' }[] = [];
       try {
@@ -132,9 +112,6 @@ export default function ChatScreen() {
       const uploads = await Promise.allSettled(
         picked.map(async (p) => {
           const bytes = await window.desktop!.readFile!(p.path);
-          // ``File`` is available in the renderer (Electron uses Chromium's
-          // web APIs). Wrapping in File rather than raw Blob lets the
-          // gateway see the filename in the multipart field.
           const blob = new Blob([bytes as BlobPart], { type: guessMimeType(p.filename, p.kind) });
           const file = new File([blob], p.filename, { type: blob.type });
           const result = await uploadFile(file);
@@ -153,9 +130,6 @@ export default function ChatScreen() {
       return;
     }
 
-    // Desktop client missing the readFile IPC (older Electron build):
-    // fall through to the pathname-only legacy path. Works only when the
-    // agent is on the same machine.
     if (isDesktop && window.desktop?.pickFiles) {
       try {
         const picked = await window.desktop.pickFiles();
@@ -173,14 +147,10 @@ export default function ChatScreen() {
 
     if (Platform.OS !== 'web') return;
 
-    // Browser path: DOM file input + upload each selected file to /api/upload
-    // so the agent on a different host can reach it.
     const fileInput = document.createElement('input');
     fileInput.type = 'file';
     fileInput.multiple = true;
     fileInput.accept = 'image/*,.pdf,.txt,.md,.csv,.json,.py,.js,.ts,.yaml,.yml,.log';
-    // Some browsers/webviews don't fire `change` for detached inputs — attach
-    // to the DOM, click, then remove once we're done.
     fileInput.style.display = 'none';
     document.body.appendChild(fileInput);
     fileInput.onchange = async () => {
@@ -201,8 +171,6 @@ export default function ChatScreen() {
     };
     fileInput.click();
   };
-
-  // ── Voice recording (Web: MediaRecorder API) ──
 
   const startRecording = async () => {
     if (Platform.OS !== 'web') return;
@@ -246,16 +214,21 @@ export default function ChatScreen() {
     }
   };
 
-  // ── Sidebar ──
-
   const sidebarContent = (
     <View style={styles.sidebarInner}>
-      <PrimaryButton style={styles.newChatBtn} onPress={createSession}>
-        <View style={styles.newChatContent}>
-          <Feather name="plus" size={13} color={colors.textInverse} />
-          <Text style={styles.newChatText}>New Chat</Text>
-        </View>
-      </PrimaryButton>
+      <View style={styles.sidebarHead}>
+        <Text style={styles.sidebarKicker}>Sessions</Text>
+        <TouchableOpacity
+          onPress={createSession}
+          style={styles.newBtn}
+          accessibilityLabel="New chat"
+          // @ts-ignore
+          {...(Platform.OS === 'web' ? { className: 'oa-hover-lift' } : {})}
+        >
+          <Feather name="plus" size={13} color={colors.text} />
+          <Text style={styles.newBtnText}>New</Text>
+        </TouchableOpacity>
+      </View>
       <ScrollView style={styles.sessionList}>
         {sessions.map((ses) => (
           <TouchableOpacity
@@ -263,11 +236,24 @@ export default function ChatScreen() {
             style={[styles.sessionItem, ses.id === activeSessionId && styles.sessionActive]}
             onPress={() => setActiveSession(ses.id)}
             onLongPress={() => removeSession(ses.id)}
+            activeOpacity={0.7}
           >
-            <Text style={styles.sessionTitle} numberOfLines={1}>{ses.title}</Text>
-            {ses.isProcessing && <Text style={styles.processingDot}>●</Text>}
+            {ses.id === activeSessionId && <View style={styles.sessionActiveBar} />}
+            <Text style={[styles.sessionTitle, ses.id === activeSessionId && styles.sessionTitleActive]} numberOfLines={1}>
+              {ses.title}
+            </Text>
+            {ses.isProcessing && (
+              <View
+                style={styles.processingDot}
+                // @ts-ignore web className
+                {...(Platform.OS === 'web' ? { className: 'oa-pulse' } : {})}
+              />
+            )}
           </TouchableOpacity>
         ))}
+        {sessions.length === 0 && (
+          <Text style={styles.sidebarEmpty}>No sessions yet</Text>
+        )}
       </ScrollView>
     </View>
   );
@@ -278,125 +264,128 @@ export default function ChatScreen() {
         {activeSession ? (
           <>
             <ScrollView ref={scrollRef} style={styles.messages} contentContainerStyle={styles.messagesContent}>
-              {activeSession.messages.map((msg) => (
-                msg.role === 'tool' ? (
-                  <ToolCard key={msg.id} toolInfo={msg.toolInfo} fallbackText={msg.text} />
-                ) : (
-                  <View key={msg.id} style={[styles.bubble, msg.role === 'user' ? styles.userBubble : styles.assistantBubble]}>
-                    {msg.role === 'assistant' ? (
-                      <>
-                        <Markdown text={msg.text} />
-                        {msg.attachments && msg.attachments.length > 0 && (
-                          <View style={styles.attachmentsRow}>
-                            {msg.attachments.map((att, i) => (
-                              <AttachmentView key={`${att.path}-${i}`} attachment={att} downloadable />
-                            ))}
-                          </View>
-                        )}
-                        {msg.model && <Text style={styles.modelText}>Model: {msg.model}</Text>}
-                      </>
-                    ) : (
-                      <>
-                        {msg.attachments && msg.attachments.length > 0 && (
-                          <View style={styles.attachmentsRow}>
-                            {msg.attachments.map((att, i) => (
-                              <AttachmentView key={`${att.path}-${i}`} attachment={att} />
-                            ))}
-                          </View>
-                        )}
-                        {msg.text ? (
-                          <Text style={[styles.bubbleText, styles.userText]}>{msg.text}</Text>
-                        ) : null}
-                      </>
-                    )}
+              <View style={styles.messagesInner}>
+                {activeSession.messages.length === 0 && (
+                  <View style={styles.heroEmpty}>
+                    <Image source={logoIcon} style={styles.heroLogo} resizeMode="contain" />
+                    <Text style={styles.heroTitle}>Ready when you are</Text>
+                    <Text style={styles.heroSub}>
+                      Ask a question, request a task, or attach a file.
+                    </Text>
                   </View>
-                )
-              ))}
-              {activeSession.isProcessing && (
-                <View style={[styles.bubble, styles.statusBubble]}>
-                  <View style={styles.statusContent}>
-                    <Feather name="clock" size={12} color={colors.textMuted} />
-                    <Text style={styles.statusText}>{activeSession.statusText || 'Thinking...'}</Text>
+                )}
+                {activeSession.messages.map((msg) => (
+                  msg.role === 'tool' ? (
+                    <ToolCard key={msg.id} toolInfo={msg.toolInfo} fallbackText={msg.text} />
+                  ) : msg.role === 'user' ? (
+                    <UserMessage key={msg.id} text={msg.text} attachments={msg.attachments} />
+                  ) : (
+                    <AssistantMessage key={msg.id} text={msg.text} model={msg.model} attachments={msg.attachments} />
+                  )
+                ))}
+                {activeSession.isProcessing && (
+                  <View style={styles.statusRow}>
+                    <View
+                      style={styles.statusDot}
+                      // @ts-ignore
+                      {...(Platform.OS === 'web' ? { className: 'oa-pulse' } : {})}
+                    />
+                    <Text style={styles.statusText}>{activeSession.statusText || 'Thinking'}</Text>
                   </View>
-                </View>
-              )}
+                )}
+              </View>
             </ScrollView>
 
-            {/* Composer — pending files (if any) stack above the input row,
-                inside the same rounded container. */}
-            <View style={styles.composer}>
-              {pendingFiles.length > 0 && (
-                <View style={styles.pendingList}>
-                  {pendingFiles.map((f, idx) => (
-                    <View key={`${f.remotePath}-${idx}`} style={styles.pendingChip}>
-                      <Feather name="paperclip" size={11} color={colors.primary} />
-                      <Text style={styles.pendingText} numberOfLines={1}>{f.filename}</Text>
-                      <TouchableOpacity
-                        onPress={() => setPendingFiles((prev) => prev.filter((_, i) => i !== idx))}
-                      >
-                        <Feather name="x" size={12} color={colors.textMuted} style={styles.pendingRemove} />
-                      </TouchableOpacity>
-                    </View>
-                  ))}
-                </View>
-              )}
+            <View style={styles.composerWrap}>
+              <View style={styles.composer}>
+                {pendingFiles.length > 0 && (
+                  <View style={styles.pendingList}>
+                    {pendingFiles.map((f, idx) => (
+                      <View key={`${f.remotePath}-${idx}`} style={styles.pendingChip}>
+                        <Feather name="paperclip" size={10} color={colors.textSecondary} />
+                        <Text style={styles.pendingText} numberOfLines={1}>{f.filename}</Text>
+                        <TouchableOpacity
+                          onPress={() => setPendingFiles((prev) => prev.filter((_, i) => i !== idx))}
+                        >
+                          <Feather name="x" size={11} color={colors.textMuted} />
+                        </TouchableOpacity>
+                      </View>
+                    ))}
+                  </View>
+                )}
 
-            <View style={styles.inputBar}>
-              {(Platform.OS === 'web' || isDesktop) && (
-                <TouchableOpacity style={styles.iconBtn} onPress={handleFilePick}>
-                  <Feather name="paperclip" size={15} color={colors.textSecondary} />
-                </TouchableOpacity>
-              )}
-              {Platform.OS === 'web' && (
-                <TouchableOpacity
-                  style={[styles.iconBtn, recording && styles.iconBtnActive]}
-                  onPress={recording ? stopRecording : startRecording}
-                >
-                  <Feather
-                    name={recording ? 'stop-circle' : 'mic'}
-                    size={15}
-                    color={recording ? colors.textInverse : colors.textSecondary}
-                  />
-                </TouchableOpacity>
-              )}
-              {Platform.OS === 'web' ? (
-                <textarea
-                  value={input}
-                  onChange={(e: any) => setInput(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Send a message..."
-                  rows={1}
-                  style={{
-                    flex: 1, backgroundColor: colors.inputBg, borderRadius: 20,
-                    border: `1px solid ${colors.border}`,
-                    paddingLeft: 16, paddingRight: 16, paddingTop: 10, paddingBottom: 10,
-                    color: colors.text, fontSize: 14,
-                    fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif',
-                    maxHeight: 120, resize: 'none', outline: 'none',
-                  } as any}
-                />
-              ) : (
-                <TextInput
-                  style={styles.textInput}
-                  value={input} onChangeText={setInput}
-                  placeholder="Send a message..." placeholderTextColor={colors.textMuted}
-                  onSubmitEditing={handleSend} returnKeyType="send" multiline
-                />
-              )}
-              <PrimaryButton
-                style={[styles.sendBtn, (!input.trim() && pendingFiles.length === 0) && styles.sendBtnDisabled]}
-                contentStyle={styles.sendBtnInner}
-                onPress={handleSend}
-                disabled={(!input.trim() && pendingFiles.length === 0) || activeSession.isProcessing}
-              >
-                <Feather name="arrow-up" size={15} color={colors.textInverse} />
-              </PrimaryButton>
-            </View>
+                <View style={styles.inputRow}>
+                  {Platform.OS === 'web' ? (
+                    <textarea
+                      value={input}
+                      onChange={(e: any) => setInput(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder="Message OpenAgent..."
+                      rows={1}
+                      style={{
+                        flex: 1, background: 'transparent', border: 'none',
+                        paddingLeft: 0, paddingRight: 0, paddingTop: 6, paddingBottom: 6,
+                        color: colors.text, fontSize: 14, lineHeight: 1.5,
+                        fontFamily: font.sans,
+                        maxHeight: 140, resize: 'none', outline: 'none',
+                      } as any}
+                    />
+                  ) : (
+                    <TextInput
+                      style={styles.textInput}
+                      value={input} onChangeText={setInput}
+                      placeholder="Message OpenAgent..." placeholderTextColor={colors.textMuted}
+                      onSubmitEditing={handleSend} returnKeyType="send" multiline
+                    />
+                  )}
+                </View>
+
+                <View style={styles.composerActions}>
+                  <View style={styles.composerLeft}>
+                    {(Platform.OS === 'web' || isDesktop) && (
+                      <TouchableOpacity style={styles.iconBtn} onPress={handleFilePick}>
+                        <Feather name="paperclip" size={13} color={colors.textSecondary} />
+                      </TouchableOpacity>
+                    )}
+                    {Platform.OS === 'web' && (
+                      <TouchableOpacity
+                        style={[styles.iconBtn, recording && styles.iconBtnActive]}
+                        onPress={recording ? stopRecording : startRecording}
+                      >
+                        <Feather
+                          name={recording ? 'stop-circle' : 'mic'}
+                          size={13}
+                          color={recording ? colors.textInverse : colors.textSecondary}
+                        />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                  <TouchableOpacity
+                    style={[
+                      styles.sendBtn,
+                      ((!input.trim() && pendingFiles.length === 0) || activeSession.isProcessing) && styles.sendBtnDisabled,
+                    ]}
+                    onPress={handleSend}
+                    disabled={(!input.trim() && pendingFiles.length === 0) || activeSession.isProcessing}
+                  >
+                    <Feather name="arrow-up" size={13} color={colors.textInverse} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+              <Text style={styles.composerHint}>
+                <Text style={styles.kbd}>Enter</Text> to send · <Text style={styles.kbd}>Shift+Enter</Text> for newline
+              </Text>
             </View>
           </>
         ) : (
           <View style={styles.emptyState}>
-            <Text style={styles.emptyText}>Select a chat or create a new one</Text>
+            <Image source={logoIcon} style={styles.heroLogo} resizeMode="contain" />
+            <Text style={styles.emptyTitle}>No session selected</Text>
+            <Text style={styles.emptySub}>Pick a session on the left, or create a new one.</Text>
+            <TouchableOpacity style={styles.emptyBtn} onPress={createSession}>
+              <Feather name="plus" size={13} color={colors.text} />
+              <Text style={styles.emptyBtnText}>New chat</Text>
+            </TouchableOpacity>
           </View>
         )}
       </View>
@@ -404,19 +393,65 @@ export default function ChatScreen() {
   );
 }
 
-/**
- * File/image chip shown inside message bubbles.
- *
- * Two modes:
- * - **User-side** (default): just a visual chip for the upload the user
- *   attached. No action — the file is already on the agent.
- * - **Downloadable** (``downloadable=true``, used for assistant replies):
- *   the agent sent us back a file living on its own filesystem. Tapping
- *   the chip hits ``GET /api/files?path=...`` and triggers a browser
- *   download. This works both for local (Electron + gateway on same
- *   Mac) and remote (app on laptop, agent on VPS) setups because we
- *   stream the bytes over HTTP rather than relying on a shared FS.
- */
+// ── Message components ──
+
+function UserMessage({ text, attachments }: { text: string; attachments?: Attachment[] }) {
+  return (
+    <View
+      style={styles.userBlock}
+      // @ts-ignore
+      {...(Platform.OS === 'web' ? { className: 'oa-fade-in' } : {})}
+    >
+      <View style={styles.userRule} />
+      <View style={styles.userBody}>
+        <Text style={styles.userLabel}>You</Text>
+        {attachments && attachments.length > 0 && (
+          <View style={styles.attachmentsRow}>
+            {attachments.map((att, i) => (
+              <AttachmentView key={`${att.path}-${i}`} attachment={att} />
+            ))}
+          </View>
+        )}
+        {text ? <Text style={styles.userText}>{text}</Text> : null}
+      </View>
+    </View>
+  );
+}
+
+function AssistantMessage({
+  text,
+  model,
+  attachments,
+}: {
+  text: string;
+  model?: string;
+  attachments?: Attachment[];
+}) {
+  return (
+    <View
+      style={styles.assistantBlock}
+      // @ts-ignore
+      {...(Platform.OS === 'web' ? { className: 'oa-fade-in' } : {})}
+    >
+      <View style={styles.assistantHead}>
+        <View style={styles.assistantDot} />
+        <Text style={styles.assistantLabel}>OpenAgent</Text>
+        {model && <Text style={styles.modelText}>· {model}</Text>}
+      </View>
+      <View style={styles.assistantBody}>
+        <Markdown text={text} />
+        {attachments && attachments.length > 0 && (
+          <View style={styles.attachmentsRow}>
+            {attachments.map((att, i) => (
+              <AttachmentView key={`${att.path}-${i}`} attachment={att} downloadable />
+            ))}
+          </View>
+        )}
+      </View>
+    </View>
+  );
+}
+
 function AttachmentView({ attachment, downloadable = false }: { attachment: Attachment; downloadable?: boolean }) {
   const iconName = attachment.type === 'image'
     ? 'image'
@@ -428,14 +463,11 @@ function AttachmentView({ attachment, downloadable = false }: { attachment: Atta
   const token = useConnection((s) => s.config?.token);
   const chipInner = (
     <>
-      <Feather name={iconName as any} size={12} color={downloadable ? colors.primary : colors.textInverse} />
-      <Text
-        style={[styles.attachmentText, downloadable && { color: colors.primary }]}
-        numberOfLines={1}
-      >
+      <Feather name={iconName as any} size={11} color={colors.textSecondary} />
+      <Text style={styles.attachmentText} numberOfLines={1}>
         {attachment.filename}
       </Text>
-      {downloadable ? <Feather name="download" size={11} color={colors.primary} style={{ marginLeft: 4 }} /> : null}
+      {downloadable ? <Feather name="download" size={10} color={colors.primary} /> : null}
     </>
   );
   if (!downloadable) {
@@ -443,7 +475,7 @@ function AttachmentView({ attachment, downloadable = false }: { attachment: Atta
   }
   return (
     <TouchableOpacity
-      style={[styles.attachmentChip, styles.attachmentChipDownloadable]}
+      style={styles.attachmentChip}
       onPress={async () => {
         try {
           await downloadFile(attachment.path, attachment.filename, token);
@@ -457,47 +489,41 @@ function AttachmentView({ attachment, downloadable = false }: { attachment: Atta
   );
 }
 
-/** Collapsible tool card showing name, params, status, and result. */
 function ToolCard({ toolInfo, fallbackText }: { toolInfo?: ToolInfo; fallbackText: string }) {
   const [expanded, setExpanded] = useState(false);
 
   if (!toolInfo) {
-    // Legacy plain text tool pill
     return (
-      <View style={styles.toolBlock}>
-        <Feather name="tool" size={11} color={colors.primary} style={styles.toolIcon} />
-        <Text style={styles.toolText}>{fallbackText}</Text>
+      <View style={styles.toolRow}>
+        <View style={styles.toolIndicator} />
+        <Feather name="tool" size={10} color={colors.textMuted} />
+        <Text style={styles.toolRowText}>{fallbackText}</Text>
       </View>
     );
   }
 
   const isRunning = toolInfo.status === 'running';
   const isError = toolInfo.status === 'error';
-  const statusLabel = isRunning ? 'Running' : isError ? 'Error' : 'Done';
-  const statusColor = isError ? colors.error : isRunning ? colors.textMuted : colors.success;
-  const statusSoft = isError ? colors.errorSoft : isRunning ? colors.mutedSoft : colors.successSoft;
+  const statusColor = isError ? colors.error : isRunning ? colors.warning : colors.success;
   const statusIconName = isRunning ? 'clock' : isError ? 'x-circle' : 'check-circle';
+  const statusLabel = isRunning ? 'running' : isError ? 'error' : 'done';
 
   return (
     <TouchableOpacity
-      activeOpacity={0.7}
+      activeOpacity={0.85}
       onPress={() => setExpanded(!expanded)}
       style={[styles.toolCard, isError && styles.toolCardError]}
+      // @ts-ignore
+      {...(Platform.OS === 'web' ? { className: 'oa-fade-in' } : {})}
     >
-      {/* Header */}
       <View style={styles.toolCardHeader}>
-        <Feather name="tool" size={13} color={colors.primary} style={styles.toolCardIcon} />
+        <View style={[styles.toolStatusDot, { backgroundColor: statusColor }]} />
+        <Feather name="tool" size={11} color={colors.textMuted} />
         <Text style={styles.toolCardName}>{toolInfo.tool}</Text>
-        <View style={[styles.toolBadge, { backgroundColor: statusSoft }]}>
-          <View style={styles.toolBadgeContent}>
-            <Feather name={statusIconName} size={11} color={statusColor} />
-            <Text style={[styles.toolBadgeText, { color: statusColor }]}>{statusLabel}</Text>
-          </View>
-        </View>
-        <Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={13} color={colors.textMuted} />
+        <Text style={[styles.toolStatusText, { color: statusColor }]}>{statusLabel}</Text>
+        <Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={12} color={colors.textMuted} />
       </View>
 
-      {/* Expanded content */}
       {expanded && (
         <View style={styles.toolCardBody}>
           {toolInfo.params && Object.keys(toolInfo.params).length > 0 && (
@@ -506,7 +532,9 @@ function ToolCard({ toolInfo, fallbackText }: { toolInfo?: ToolInfo; fallbackTex
               <View style={styles.toolCodeBlock}>
                 {Object.entries(toolInfo.params).map(([k, v]) => (
                   <Text key={k} style={styles.toolCodeText}>
-                    <Text style={{ fontWeight: '600' }}>{k}:</Text> {typeof v === 'string' ? v : JSON.stringify(v)}
+                    <Text style={{ color: colors.primary }}>{k}</Text>
+                    <Text style={{ color: colors.textMuted }}>: </Text>
+                    {typeof v === 'string' ? v : JSON.stringify(v)}
                   </Text>
                 ))}
               </View>
@@ -516,7 +544,7 @@ function ToolCard({ toolInfo, fallbackText }: { toolInfo?: ToolInfo; fallbackTex
             <>
               <Text style={styles.toolSectionTitle}>Result</Text>
               <View style={styles.toolCodeBlock}>
-                <Text style={styles.toolCodeText} numberOfLines={8}>{toolInfo.result}</Text>
+                <Text style={styles.toolCodeText} numberOfLines={10}>{toolInfo.result}</Text>
               </View>
             </>
           )}
@@ -535,128 +563,286 @@ function ToolCard({ toolInfo, fallbackText }: { toolInfo?: ToolInfo; fallbackTex
 }
 
 const styles = StyleSheet.create({
-  sidebarInner: { flex: 1, padding: 16 },
-  newChatBtn: { marginBottom: 16 },
-  newChatContent: { flexDirection: 'row', alignItems: 'center' },
-  newChatText: { color: colors.textInverse, fontWeight: '700', fontSize: 13, marginLeft: 8 },
+  // Sidebar
+  sidebarInner: { flex: 1, padding: 10, gap: 2 },
+  sidebarHead: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 8, paddingVertical: 6, marginBottom: 4,
+  },
+  sidebarKicker: {
+    fontSize: 10, fontWeight: '600', color: colors.textMuted,
+    textTransform: 'uppercase', letterSpacing: 0.8,
+  },
+  newBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 8, paddingVertical: 4,
+    borderRadius: radius.sm,
+    borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  newBtnText: { fontSize: 11, fontWeight: '500', color: colors.text },
   sessionList: { flex: 1 },
-  sessionItem: { padding: 10, borderRadius: 8, marginBottom: 2, flexDirection: 'row', alignItems: 'center' },
-  sessionActive: { backgroundColor: colors.primaryLight },
-  sessionTitle: { color: colors.textSecondary, flex: 1, fontSize: 13 },
-  processingDot: { color: colors.primary, fontSize: 10, marginLeft: 6 },
+  sessionItem: {
+    position: 'relative',
+    paddingVertical: 7, paddingHorizontal: 10,
+    borderRadius: radius.sm, marginVertical: 1,
+    flexDirection: 'row', alignItems: 'center',
+  },
+  sessionActive: { backgroundColor: colors.hover },
+  sessionActiveBar: {
+    position: 'absolute', left: 0, top: 8, bottom: 8, width: 2,
+    backgroundColor: colors.primary, borderRadius: 1,
+  },
+  sessionTitle: { color: colors.textSecondary, flex: 1, fontSize: 12.5, fontWeight: '400' },
+  sessionTitleActive: { color: colors.text, fontWeight: '500' },
+  processingDot: {
+    width: 6, height: 6, borderRadius: 3,
+    backgroundColor: colors.primary, marginLeft: 6,
+  },
+  sidebarEmpty: {
+    fontSize: 11, color: colors.textMuted, textAlign: 'center',
+    paddingVertical: 20,
+  },
 
+  // Chat area
   chatArea: { flex: 1, flexDirection: 'column', backgroundColor: colors.bg },
   messages: { flex: 1 },
-  messagesContent: { padding: 24, paddingBottom: 8 },
-  bubble: { maxWidth: '75%', borderRadius: 12, padding: 14, marginBottom: 10 },
-  userBubble: { backgroundColor: colors.primary, alignSelf: 'flex-end' },
-  assistantBubble: { backgroundColor: colors.surface, alignSelf: 'flex-start', borderWidth: 1, borderColor: colors.border },
-  statusBubble: { backgroundColor: 'transparent', alignSelf: 'flex-start', padding: 8 },
-  statusContent: { flexDirection: 'row', alignItems: 'center' },
-  toolBlock: {
-    flexDirection: 'row', alignItems: 'center', alignSelf: 'center',
-    paddingVertical: 4, paddingHorizontal: 12, marginVertical: 4,
-    backgroundColor: colors.primaryLight, borderRadius: 16,
-  },
-  toolIcon: { marginRight: 6 },
-  toolText: { fontSize: 12, color: colors.primary, fontWeight: '500' },
+  messagesContent: { paddingVertical: 12, paddingBottom: 12 },
+  messagesInner: { maxWidth: 760, width: '100%', alignSelf: 'center', paddingHorizontal: 20 },
 
-  // ToolCard
+  // Hero empty state
+  heroEmpty: {
+    alignItems: 'center', paddingVertical: 60, paddingHorizontal: 16,
+  },
+  heroGlyph: {
+    fontSize: 26, color: colors.primary, marginBottom: 12,
+    fontFamily: font.serif,
+  },
+  heroLogo: {
+    width: 56, height: 56, marginBottom: 14,
+  },
+  heroTitle: {
+    fontSize: 20, fontWeight: '500', color: colors.text,
+    letterSpacing: -0.4, marginBottom: 4,
+    fontFamily: font.display,
+  },
+  heroSub: {
+    fontSize: 13, color: colors.textMuted, textAlign: 'center',
+  },
+
+  // User message
+  userBlock: {
+    flexDirection: 'row', alignItems: 'stretch',
+    paddingVertical: 10, paddingLeft: 2,
+  },
+  userRule: {
+    width: 2, backgroundColor: colors.primary,
+    borderRadius: 1, marginRight: 12,
+    opacity: 0.7,
+  },
+  userBody: { flex: 1, paddingVertical: 2 },
+  userLabel: {
+    fontSize: 10, fontWeight: '600', color: colors.primary,
+    textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4,
+  },
+  userText: {
+    fontSize: 14, lineHeight: 22, color: colors.text,
+    fontWeight: '400',
+  },
+
+  // Assistant message
+  assistantBlock: {
+    paddingVertical: 10,
+  },
+  assistantHead: {
+    flexDirection: 'row', alignItems: 'center', marginBottom: 6,
+  },
+  assistantDot: {
+    width: 6, height: 6, borderRadius: 3,
+    backgroundColor: colors.primary,
+    marginRight: 8,
+    // @ts-ignore web: gradient background
+    ...(Platform.OS === 'web' ? { backgroundImage: 'linear-gradient(135deg, #d94841, #f3a33a)' } : {}),
+  },
+  assistantLabel: {
+    fontSize: 10, fontWeight: '600', color: colors.text,
+    textTransform: 'uppercase', letterSpacing: 0.8,
+  },
+  modelText: {
+    fontSize: 10, color: colors.textMuted, marginLeft: 4,
+    fontFamily: font.mono,
+  },
+  assistantBody: {},
+
+  // Status row
+  statusRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingVertical: 10,
+  },
+  statusDot: {
+    width: 6, height: 6, borderRadius: 3,
+    backgroundColor: colors.primary,
+  },
+  statusText: {
+    color: colors.textMuted, fontSize: 13, fontStyle: 'italic',
+    fontFamily: font.mono,
+  },
+
+  // Tool rows
+  toolRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingVertical: 6, paddingHorizontal: 10,
+    marginVertical: 3,
+    borderRadius: radius.sm,
+    backgroundColor: colors.surface,
+    borderWidth: 1, borderColor: colors.borderLight,
+  },
+  toolIndicator: {
+    width: 3, height: 14, borderRadius: 1,
+    backgroundColor: colors.primary, opacity: 0.5,
+  },
+  toolRowText: {
+    fontSize: 12, color: colors.textSecondary, flex: 1,
+    fontFamily: font.mono,
+  },
   toolCard: {
-    alignSelf: 'center', width: '85%', maxWidth: 500,
-    backgroundColor: colors.surface, borderRadius: 10,
-    borderWidth: 1, borderColor: colors.border,
-    marginVertical: 6, overflow: 'hidden',
+    backgroundColor: colors.surface, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.borderLight,
+    marginVertical: 4, overflow: 'hidden',
   },
   toolCardError: { borderColor: colors.errorBorder },
   toolCardHeader: {
-    flexDirection: 'row', alignItems: 'center',
+    flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingVertical: 8, paddingHorizontal: 12,
   },
-  toolCardIcon: { marginRight: 6 },
-  toolCardName: { fontSize: 13, fontWeight: '600', color: colors.text, flex: 1 },
-  toolBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 },
-  toolBadgeContent: { flexDirection: 'row', alignItems: 'center' },
-  toolBadgeText: { fontSize: 11, fontWeight: '600', marginLeft: 4 },
-  toolCardBody: { paddingHorizontal: 12, paddingBottom: 10 },
-  toolSectionTitle: { fontSize: 11, fontWeight: '600', color: colors.textMuted, marginTop: 6, marginBottom: 4 },
+  toolStatusDot: { width: 6, height: 6, borderRadius: 3 },
+  toolCardName: {
+    fontSize: 12, fontWeight: '500', color: colors.text, flex: 1,
+    fontFamily: font.mono,
+  },
+  toolStatusText: {
+    fontSize: 10, fontWeight: '500', letterSpacing: 0.5,
+    textTransform: 'uppercase',
+  },
+  toolCardBody: {
+    paddingHorizontal: 12, paddingBottom: 10, paddingTop: 2,
+    borderTopWidth: 1, borderTopColor: colors.borderLight,
+  },
+  toolSectionTitle: {
+    fontSize: 10, fontWeight: '600', color: colors.textMuted,
+    marginTop: 8, marginBottom: 4,
+    textTransform: 'uppercase', letterSpacing: 0.5,
+  },
   toolCodeBlock: {
-    backgroundColor: colors.inputBg, borderRadius: 6,
-    borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.codeBg, borderRadius: radius.sm,
+    borderWidth: 1, borderColor: colors.codeBorder,
     padding: 8,
   },
-  toolCodeText: { fontSize: 11, color: colors.text, fontFamily: Platform.OS === 'web' ? 'monospace' : undefined },
-
-  bubbleText: { color: colors.text, fontSize: 14, lineHeight: 21 },
-  userText: { color: colors.textInverse },
-
-  // Attachment chips inside user bubble
-  attachmentsRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 6 },
-  attachmentChip: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: 'rgba(255,255,255,0.18)',
-    borderRadius: 10, paddingHorizontal: 8, paddingVertical: 4,
-    marginRight: 6, marginBottom: 4, maxWidth: 220,
+  toolCodeText: {
+    fontSize: 11, color: colors.codeText,
+    fontFamily: font.mono, lineHeight: 16,
   },
-  attachmentChipDownloadable: {
-    // Agent-side attachment (assistant message): use the muted bg that
-    // matches the assistant bubble rather than the white-on-primary
-    // style used for user-side chips, and hint at clickability with a
-    // subtle border.
-    backgroundColor: colors.primaryLight,
-    borderWidth: 1,
-    borderColor: colors.primary,
+
+  // Attachment chips
+  attachmentsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  attachmentChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: colors.surface,
+    borderRadius: radius.sm, paddingHorizontal: 8, paddingVertical: 4,
+    borderWidth: 1, borderColor: colors.border,
+    maxWidth: 220,
   },
   attachmentText: {
-    color: colors.textInverse, fontSize: 12, fontWeight: '500',
-    marginLeft: 6, flexShrink: 1,
+    color: colors.textSecondary, fontSize: 11, fontWeight: '500',
+    flexShrink: 1,
   },
 
-  modelText: { color: colors.textMuted, fontSize: 11, marginTop: 8 },
-  statusText: { color: colors.textMuted, fontSize: 13, fontStyle: 'italic', marginLeft: 6 },
-
-  // Composer (wraps pending chips + input row in one container)
+  // Composer
+  composerWrap: {
+    paddingHorizontal: 20, paddingBottom: 12, paddingTop: 4,
+    backgroundColor: colors.bg,
+  },
   composer: {
-    borderTopWidth: 1, borderTopColor: colors.border,
+    maxWidth: 760, width: '100%', alignSelf: 'center',
     backgroundColor: colors.surface,
-    paddingHorizontal: 12, paddingTop: 8, paddingBottom: 10,
+    borderRadius: radius.xl,
+    borderWidth: 1, borderColor: colors.border,
+    paddingHorizontal: 12, paddingTop: 8, paddingBottom: 6,
+    shadowColor: colors.shadowColor,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 1,
+    shadowRadius: 2,
+    elevation: 1,
   },
   pendingList: {
-    flexDirection: 'row', flexWrap: 'wrap',
-    paddingHorizontal: 4, paddingBottom: 8,
+    flexDirection: 'row', flexWrap: 'wrap', gap: 5,
+    marginBottom: 8,
   },
   pendingChip: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: colors.inputBg, borderWidth: 1, borderColor: colors.border,
-    borderRadius: 12, paddingHorizontal: 8, paddingVertical: 4,
-    marginRight: 6, marginVertical: 2, maxWidth: 240,
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    backgroundColor: colors.sidebar,
+    borderRadius: radius.sm, paddingHorizontal: 7, paddingVertical: 3,
+    borderWidth: 1, borderColor: colors.borderLight,
+    maxWidth: 220,
   },
-  pendingText: { fontSize: 12, color: colors.primary, fontWeight: '500', marginLeft: 4, marginRight: 4, flexShrink: 1 },
-  pendingRemove: { padding: 2 },
-
-  // Input row (inside composer)
-  inputBar: {
+  pendingText: {
+    fontSize: 11, color: colors.textSecondary, fontWeight: '500',
+    flexShrink: 1,
+  },
+  inputRow: {
     flexDirection: 'row', alignItems: 'flex-end',
+    paddingHorizontal: 4,
   },
+  textInput: {
+    flex: 1, color: colors.text, fontSize: 14,
+    paddingVertical: 6, paddingHorizontal: 0,
+    maxHeight: 140,
+  },
+  composerActions: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingTop: 4,
+  },
+  composerLeft: { flexDirection: 'row', gap: 2 },
   iconBtn: {
-    width: 36, height: 36, borderRadius: 18,
-    alignItems: 'center', justifyContent: 'center', marginRight: 4,
+    width: 28, height: 28, borderRadius: radius.sm,
+    alignItems: 'center', justifyContent: 'center',
   },
   iconBtnActive: { backgroundColor: colors.primary },
-  textInput: {
-    flex: 1, backgroundColor: colors.inputBg, borderRadius: 20,
-    borderWidth: 1, borderColor: colors.border,
-    paddingHorizontal: 16, paddingVertical: 10, color: colors.text, fontSize: 14, maxHeight: 120,
-  },
   sendBtn: {
-    width: 36, height: 36, borderRadius: 18, marginLeft: 8,
+    width: 28, height: 28, borderRadius: radius.sm,
+    backgroundColor: colors.text,
+    alignItems: 'center', justifyContent: 'center',
   },
-  sendBtnInner: {
-    minHeight: 36, width: 36, height: 36, borderRadius: 18,
-    paddingHorizontal: 0, paddingVertical: 0,
+  sendBtnDisabled: { opacity: 0.25 },
+  composerHint: {
+    fontSize: 10, color: colors.textMuted,
+    textAlign: 'center', marginTop: 6,
+    fontFamily: font.mono,
   },
-  sendBtnDisabled: { opacity: 0.3 },
-  emptyState: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  emptyText: { color: colors.textMuted, fontSize: 15 },
+  kbd: {
+    fontSize: 10, color: colors.textSecondary,
+    fontFamily: font.mono, fontWeight: '500',
+  },
 
+  // Empty
+  emptyState: {
+    flex: 1, justifyContent: 'center', alignItems: 'center',
+    paddingHorizontal: 32,
+  },
+  emptyTitle: {
+    fontSize: 18, fontWeight: '500', color: colors.text,
+    letterSpacing: -0.3, marginBottom: 4,
+    fontFamily: font.display,
+  },
+  emptySub: {
+    fontSize: 13, color: colors.textMuted, textAlign: 'center', marginBottom: 16,
+  },
+  emptyBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 12, paddingVertical: 7,
+    borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  emptyBtnText: { fontSize: 12, fontWeight: '500', color: colors.text },
 });

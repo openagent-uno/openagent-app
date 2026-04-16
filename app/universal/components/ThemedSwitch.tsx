@@ -48,43 +48,26 @@ export default function ThemedSwitch({
 }
 
 const styles = StyleSheet.create({
-  webRoot: {
-    padding: 2,
-    borderRadius: 999,
-  },
-  disabled: {
-    opacity: 0.45,
-  },
-  pressed: {
-    opacity: 0.82,
-  },
+  webRoot: { padding: 2, borderRadius: 999 },
+  disabled: { opacity: 0.4 },
+  pressed: { opacity: 0.8 },
   track: {
-    width: 40,
-    height: 24,
-    borderRadius: 999,
-    padding: 3,
-    justifyContent: 'center',
+    width: 32, height: 18, borderRadius: 999,
+    padding: 2, justifyContent: 'center',
+    // @ts-ignore web transition
+    transition: 'background-color 0.18s ease',
   },
-  trackOn: {
-    backgroundColor: colors.primary,
-  },
-  trackOff: {
-    backgroundColor: colors.border,
-  },
+  trackOn: { backgroundColor: colors.primary },
+  trackOff: { backgroundColor: colors.borderStrong },
   thumb: {
-    width: 18,
-    height: 18,
-    borderRadius: 999,
+    width: 14, height: 14, borderRadius: 999,
     backgroundColor: colors.surface,
-    shadowColor: 'rgba(28, 22, 18, 0.22)',
+    shadowColor: 'rgba(26, 25, 21, 0.24)',
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 1,
-    shadowRadius: 2,
+    shadowOpacity: 1, shadowRadius: 2,
+    // @ts-ignore
+    transition: 'transform 0.18s ease',
   },
-  thumbOn: {
-    transform: [{ translateX: 16 }],
-  },
-  thumbOff: {
-    transform: [{ translateX: 0 }],
-  },
+  thumbOn: { transform: [{ translateX: 14 }] },
+  thumbOff: { transform: [{ translateX: 0 }] },
 });

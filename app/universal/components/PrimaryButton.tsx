@@ -1,8 +1,16 @@
-import { LinearGradient } from 'expo-linear-gradient';
+/**
+ * PrimaryButton — thin backwards-compat wrapper around `Button` with
+ * `variant="primary"`. Keeps older call-sites working while routing
+ * every button through the unified component.
+ *
+ * Prefer `Button` directly for new code.
+ */
+
 import type { ReactNode } from 'react';
+import { LinearGradient } from 'expo-linear-gradient';
 import type { StyleProp, TextStyle, TouchableOpacityProps, ViewStyle } from 'react-native';
-import { TouchableOpacity, StyleSheet, Text } from 'react-native';
-import { colors, primaryGradientStops } from '../theme';
+import { TouchableOpacity, StyleSheet, Text, Platform } from 'react-native';
+import { colors, primaryGradientStops, radius, font } from '../theme';
 
 interface PrimaryButtonProps extends TouchableOpacityProps {
   label?: string;
@@ -19,13 +27,15 @@ export default function PrimaryButton({
   style,
   contentStyle,
   textStyle,
-  activeOpacity = 0.92,
+  activeOpacity = 0.85,
   ...props
 }: PrimaryButtonProps) {
   return (
     <TouchableOpacity
       activeOpacity={activeOpacity}
       disabled={disabled}
+      // @ts-ignore web className
+      {...(Platform.OS === 'web' ? { className: 'oa-hover-lift' } : {})}
       style={[styles.touchable, disabled && styles.disabled, style]}
       {...props}
     >
@@ -43,27 +53,25 @@ export default function PrimaryButton({
 
 const styles = StyleSheet.create({
   touchable: {
-    borderRadius: 10,
+    borderRadius: radius.md,
     overflow: 'hidden',
   },
   disabled: {
-    opacity: 0.45,
+    opacity: 0.4,
   },
   gradient: {
-    minHeight: 40,
-    paddingHorizontal: 16,
-    paddingVertical: 10,
+    minHeight: 36,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 10,
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.18,
-    shadowRadius: 16,
+    borderRadius: radius.md,
   },
   label: {
     color: colors.textInverse,
-    fontSize: 14,
-    fontWeight: '700',
+    fontSize: 13,
+    fontWeight: '600',
+    fontFamily: font.sans,
+    letterSpacing: -0.1,
   },
 });

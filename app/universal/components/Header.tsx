@@ -1,11 +1,7 @@
-import { colors } from '../theme';
+import { colors, font, radius } from '../theme';
 /**
  * App header with drag area + account switcher.
- *
- * - macOS: 78px left padding for traffic light buttons
- * - Windows: ~140px right padding for window controls
- * - Linux: similar to Windows
- * - Entire bar is draggable; interactive elements are no-drag zones
+ * Refined editorial style — subtle, minimal, readable at a glance.
  */
 
 import Feather from '@expo/vector-icons/Feather';
@@ -18,7 +14,6 @@ import { useDrawer } from '../stores/drawer';
 import { useThemeStore } from '../stores/theme';
 import { useConfirm } from './ConfirmDialog';
 
-// Detect desktop platform from preload bridge
 function getDesktopPlatform(): 'darwin' | 'win32' | 'linux' | null {
   if (Platform.OS !== 'web') return null;
   const p = (window as any).desktop?.platform;
@@ -69,7 +64,6 @@ export default function Header() {
 
   const handleAdd = () => {
     setDropdownOpen(false);
-    // Disconnect so the login screen doesn't auto-redirect back to tabs
     useConnection.getState().disconnect();
     router.replace('/');
   };
@@ -80,10 +74,8 @@ export default function Header() {
       // @ts-ignore web CSS
       { WebkitAppRegion: 'drag' },
     ]}>
-      {/* macOS traffic light padding */}
       {platform === 'darwin' && <View style={styles.macPadding} />}
 
-      {/* Hamburger button (narrow screens only) */}
       {!isWide && (
         <TouchableOpacity
           onPress={requestToggle}
@@ -93,11 +85,10 @@ export default function Header() {
             { WebkitAppRegion: 'no-drag' },
           ]}
         >
-          <Feather name="menu" size={18} color={colors.textSecondary} />
+          <Feather name="menu" size={16} color={colors.textSecondary} />
         </TouchableOpacity>
       )}
 
-      {/* Center: account switcher */}
       <View style={styles.center}>
         <TouchableOpacity
           onPress={() => setDropdownOpen(!dropdownOpen)}
@@ -109,11 +100,10 @@ export default function Header() {
         >
           <View style={[styles.statusDot, isConnected ? styles.dotGreen : styles.dotGray]} />
           <Text style={styles.accountName} numberOfLines={1}>{displayName}</Text>
-          <Feather name="chevron-down" size={14} color={colors.textMuted} style={styles.chevron} />
+          <Feather name="chevron-down" size={12} color={colors.textMuted} style={styles.chevron} />
         </TouchableOpacity>
       </View>
 
-      {/* Add account button */}
       <TouchableOpacity
         onPress={handleAdd}
         style={[
@@ -122,12 +112,9 @@ export default function Header() {
           { WebkitAppRegion: 'no-drag' },
         ]}
       >
-        <Feather name="plus" size={16} color={colors.primary} />
+        <Feather name="plus" size={14} color={colors.textSecondary} />
       </TouchableOpacity>
 
-      {/* Dark mode toggle — desktop/wide-screen only. Sits before the
-          Windows/Linux window-control padding so it stays clear of
-          the min/max/close buttons. */}
       {isWide && (
         <TouchableOpacity
           onPress={toggleTheme}
@@ -140,19 +127,16 @@ export default function Header() {
         >
           <Feather
             name={themeMode === 'dark' ? 'sun' : 'moon'}
-            size={15}
+            size={14}
             color={colors.textSecondary}
           />
         </TouchableOpacity>
       )}
 
-      {/* Windows/Linux window button padding */}
       {(platform === 'win32' || platform === 'linux') && <View style={styles.winPadding} />}
 
-      {/* Dropdown */}
       {dropdownOpen && (
         <>
-          {/* Backdrop to close on outside click */}
           <Pressable
             style={styles.backdrop}
             onPress={() => setDropdownOpen(false)}
@@ -169,7 +153,7 @@ export default function Header() {
                 >
                   <Feather
                     name={acc.id === activeAccountId ? 'check-circle' : 'circle'}
-                    size={14}
+                    size={13}
                     color={acc.id === activeAccountId ? colors.primary : colors.textMuted}
                     style={styles.radioBtn}
                   />
@@ -182,13 +166,13 @@ export default function Header() {
                   onPress={() => { void handleRemove(acc.id, acc.name); }}
                   style={styles.removeBtn}
                 >
-                  <Feather name="x" size={14} color={colors.textMuted} />
+                  <Feather name="x" size={13} color={colors.textMuted} />
                 </TouchableOpacity>
               </View>
             ))}
             <TouchableOpacity style={styles.dropdownAdd} onPress={handleAdd}>
               <View style={styles.dropdownAddContent}>
-                <Feather name="plus" size={14} color={colors.primary} />
+                <Feather name="plus" size={13} color={colors.primary} />
                 <Text style={styles.dropdownAddText}>Add Agent</Text>
               </View>
             </TouchableOpacity>
@@ -201,150 +185,100 @@ export default function Header() {
 
 const styles = StyleSheet.create({
   header: {
-    height: 38,
+    height: 40,
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.sidebar,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: colors.borderLight,
     position: 'relative',
     zIndex: 200,
   },
   macPadding: { width: 78 },
   winPadding: { width: 140 },
   hamburgerBtn: {
-    width: 32,
-    height: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 8,
-    borderRadius: 6,
+    width: 28, height: 28,
+    alignItems: 'center', justifyContent: 'center',
+    marginLeft: 8, borderRadius: radius.sm,
   },
   center: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+    flex: 1, alignItems: 'center', justifyContent: 'center',
   },
   switcherBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 6,
+    flexDirection: 'row', alignItems: 'center',
+    paddingHorizontal: 10, paddingVertical: 4,
+    borderRadius: radius.sm,
   },
   statusDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    marginRight: 7,
+    width: 6, height: 6, borderRadius: 3, marginRight: 8,
   },
   dotGreen: { backgroundColor: colors.success },
-  dotGray: { backgroundColor: colors.border },
+  dotGray: { backgroundColor: colors.borderStrong },
   accountName: {
-    fontSize: 13,
-    fontWeight: '500',
-    color: colors.text,
-    maxWidth: 200,
+    fontSize: 12.5, fontWeight: '500', color: colors.text,
+    maxWidth: 220, letterSpacing: -0.1,
   },
-  chevron: {
-    marginLeft: 5,
-  },
+  chevron: { marginLeft: 4 },
   addBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 8,
-    backgroundColor: colors.primaryLight,
+    width: 24, height: 24, borderRadius: radius.sm,
+    alignItems: 'center', justifyContent: 'center',
+    marginRight: 6,
   },
   themeBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 24, height: 24, borderRadius: radius.sm,
+    alignItems: 'center', justifyContent: 'center',
     marginRight: 8,
   },
-  // Dropdown
   backdrop: {
-    position: 'absolute',
-    top: 38,
-    left: 0,
-    right: 0,
-    bottom: -1000,
+    position: 'absolute', top: 40, left: 0, right: 0, bottom: -1000,
     zIndex: 999,
   },
   dropdown: {
-    position: 'absolute',
-    top: 36,
-    left: '50%',
+    position: 'absolute', top: 40, left: '50%',
     // @ts-ignore web transform
-    transform: [{ translateX: -120 }],
-    width: 240,
+    transform: [{ translateX: -130 }],
+    width: 260,
     backgroundColor: colors.surface,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: colors.border,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
+    borderRadius: radius.lg,
+    borderWidth: 1, borderColor: colors.border,
+    shadowColor: 'rgba(0,0,0,0.12)',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 1, shadowRadius: 32,
     // @ts-ignore
     elevation: 8,
     zIndex: 1000,
     paddingVertical: 4,
+    // @ts-ignore web className
+    ...(Platform.OS === 'web' ? { className: 'oa-fade-in' } : {}),
   },
   dropdownRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: 'row', alignItems: 'center',
     paddingRight: 4,
   },
   dropdownItem: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
+    flex: 1, flexDirection: 'row', alignItems: 'center',
+    paddingVertical: 8, paddingHorizontal: 10,
   },
-  radioBtn: {
-    marginRight: 8,
-  },
+  radioBtn: { marginRight: 10 },
   dropdownInfo: { flex: 1 },
   dropdownName: {
-    fontSize: 13,
-    color: colors.text,
-    fontWeight: '500',
+    fontSize: 12.5, color: colors.text, fontWeight: '500',
+    letterSpacing: -0.1,
   },
   dropdownHost: {
-    fontSize: 11,
-    color: colors.textMuted,
-    marginTop: 1,
+    fontSize: 10.5, color: colors.textMuted, marginTop: 1,
+    fontFamily: font.mono,
   },
-  removeBtn: {
-    padding: 6,
-  },
+  removeBtn: { padding: 6 },
   emptyDropdown: {
-    padding: 12,
-    fontSize: 12,
-    color: colors.textMuted,
-    textAlign: 'center',
+    padding: 14, fontSize: 12, color: colors.textMuted, textAlign: 'center',
   },
   dropdownAdd: {
-    borderTopWidth: 1,
-    borderTopColor: colors.borderLight,
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    marginTop: 2,
+    borderTopWidth: 1, borderTopColor: colors.borderLight,
+    paddingVertical: 8, paddingHorizontal: 10, marginTop: 2,
   },
-  dropdownAddContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
+  dropdownAddContent: { flexDirection: 'row', alignItems: 'center' },
   dropdownAddText: {
-    fontSize: 12,
-    color: colors.primary,
-    fontWeight: '500',
-    marginLeft: 8,
+    fontSize: 12, color: colors.primary, fontWeight: '500', marginLeft: 8,
   },
 });

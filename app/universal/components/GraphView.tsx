@@ -141,7 +141,9 @@ export default function GraphView({ data, onSelectNode, width, height }: Props) 
 
   // Camera state
   const camRef = useRef({ x: 0, y: 0, zoom: 1 });
-  // Interaction state
+  // Interaction state. `moved` tracks whether the pointer travelled far
+  // enough between down and up to count as a drag — used below to
+  // suppress the node-open action on drag release.
   const dragRef = useRef<{
     type: 'node' | 'pan' | null;
     nodeIdx: number;
@@ -149,7 +151,12 @@ export default function GraphView({ data, onSelectNode, width, height }: Props) 
     startY: number;
     camStartX: number;
     camStartY: number;
-  }>({ type: null, nodeIdx: -1, startX: 0, startY: 0, camStartX: 0, camStartY: 0 });
+    moved: boolean;
+  }>({ type: null, nodeIdx: -1, startX: 0, startY: 0, camStartX: 0, camStartY: 0, moved: false });
+  // Pixel threshold — mouse must travel > this many screen pixels between
+  // mousedown and mouseup to be treated as a drag rather than a click.
+  // A few pixels of jitter during a normal click is expected.
+  const CLICK_THRESHOLD_PX = 4;
   const hoverRef = useRef(-1);
 
   const [containerSize, setContainerSize] = useState({ w: width || 600, h: height || 400 });
@@ -232,20 +239,20 @@ export default function GraphView({ data, onSelectNode, width, height }: Props) 
       }
       ctx.stroke();
 
-      // Nodes
+      // Nodes — solid fill on hover, 72% alpha otherwise (softer in-field).
       for (let i = 0; i < nodes.length; i++) {
         const n = nodes[i];
         const isHover = i === hoverRef.current;
         const c = tagColor(n.tags, palette);
         ctx.beginPath();
         ctx.arc(n.x, n.y, n.radius + (isHover ? 2 : 0), 0, Math.PI * 2);
-        ctx.fillStyle = isHover ? c : c + 'D8';
+        ctx.fillStyle = isHover ? c : c + 'B8';
         ctx.fill();
-        if (isHover) {
-          ctx.strokeStyle = palette.graphRing;
-          ctx.lineWidth = 2 / cam.zoom;
-          ctx.stroke();
-        }
+        // Thin ring on every node in the border color so they pop against
+        // the warm background; brand ring on hover for emphasis.
+        ctx.strokeStyle = isHover ? palette.graphRing : palette.graphEdge;
+        ctx.lineWidth = (isHover ? 2 : 1) / cam.zoom;
+        ctx.stroke();
       }
 
       // Labels (only when zoomed in enough or hovered)
@@ -282,11 +289,11 @@ export default function GraphView({ data, onSelectNode, width, height }: Props) 
     const cam = camRef.current;
 
     if (idx >= 0) {
-      dragRef.current = { type: 'node', nodeIdx: idx, startX: sx, startY: sy, camStartX: 0, camStartY: 0 };
+      dragRef.current = { type: 'node', nodeIdx: idx, startX: sx, startY: sy, camStartX: 0, camStartY: 0, moved: false };
       simRef.current.nodes[idx].pinned = true;
       alphaRef.current = Math.max(alphaRef.current, 0.3);
     } else {
-      dragRef.current = { type: 'pan', nodeIdx: -1, startX: sx, startY: sy, camStartX: cam.x, camStartY: cam.y };
+      dragRef.current = { type: 'pan', nodeIdx: -1, startX: sx, startY: sy, camStartX: cam.x, camStartY: cam.y, moved: false };
     }
   }, [screen2world, hitTest]);
 
@@ -296,12 +303,27 @@ export default function GraphView({ data, onSelectNode, width, height }: Props) 
     const drag = dragRef.current;
     const cam = camRef.current;
 
+    // Promote to "drag" once the pointer moves beyond the click threshold.
+    // Tiny jitter between mousedown and mouseup still counts as a click.
+    if (drag.type && !drag.moved) {
+      const dx = sx - drag.startX;
+      const dy = sy - drag.startY;
+      if (dx * dx + dy * dy > CLICK_THRESHOLD_PX * CLICK_THRESHOLD_PX) {
+        drag.moved = true;
+      }
+    }
+
     if (drag.type === 'node') {
-      const w = screen2world(sx, sy);
-      const n = simRef.current.nodes[drag.nodeIdx];
-      n.x = w.x;
-      n.y = w.y;
-      alphaRef.current = Math.max(alphaRef.current, 0.1);
+      // Only actually move the node once this is a drag — otherwise the
+      // simulation snaps into place the instant we mousedown on a node,
+      // which feels twitchy.
+      if (drag.moved) {
+        const w = screen2world(sx, sy);
+        const n = simRef.current.nodes[drag.nodeIdx];
+        n.x = w.x;
+        n.y = w.y;
+        alphaRef.current = Math.max(alphaRef.current, 0.1);
+      }
     } else if (drag.type === 'pan') {
       cam.x = drag.camStartX + (sx - drag.startX) / cam.zoom;
       cam.y = drag.camStartY + (sy - drag.startY) / cam.zoom;
@@ -317,10 +339,14 @@ export default function GraphView({ data, onSelectNode, width, height }: Props) 
     if (drag.type === 'node') {
       const n = simRef.current.nodes[drag.nodeIdx];
       n.pinned = false;
-      // If barely moved → treat as click
-      if (onSelectNode) onSelectNode(n.id);
+      // Only open the note when the user released on the same node they
+      // clicked, without dragging past the click threshold. A drag must
+      // not trigger navigation.
+      if (!drag.moved && onSelectNode) {
+        onSelectNode(n.id);
+      }
     }
-    dragRef.current = { type: null, nodeIdx: -1, startX: 0, startY: 0, camStartX: 0, camStartY: 0 };
+    dragRef.current = { type: null, nodeIdx: -1, startX: 0, startY: 0, camStartX: 0, camStartY: 0, moved: false };
   }, [onSelectNode]);
 
   const onWheel = useCallback((e: React.WheelEvent) => {

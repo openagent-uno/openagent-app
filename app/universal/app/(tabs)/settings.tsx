@@ -1,4 +1,4 @@
-import { colors } from '../../theme';
+import { colors, font, radius } from '../../theme';
 /**
  * Settings screen — agent identity, channels, dream mode, auto-update, connection.
  * Uses a responsive sidebar to group settings into categories (fixed on desktop,
@@ -16,7 +16,9 @@ import { useConfig } from '../../stores/config';
 import { useThemeStore } from '../../stores/theme';
 import { setBaseUrl, triggerUpdate, triggerRestart } from '../../services/api';
 import { useConfirm } from '../../components/ConfirmDialog';
-import PrimaryButton from '../../components/PrimaryButton';
+import Button from '../../components/Button';
+import Card from '../../components/Card';
+import TabStrip from '../../components/TabStrip';
 import ResponsiveSidebar from '../../components/ResponsiveSidebar';
 import ThemedSwitch from '../../components/ThemedSwitch';
 
@@ -262,7 +264,7 @@ export default function SettingsScreen() {
   const renderIdentity = () => (
     <>
       <Text style={styles.sectionTitle}>Agent Identity</Text>
-      <View style={styles.card}>
+      <Card>
         <Text style={styles.label}>Name</Text>
         <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="my-agent" placeholderTextColor={colors.textMuted} />
         <Text style={[styles.label, { marginTop: 12 }]}>System Prompt</Text>
@@ -272,8 +274,8 @@ export default function SettingsScreen() {
             onChange={(e: any) => setSystemPrompt(e.target.value)}
             rows={6}
             style={{
-              backgroundColor: colors.inputBg, borderRadius: 8, border: `1px solid ${colors.border}`,
-              padding: 10, color: colors.text, fontSize: 13, fontFamily: 'monospace',
+              backgroundColor: colors.inputBg, borderRadius: radius.md, border: `1px solid ${colors.border}`,
+              padding: 10, color: colors.text, fontSize: 13, fontFamily: font.mono,
               resize: 'vertical', outline: 'none', width: '100%', boxSizing: 'border-box',
             } as any}
           />
@@ -285,14 +287,14 @@ export default function SettingsScreen() {
           saved={saved === 'identity'}
           onPress={() => saveSection('name', name, 'identity').then(() => saveSection('system_prompt', systemPrompt, 'identity'))}
         />
-      </View>
+      </Card>
     </>
   );
 
   const renderAppearance = () => (
     <>
       <Text style={styles.sectionTitle}>Appearance</Text>
-      <View style={styles.card}>
+      <Card>
         <View style={styles.toggleRow}>
           <View style={{ flex: 1, paddingRight: 12 }}>
             <Text style={styles.toggleLabel}>Dark mode</Text>
@@ -306,7 +308,7 @@ export default function SettingsScreen() {
             onValueChange={(v) => setThemeMode(v ? 'dark' : 'light')}
           />
         </View>
-      </View>
+      </Card>
     </>
   );
 
@@ -314,7 +316,7 @@ export default function SettingsScreen() {
   // sub-tab strip switches between Gateway/Telegram/Discord/WhatsApp.
 
   const renderGatewayPanel = () => (
-    <View style={styles.card}>
+    <Card>
       <Text style={styles.channelSubtitle}>
         Websocket endpoint used by the OpenAgent app and CLI to talk to this agent.
       </Text>
@@ -332,11 +334,11 @@ export default function SettingsScreen() {
 
       <SaveBtn label="Save Gateway" saved={saved === 'gateway'} onPress={saveGateway} />
       <Text style={styles.restartHint}>Restart required after changes</Text>
-    </View>
+    </Card>
   );
 
   const renderTelegramPanel = () => (
-    <View style={styles.card}>
+    <Card>
       <Text style={styles.label}>Bot Token</Text>
       <TextInput style={styles.input} value={tgToken} onChangeText={setTgToken} placeholder="${TELEGRAM_BOT_TOKEN}" placeholderTextColor={colors.textMuted} secureTextEntry />
       <Text style={[styles.label, { marginTop: 8 }]}>Allowed User IDs (comma-separated)</Text>
@@ -347,11 +349,11 @@ export default function SettingsScreen() {
 
       <SaveBtn label="Save Telegram" saved={saved === 'telegram'} onPress={saveTelegram} />
       <Text style={styles.restartHint}>Restart required after changes</Text>
-    </View>
+    </Card>
   );
 
   const renderDiscordPanel = () => (
-    <View style={styles.card}>
+    <Card>
       <Text style={styles.label}>Bot Token</Text>
       <TextInput style={styles.input} value={dcToken} onChangeText={setDcToken} placeholder="${DISCORD_BOT_TOKEN}" placeholderTextColor={colors.textMuted} secureTextEntry />
       <Text style={[styles.label, { marginTop: 8 }]}>Allowed User IDs (comma-separated)</Text>
@@ -362,11 +364,11 @@ export default function SettingsScreen() {
 
       <SaveBtn label="Save Discord" saved={saved === 'discord'} onPress={saveDiscord} />
       <Text style={styles.restartHint}>Restart required after changes</Text>
-    </View>
+    </Card>
   );
 
   const renderWhatsappPanel = () => (
-    <View style={styles.card}>
+    <Card>
       <Text style={styles.label}>Instance ID</Text>
       <TextInput style={styles.input} value={waId} onChangeText={setWaId} placeholder="${GREEN_API_ID}" placeholderTextColor={colors.textMuted} />
       <Text style={[styles.label, { marginTop: 8 }]}>API Token</Text>
@@ -379,36 +381,20 @@ export default function SettingsScreen() {
 
       <SaveBtn label="Save WhatsApp" saved={saved === 'whatsapp'} onPress={saveWhatsapp} />
       <Text style={styles.restartHint}>Restart required after changes</Text>
-    </View>
+    </Card>
   );
 
   const renderChannels = () => (
     <>
       <Text style={styles.sectionTitle}>Channels</Text>
 
-      {/* Sub-tab strip */}
-      <View style={styles.channelTabs}>
-        {CHANNEL_TABS.map((tab) => {
-          const isActive = tab.id === activeChannelTab;
-          return (
-            <TouchableOpacity
-              key={tab.id}
-              style={[styles.channelTab, isActive && styles.channelTabActive]}
-              onPress={() => setActiveChannelTab(tab.id)}
-            >
-              <Feather
-                name={tab.icon}
-                size={13}
-                color={isActive ? colors.textInverse : colors.textSecondary}
-                style={styles.channelTabIcon}
-              />
-              <Text style={[styles.channelTabLabel, isActive && styles.channelTabLabelActive]}>
-                {tab.label}
-              </Text>
-            </TouchableOpacity>
-          );
-        })}
-      </View>
+      <TabStrip
+        tabs={CHANNEL_TABS}
+        active={activeChannelTab}
+        onChange={setActiveChannelTab}
+        fullWidth
+        style={{ marginBottom: 12 }}
+      />
 
       {activeChannelTab === 'gateway' && renderGatewayPanel()}
       {activeChannelTab === 'telegram' && renderTelegramPanel()}
@@ -420,7 +406,7 @@ export default function SettingsScreen() {
   const renderDream = () => (
     <>
       <Text style={styles.sectionTitle}>Dream Mode</Text>
-      <View style={styles.card}>
+      <Card>
         <View style={styles.toggleRow}>
           <Text style={styles.toggleLabel}>Enabled</Text>
           <ThemedSwitch value={dreamEnabled} onValueChange={setDreamEnabled} />
@@ -432,26 +418,30 @@ export default function SettingsScreen() {
           saved={saved === 'dream'}
           onPress={() => saveSection('dream_mode', { enabled: dreamEnabled, time: dreamTime }, 'dream')}
         />
-      </View>
+      </Card>
     </>
   );
 
   const renderAutoUpdate = () => (
     <>
       <Text style={styles.sectionTitle}>Auto-Update</Text>
-      <View style={styles.card}>
+      <Card>
         <View style={styles.toggleRow}>
           <Text style={styles.toggleLabel}>Enabled</Text>
           <ThemedSwitch value={autoUpdateEnabled} onValueChange={setAutoUpdateEnabled} />
         </View>
         <Text style={styles.label}>Mode</Text>
-        <View style={styles.segmented}>
-          {['auto', 'notify', 'manual'].map((m) => (
-            <TouchableOpacity key={m} style={[styles.segment, autoUpdateMode === m && styles.segmentActive]} onPress={() => setAutoUpdateMode(m)}>
-              <Text style={[styles.segmentText, autoUpdateMode === m && styles.segmentTextActive]}>{m}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+        <TabStrip
+          tabs={[
+            { id: 'auto', label: 'Auto' },
+            { id: 'notify', label: 'Notify' },
+            { id: 'manual', label: 'Manual' },
+          ]}
+          active={autoUpdateMode}
+          onChange={(v) => setAutoUpdateMode(v)}
+          fullWidth
+          size="sm"
+        />
         <Text style={[styles.label, { marginTop: 12 }]}>Check Interval (cron)</Text>
         <TextInput style={styles.input} value={autoUpdateInterval} onChangeText={setAutoUpdateInterval} placeholder="17 */6 * * *" placeholderTextColor={colors.textMuted} />
         <SaveBtn
@@ -459,62 +449,77 @@ export default function SettingsScreen() {
           saved={saved === 'auto_update'}
           onPress={() => saveSection('auto_update', { enabled: autoUpdateEnabled, mode: autoUpdateMode, check_interval: autoUpdateInterval }, 'auto_update')}
         />
-      </View>
+      </Card>
     </>
   );
 
   const renderControls = () => (
     <>
       <Text style={styles.sectionTitle}>Controls</Text>
-      <View style={styles.card}>
-        <PrimaryButton style={{ marginBottom: 8 }} onPress={async () => {
-          try {
-            const res = await triggerUpdate();
-            if (res.updated) {
-              setSaved('update');
-              setTimeout(() => setSaved(null), 5000);
-              alert(`Updated: v${res.old} → v${res.new}. Restarting...`);
-            } else {
-              alert(`Already up-to-date (v${res.version}).`);
-            }
-          } catch (e: any) { alert(`Update failed: ${e.message}`); }
-        }}>
-          <Text style={styles.saveBtnText}>Check for Updates</Text>
-        </PrimaryButton>
-        <PrimaryButton style={{ backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border }} onPress={async () => {
-          const confirmed = await confirm({
-            title: 'Restart Agent',
-            message: 'This will restart the OpenAgent server. You may need to reconnect.',
-            confirmLabel: 'Restart',
-          });
-          if (!confirmed) return;
-          try {
-            await triggerRestart();
-          } catch { /* connection will drop */ }
-        }}>
-          <Text style={[styles.saveBtnText, { color: colors.text }]}>Restart Agent</Text>
-        </PrimaryButton>
-      </View>
+      <Card>
+        <Button
+          variant="primary"
+          label="Check for Updates"
+          fullWidth
+          style={{ marginBottom: 8 }}
+          onPress={async () => {
+            try {
+              const res = await triggerUpdate();
+              if (res.updated) {
+                setSaved('update');
+                setTimeout(() => setSaved(null), 5000);
+                alert(`Updated: v${res.old} → v${res.new}. Restarting...`);
+              } else {
+                alert(`Already up-to-date (v${res.version}).`);
+              }
+            } catch (e: any) { alert(`Update failed: ${e.message}`); }
+          }}
+        />
+        <Button
+          variant="secondary"
+          label="Restart Agent"
+          fullWidth
+          onPress={async () => {
+            const confirmed = await confirm({
+              title: 'Restart Agent',
+              message: 'This will restart the OpenAgent server. You may need to reconnect.',
+              confirmLabel: 'Restart',
+            });
+            if (!confirmed) return;
+            try {
+              await triggerRestart();
+            } catch { /* connection will drop */ }
+          }}
+        />
+      </Card>
     </>
   );
 
   const renderConnection = () => (
     <>
       <Text style={styles.sectionTitle}>Connection</Text>
-      <View style={styles.card}>
+      <Card>
         <Row label="Account" value={activeAccount?.name || '—'} />
         <Row label="Agent" value={agentName || '—'} />
         <Row label="Version" value={agentVersion || '—'} />
         <Row label="Host" value={connConfig ? `${connConfig.host}:${connConfig.port}` : '—'} />
-      </View>
+      </Card>
 
-      <TouchableOpacity style={styles.disconnectBtn} onPress={handleDisconnect}>
-        <Text style={styles.disconnectText}>Disconnect</Text>
-      </TouchableOpacity>
+      <Button
+        variant="secondary"
+        label="Disconnect"
+        fullWidth
+        onPress={handleDisconnect}
+        style={{ marginTop: 14 }}
+      />
       {activeAccountId && (
-        <TouchableOpacity style={styles.removeBtn} onPress={() => { void handleRemove(); }}>
-          <Text style={styles.removeText}>Remove Account</Text>
-        </TouchableOpacity>
+        <Button
+          variant="danger"
+          label="Remove Account"
+          fullWidth
+          onPress={() => { void handleRemove(); }}
+          style={{ marginTop: 8 }}
+        />
       )}
     </>
   );
@@ -543,12 +548,14 @@ export default function SettingsScreen() {
 
 function SaveBtn({ label, saved, onPress }: { label: string; saved: boolean; onPress: () => void }) {
   return (
-    <PrimaryButton style={styles.saveBtn} onPress={onPress}>
-      <View style={styles.saveBtnContent}>
-        {saved && <Feather name="check" size={14} color={colors.textInverse} />}
-        <Text style={[styles.saveBtnText, saved && styles.saveBtnTextWithIcon]}>{saved ? 'Saved' : label}</Text>
-      </View>
-    </PrimaryButton>
+    <Button
+      variant="primary"
+      label={saved ? 'Saved' : label}
+      icon={saved ? 'check' : undefined}
+      onPress={onPress}
+      style={styles.saveBtn}
+      fullWidth
+    />
   );
 }
 
@@ -563,81 +570,107 @@ function Row({ label, value }: { label: string; value: string }) {
 
 const styles = StyleSheet.create({
   // Sidebar
-  sidebarInner: { flex: 1, padding: 12 },
+  sidebarInner: { flex: 1, padding: 10 },
   sidebarTitle: {
-    fontSize: 11, fontWeight: '700', color: colors.textMuted,
-    textTransform: 'uppercase', letterSpacing: 0.5,
-    paddingHorizontal: 8, paddingVertical: 8, marginBottom: 4,
+    fontSize: 10, fontWeight: '600', color: colors.textMuted,
+    textTransform: 'uppercase', letterSpacing: 1,
+    paddingHorizontal: 8, paddingVertical: 6, marginBottom: 4,
   },
   categoryList: { flex: 1 },
   categoryItem: {
     flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 10, paddingHorizontal: 10,
-    borderRadius: 8, marginBottom: 2,
+    paddingVertical: 7, paddingHorizontal: 10,
+    borderRadius: radius.sm, marginBottom: 1,
+    position: 'relative',
   },
-  categoryActive: { backgroundColor: colors.primaryLight },
+  categoryActive: { backgroundColor: colors.hover },
   categoryIcon: { marginRight: 10 },
   categoryTextWrap: { flex: 1 },
-  categoryLabel: { fontSize: 13, color: colors.textSecondary, fontWeight: '500' },
-  categoryLabelActive: { color: colors.primary, fontWeight: '600' },
-  categoryDesc: { fontSize: 11, color: colors.textMuted, marginTop: 1 },
+  categoryLabel: { fontSize: 12.5, color: colors.textSecondary, fontWeight: '400' },
+  categoryLabelActive: { color: colors.text, fontWeight: '500' },
+  categoryDesc: { fontSize: 10.5, color: colors.textMuted, marginTop: 1 },
 
   // Main content
   container: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: 24, maxWidth: 500, width: '100%', alignSelf: 'center' },
-  sectionTitle: { fontSize: 13, fontWeight: '600', color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 },
-  card: { backgroundColor: colors.surface, borderRadius: 10, borderWidth: 1, borderColor: colors.border, padding: 16 },
-  label: { fontSize: 12, fontWeight: '600', color: colors.textSecondary, marginBottom: 4 },
-  input: {
-    backgroundColor: colors.inputBg, borderRadius: 8, borderWidth: 1, borderColor: colors.border,
-    padding: 10, color: colors.text, fontSize: 14,
+  content: { padding: 24, maxWidth: 560, width: '100%', alignSelf: 'center' },
+  sectionTitle: {
+    fontSize: 18, fontWeight: '500', color: colors.text,
+    marginBottom: 14, fontFamily: font.display, letterSpacing: -0.3,
   },
-  toggleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  toggleLabel: { fontSize: 14, color: colors.text },
-  segmented: { flexDirection: 'row', borderRadius: 8, overflow: 'hidden', borderWidth: 1, borderColor: colors.border },
-  segment: { flex: 1, paddingVertical: 8, alignItems: 'center', backgroundColor: colors.inputBg },
-  segmentActive: { backgroundColor: colors.primary },
-  segmentText: { fontSize: 12, color: colors.textSecondary, fontWeight: '500' },
-  segmentTextActive: { color: colors.textInverse },
-  saveBtn: { marginTop: 16 },
+  card: {
+    backgroundColor: colors.surface, borderRadius: radius.lg,
+    borderWidth: 1, borderColor: colors.border, padding: 16,
+  },
+  label: {
+    fontSize: 10, fontWeight: '600', color: colors.textSecondary,
+    marginBottom: 5, textTransform: 'uppercase', letterSpacing: 0.5,
+  },
+  input: {
+    backgroundColor: colors.inputBg, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.border,
+    paddingHorizontal: 11, paddingVertical: 9,
+    color: colors.text, fontSize: 13, fontFamily: font.mono,
+  },
+  toggleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
+  toggleLabel: { fontSize: 13, color: colors.text, fontWeight: '500' },
+  segmented: {
+    flexDirection: 'row', borderRadius: radius.md, overflow: 'hidden',
+    borderWidth: 1, borderColor: colors.border, padding: 2,
+    backgroundColor: colors.sidebar, gap: 2,
+  },
+  segment: { flex: 1, paddingVertical: 6, alignItems: 'center', borderRadius: radius.sm },
+  segmentActive: { backgroundColor: colors.surface, shadowColor: colors.shadowColor, shadowOffset: { width: 0, height: 1 }, shadowOpacity: 1, shadowRadius: 2 },
+  segmentText: { fontSize: 11, color: colors.textMuted, fontWeight: '500' },
+  segmentTextActive: { color: colors.text, fontWeight: '600' },
+  saveBtn: { marginTop: 14 },
   saveBtnContent: { flexDirection: 'row', alignItems: 'center' },
-  saveBtnText: { color: colors.textInverse, fontSize: 14, fontWeight: '700' },
+  saveBtnText: { color: colors.textInverse, fontSize: 13, fontWeight: '600' },
   saveBtnTextWithIcon: { marginLeft: 6 },
-  row: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.borderLight },
-  rowLabel: { fontSize: 14, color: colors.textSecondary },
-  rowValue: { fontSize: 14, color: colors.text, fontWeight: '500' },
-  disconnectBtn: { marginTop: 16, backgroundColor: colors.surface, borderRadius: 8, borderWidth: 1, borderColor: colors.border, padding: 12, alignItems: 'center' },
-  disconnectText: { color: colors.textSecondary, fontSize: 14, fontWeight: '500' },
-  removeBtn: { marginTop: 8, backgroundColor: colors.surface, borderRadius: 8, borderWidth: 1, borderColor: colors.error, padding: 12, alignItems: 'center' },
-  removeText: { color: colors.error, fontSize: 14, fontWeight: '500' },
-  channelTitle: { fontSize: 15, fontWeight: '600', color: colors.text, marginBottom: 8, marginTop: 4 },
-  channelDivider: { height: 1, backgroundColor: colors.borderLight, marginVertical: 16 },
-  channelSubtitle: { fontSize: 12, color: colors.textMuted, lineHeight: 17, marginBottom: 4 },
-  channelHint: { fontSize: 11, color: colors.textMuted, marginTop: 8, lineHeight: 16 },
-  restartHint: { fontSize: 11, color: colors.textMuted, textAlign: 'center', marginTop: 8 },
+  row: {
+    flexDirection: 'row', justifyContent: 'space-between',
+    paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.borderLight,
+  },
+  rowLabel: { fontSize: 12.5, color: colors.textSecondary },
+  rowValue: { fontSize: 12.5, color: colors.text, fontWeight: '500', fontFamily: font.mono },
+  disconnectBtn: {
+    marginTop: 14, backgroundColor: colors.surface,
+    borderRadius: radius.md, borderWidth: 1, borderColor: colors.border,
+    padding: 11, alignItems: 'center',
+  },
+  disconnectText: { color: colors.textSecondary, fontSize: 13, fontWeight: '500' },
+  removeBtn: {
+    marginTop: 8, backgroundColor: colors.surface,
+    borderRadius: radius.md, borderWidth: 1, borderColor: colors.errorBorder,
+    padding: 11, alignItems: 'center',
+  },
+  removeText: { color: colors.error, fontSize: 13, fontWeight: '500' },
+  channelTitle: { fontSize: 14, fontWeight: '600', color: colors.text, marginBottom: 8, marginTop: 4 },
+  channelDivider: { height: 1, backgroundColor: colors.borderLight, marginVertical: 14 },
+  channelSubtitle: { fontSize: 11.5, color: colors.textMuted, lineHeight: 17, marginBottom: 4 },
+  channelHint: { fontSize: 10.5, color: colors.textMuted, marginTop: 6, lineHeight: 15 },
+  restartHint: { fontSize: 10.5, color: colors.textMuted, textAlign: 'center', marginTop: 8, fontStyle: 'italic' },
 
-  // Channel sub-tab strip (Gateway / Telegram / Discord / WhatsApp)
+  // Channel sub-tab strip
   channelTabs: {
     flexDirection: 'row',
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 10,
-    padding: 4,
-    marginBottom: 12,
-    gap: 4,
+    backgroundColor: colors.sidebar,
+    borderWidth: 1, borderColor: colors.border,
+    borderRadius: radius.md, padding: 2,
+    marginBottom: 12, gap: 2,
   },
   channelTab: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    borderRadius: 6,
+    flex: 1, flexDirection: 'row',
+    alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 7, paddingHorizontal: 6,
+    borderRadius: radius.sm,
   },
-  channelTabActive: { backgroundColor: colors.primary },
-  channelTabIcon: { marginRight: 6 },
-  channelTabLabel: { fontSize: 12, fontWeight: '600', color: colors.textSecondary },
-  channelTabLabelActive: { color: colors.textInverse },
+  channelTabActive: {
+    backgroundColor: colors.surface,
+    shadowColor: colors.shadowColor,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 1, shadowRadius: 2,
+  },
+  channelTabIcon: { marginRight: 5 },
+  channelTabLabel: { fontSize: 11, fontWeight: '500', color: colors.textMuted },
+  channelTabLabelActive: { color: colors.text, fontWeight: '600' },
 });

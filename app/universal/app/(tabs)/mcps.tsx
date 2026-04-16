@@ -1,4 +1,4 @@
-import { colors } from '../../theme';
+import { colors, font, radius } from '../../theme';
 /**
  * MCPs screen — view default MCPs (read-only) and manage custom MCPs.
  */
@@ -12,7 +12,8 @@ import { useConnection } from '../../stores/connection';
 import { useConfig } from '../../stores/config';
 import { setBaseUrl } from '../../services/api';
 import { useConfirm } from '../../components/ConfirmDialog';
-import PrimaryButton from '../../components/PrimaryButton';
+import Button from '../../components/Button';
+import Card from '../../components/Card';
 import ThemedSwitch from '../../components/ThemedSwitch';
 
 const DEFAULT_MCPS = [
@@ -87,7 +88,7 @@ export default function McpsScreen() {
       <Text style={styles.sectionHint}>
         Bundled with OpenAgent. Toggle to enable/disable. Restart required.
       </Text>
-      <View style={styles.card}>
+      <Card padded={false}>
         {DEFAULT_MCPS.map((mcp, i) => (
           <View key={mcp.name} style={[styles.row, i > 0 && styles.rowBorder]}>
             <View style={styles.mcpInfo}>
@@ -100,14 +101,14 @@ export default function McpsScreen() {
             />
           </View>
         ))}
-      </View>
+      </Card>
 
       {/* Custom MCPs */}
       <Text style={[styles.sectionTitle, { marginTop: 28 }]}>Custom MCPs</Text>
       <Text style={styles.sectionHint}>
         User-configured MCP servers from openagent.yaml
       </Text>
-      <View style={styles.card}>
+      <Card padded={false}>
         {customMcps.length === 0 && !addingNew && (
           <Text style={styles.emptyText}>No custom MCPs configured</Text>
         )}
@@ -155,35 +156,37 @@ export default function McpsScreen() {
               placeholderTextColor={colors.textMuted}
             />
             <View style={styles.addFormActions}>
-              <TouchableOpacity style={styles.cancelBtn} onPress={() => setAddingNew(false)}>
-                <Text style={styles.cancelBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <PrimaryButton style={styles.saveBtn} contentStyle={styles.saveBtnInner} onPress={addCustom}>
-                <Text style={styles.saveBtnText}>Add MCP</Text>
-              </PrimaryButton>
+              <Button variant="ghost" size="sm" label="Cancel" onPress={() => setAddingNew(false)} />
+              <Button variant="primary" size="sm" label="Add MCP" onPress={addCustom} />
             </View>
           </View>
         ) : (
-          <PrimaryButton style={styles.addBtn} contentStyle={styles.addBtnInner} onPress={() => setAddingNew(true)}>
-            <View style={styles.addBtnContent}>
-              <Feather name="plus" size={14} color={colors.textInverse} />
-              <Text style={styles.addBtnText}>Add MCP Server</Text>
-            </View>
-          </PrimaryButton>
+          <View style={{ padding: 10, borderTopWidth: 1, borderTopColor: colors.borderLight }}>
+            <Button
+              variant="primary"
+              label="Add MCP Server"
+              icon="plus"
+              fullWidth
+              onPress={() => setAddingNew(true)}
+            />
+          </View>
         )}
-      </View>
+      </Card>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: 24, maxWidth: 600, width: "100%", alignSelf: "center" },
-  sectionTitle: { fontSize: 17, fontWeight: '600', color: colors.text, marginBottom: 4 },
+  content: { padding: 24, maxWidth: 640, width: "100%", alignSelf: "center" },
+  sectionTitle: {
+    fontSize: 18, fontWeight: '500', color: colors.text, marginBottom: 4,
+    fontFamily: font.display, letterSpacing: -0.3,
+  },
   sectionHint: { fontSize: 12, color: colors.textMuted, marginBottom: 12 },
   card: {
-    backgroundColor: colors.surface, borderRadius: 10,
-    borderWidth: 1, borderColor: colors.border, padding: 4,
+    backgroundColor: colors.surface, borderRadius: radius.lg,
+    borderWidth: 1, borderColor: colors.border, padding: 2,
   },
   row: {
     flexDirection: 'row', alignItems: 'center',
@@ -191,24 +194,26 @@ const styles = StyleSheet.create({
   },
   rowBorder: { borderTopWidth: 1, borderTopColor: colors.borderLight },
   mcpInfo: { flex: 1 },
-  mcpName: { fontSize: 14, fontWeight: '600', color: colors.text },
-  mcpDesc: { fontSize: 12, color: colors.textSecondary, marginTop: 2 },
-  mcpEnv: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
-  removeBtn: { padding: 8 },
-  emptyText: { padding: 16, fontSize: 13, color: colors.textMuted, textAlign: 'center' },
-  addBtn: { padding: 12, borderTopWidth: 1, borderTopColor: colors.borderLight },
-  addBtnInner: { minHeight: 40, borderRadius: 8 },
+  mcpName: { fontSize: 13, fontWeight: '600', color: colors.text, fontFamily: font.mono },
+  mcpDesc: { fontSize: 11.5, color: colors.textSecondary, marginTop: 2 },
+  mcpEnv: { fontSize: 10.5, color: colors.textMuted, marginTop: 2, fontFamily: font.mono },
+  removeBtn: { padding: 6 },
+  emptyText: { padding: 14, fontSize: 12, color: colors.textMuted, textAlign: 'center' },
+  addBtn: { padding: 10, borderTopWidth: 1, borderTopColor: colors.borderLight },
+  addBtnInner: { minHeight: 34, borderRadius: radius.sm },
   addBtnContent: { flexDirection: 'row', alignItems: 'center' },
-  addBtnText: { fontSize: 13, color: colors.textInverse, fontWeight: '700', marginLeft: 8 },
+  addBtnText: { fontSize: 12, color: colors.textInverse, fontWeight: '600', marginLeft: 6 },
   addForm: { padding: 12, borderTopWidth: 1, borderTopColor: colors.borderLight },
   input: {
-    backgroundColor: colors.inputBg, borderRadius: 8, borderWidth: 1, borderColor: colors.border,
-    padding: 10, color: colors.text, fontSize: 13, marginBottom: 8,
+    backgroundColor: colors.inputBg, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.border,
+    paddingHorizontal: 11, paddingVertical: 9,
+    color: colors.text, fontSize: 12, marginBottom: 6, fontFamily: font.mono,
   },
-  addFormActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 4 },
-  cancelBtn: { padding: 8 },
-  cancelBtnText: { color: colors.textMuted, fontSize: 13 },
+  addFormActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 6, marginTop: 4 },
+  cancelBtn: { padding: 6 },
+  cancelBtnText: { color: colors.textMuted, fontSize: 12 },
   saveBtn: {},
-  saveBtnInner: { minHeight: 34, paddingHorizontal: 14, paddingVertical: 7, borderRadius: 8 },
-  saveBtnText: { color: colors.textInverse, fontSize: 13, fontWeight: '700' },
+  saveBtnInner: { minHeight: 30, paddingHorizontal: 12, paddingVertical: 6, borderRadius: radius.sm },
+  saveBtnText: { color: colors.textInverse, fontSize: 12, fontWeight: '600' },
 });

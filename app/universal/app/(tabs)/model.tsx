@@ -1,4 +1,4 @@
-import { colors } from '../../theme';
+import { colors, font, radius } from '../../theme';
 /**
  * Model screen — provider cards grid, model catalog, cost dashboard.
  * Uses a responsive sidebar to group the screen into categories (fixed on
@@ -16,7 +16,9 @@ import {
   setBaseUrl, getModels, addModel, deleteModel, testModel, setActiveModel, updateModel,
   getUsage, getDailyUsage, getModelCatalog, getAvailableProviders,
 } from '../../services/api';
-import PrimaryButton from '../../components/PrimaryButton';
+import Button from '../../components/Button';
+import Card from '../../components/Card';
+import TabStrip from '../../components/TabStrip';
 import ResponsiveSidebar from '../../components/ResponsiveSidebar';
 import type { UsageData, ModelCatalogEntry, DailyUsageEntry, ModelConfig } from '../../../common/types';
 
@@ -273,9 +275,14 @@ export default function ModelScreen() {
           placeholder="20.00" placeholderTextColor={colors.textMuted} keyboardType="numeric" />
       </View>
 
-      <PrimaryButton style={{ marginBottom: 20 }} onPress={handleSave}>
-        <Text style={styles.saveBtnText}>{saved ? 'Saved' : 'Save'}</Text>
-      </PrimaryButton>
+      <Button
+        variant="primary"
+        label={saved ? 'Saved' : 'Save'}
+        icon={saved ? 'check' : undefined}
+        onPress={handleSave}
+        fullWidth
+        style={{ marginBottom: 20 }}
+      />
 
       {/* Usage Bar */}
       {usage && usage.monthly_budget > 0 && (
@@ -455,9 +462,7 @@ export default function ModelScreen() {
             <TouchableOpacity onPress={() => { setAdding(false); setNewName(''); setNewKey(''); setNewUrl(''); }}>
               <Text style={{ color: colors.textMuted }}>Cancel</Text>
             </TouchableOpacity>
-            <PrimaryButton onPress={handleAddProvider}>
-              <Text style={styles.saveBtnText}>Add</Text>
-            </PrimaryButton>
+            <Button variant="primary" size="md" label="Add" onPress={handleAddProvider} />
           </View>
         </View>
       ) : (
@@ -475,14 +480,17 @@ export default function ModelScreen() {
     <>
       <Text style={styles.sectionTitle}>Costs</Text>
 
-      <View style={styles.card}>
-        <View style={styles.costTabs}>
-          {[7, 30].map((d) => (
-            <TouchableOpacity key={d} style={[styles.costTab, costDays === d && styles.costTabActive]} onPress={() => setCostDays(d)}>
-              <Text style={[styles.costTabText, costDays === d && styles.costTabTextActive]}>{d}d</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+      <Card>
+        <TabStrip
+          tabs={[
+            { id: '7', label: '7d' },
+            { id: '30', label: '30d' },
+          ]}
+          active={String(costDays)}
+          onChange={(v) => setCostDays(parseInt(v, 10))}
+          size="sm"
+          style={{ marginBottom: 12 }}
+        />
 
         {dailyUsage.length > 0 ? (
           <>
@@ -525,7 +533,7 @@ export default function ModelScreen() {
         ) : (
           <Text style={styles.emptyText}>No usage data yet.</Text>
         )}
-      </View>
+      </Card>
     </>
   );
 
@@ -549,121 +557,152 @@ export default function ModelScreen() {
 
 const styles = StyleSheet.create({
   // Sidebar
-  sidebarInner: { flex: 1, padding: 12 },
+  sidebarInner: { flex: 1, padding: 10 },
   sidebarTitle: {
-    fontSize: 11, fontWeight: '700', color: colors.textMuted,
-    textTransform: 'uppercase', letterSpacing: 0.5,
-    paddingHorizontal: 8, paddingVertical: 8, marginBottom: 4,
+    fontSize: 10, fontWeight: '600', color: colors.textMuted,
+    textTransform: 'uppercase', letterSpacing: 1,
+    paddingHorizontal: 8, paddingVertical: 6, marginBottom: 4,
   },
   categoryList: { flex: 1 },
   categoryItem: {
     flexDirection: 'row', alignItems: 'center',
-    paddingVertical: 10, paddingHorizontal: 10,
-    borderRadius: 8, marginBottom: 2,
+    paddingVertical: 7, paddingHorizontal: 10,
+    borderRadius: radius.sm, marginBottom: 1,
   },
-  categoryActive: { backgroundColor: colors.primaryLight },
+  categoryActive: { backgroundColor: colors.hover },
   categoryIcon: { marginRight: 10 },
   categoryTextWrap: { flex: 1 },
-  categoryLabel: { fontSize: 13, color: colors.textSecondary, fontWeight: '500' },
-  categoryLabelActive: { color: colors.primary, fontWeight: '600' },
-  categoryDesc: { fontSize: 11, color: colors.textMuted, marginTop: 1 },
+  categoryLabel: { fontSize: 12.5, color: colors.textSecondary, fontWeight: '400' },
+  categoryLabelActive: { color: colors.text, fontWeight: '500' },
+  categoryDesc: { fontSize: 10.5, color: colors.textMuted, marginTop: 1 },
   sidebarFooter: {
-    borderTopWidth: 1, borderTopColor: colors.border,
+    borderTopWidth: 1, borderTopColor: colors.borderLight,
     paddingVertical: 10, paddingHorizontal: 10, marginTop: 8,
   },
   sidebarFooterLabel: {
-    fontSize: 10, color: colors.textMuted,
-    textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: '600',
+    fontSize: 9, color: colors.textMuted,
+    textTransform: 'uppercase', letterSpacing: 1, fontWeight: '600',
   },
-  sidebarFooterValue: { fontSize: 13, color: colors.text, fontWeight: '600', marginTop: 2 },
+  sidebarFooterValue: { fontSize: 12, color: colors.text, fontWeight: '600', marginTop: 2, fontFamily: font.mono },
 
   // Main content
   container: { flex: 1, backgroundColor: colors.bg },
-  content: { padding: 24, maxWidth: 540, width: '100%', alignSelf: 'center' },
-  title: { fontSize: 17, fontWeight: '600', color: colors.text, marginBottom: 12 },
-  sectionTitle: { fontSize: 13, fontWeight: '600', color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 8 },
+  content: { padding: 24, maxWidth: 580, width: '100%', alignSelf: 'center' },
+  title: {
+    fontSize: 20, fontWeight: '500', color: colors.text, marginBottom: 4,
+    fontFamily: font.display, letterSpacing: -0.4,
+  },
+  sectionTitle: {
+    fontSize: 18, fontWeight: '500', color: colors.text, marginBottom: 12,
+    fontFamily: font.display, letterSpacing: -0.3,
+  },
 
   singleRow: { marginBottom: 12 },
-  hint: { fontSize: 12, color: colors.textMuted, marginBottom: 12 },
+  hint: { fontSize: 12, color: colors.textMuted, marginBottom: 14, lineHeight: 17 },
 
-  label: { fontSize: 12, fontWeight: '600', color: colors.textSecondary, marginBottom: 4, marginTop: 8 },
-  input: {
-    backgroundColor: colors.inputBg, borderRadius: 8, borderWidth: 1, borderColor: colors.border,
-    padding: 10, color: colors.text, fontSize: 14,
+  label: {
+    fontSize: 10, fontWeight: '600', color: colors.textSecondary,
+    marginBottom: 5, marginTop: 8,
+    textTransform: 'uppercase', letterSpacing: 0.5,
   },
-  saveBtnText: { color: colors.textInverse, fontSize: 14, fontWeight: '700' },
+  input: {
+    backgroundColor: colors.inputBg, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.border,
+    paddingHorizontal: 11, paddingVertical: 9,
+    color: colors.text, fontSize: 13, fontFamily: font.mono,
+  },
+  saveBtnText: { color: colors.textInverse, fontSize: 13, fontWeight: '600' },
 
   // Usage bar
   usageBox: { marginBottom: 16 },
-  usageBar: { height: 6, backgroundColor: colors.border, borderRadius: 3, overflow: 'hidden' },
-  usageFill: { height: '100%', borderRadius: 3 },
-  usageText: { fontSize: 11, color: colors.textMuted, marginTop: 4 },
+  usageBar: { height: 4, backgroundColor: colors.borderLight, borderRadius: 2, overflow: 'hidden' },
+  usageFill: { height: '100%', borderRadius: 2 },
+  usageText: { fontSize: 10.5, color: colors.textMuted, marginTop: 6, fontFamily: font.mono },
 
   // Provider cards
   card: {
-    backgroundColor: colors.surface, borderRadius: 10,
-    borderWidth: 1, borderColor: colors.border, padding: 16, marginBottom: 10,
+    backgroundColor: colors.surface, borderRadius: radius.lg,
+    borderWidth: 1, borderColor: colors.border, padding: 14, marginBottom: 10,
   },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   cardActions: { flexDirection: 'row', gap: 12 },
-  providerName: { fontSize: 15, fontWeight: '600', color: colors.text },
-  actionLink: { fontSize: 13, color: colors.primary, fontWeight: '500' },
-  keyDisplay: { fontSize: 12, color: colors.textMuted, marginTop: 4 },
-  testOk: { fontSize: 12, color: colors.success, marginTop: 6 },
-  testFail: { fontSize: 12, color: colors.error, marginTop: 6 },
+  providerName: {
+    fontSize: 14, fontWeight: '600', color: colors.text,
+    fontFamily: font.mono, letterSpacing: -0.1,
+  },
+  actionLink: { fontSize: 12, color: colors.textSecondary, fontWeight: '500' },
+  keyDisplay: { fontSize: 11, color: colors.textMuted, marginTop: 4, fontFamily: font.mono },
+  testOk: { fontSize: 11, color: colors.success, marginTop: 6 },
+  testFail: { fontSize: 11, color: colors.error, marginTop: 6 },
 
   // Model list in card
   modelList: { marginTop: 10, borderTopWidth: 1, borderTopColor: colors.borderLight, paddingTop: 8 },
-  modelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 6 },
+  modelRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 5 },
   modelToggle: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  toggleDot: { width: 10, height: 10, borderRadius: 5 },
+  toggleDot: { width: 7, height: 7, borderRadius: 4 },
   toggleOn: { backgroundColor: colors.success },
-  toggleOff: { backgroundColor: colors.border },
-  modelId: { fontSize: 13, color: colors.text },
-  modelDisabled: { color: colors.textMuted, opacity: 0.5 },
-  cliSubtitle: { fontSize: 10, color: colors.textMuted, marginLeft: 18, marginBottom: 4 },
-  addModelBtn: { marginTop: 8, padding: 8, alignItems: 'center' },
-  addModelText: { fontSize: 13, color: colors.primary, fontWeight: '500' },
-  modelPicker: { marginTop: 8, padding: 10, backgroundColor: colors.inputBg, borderRadius: 8 },
-  pickerItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: colors.borderLight },
-  pickerItemText: { fontSize: 13, color: colors.text },
-  cliToggleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12, padding: 10, backgroundColor: colors.inputBg, borderRadius: 8, borderWidth: 1, borderColor: colors.border },
-  cliToggleLabel: { fontSize: 13, fontWeight: '600', color: colors.text },
-  cliToggleHint: { fontSize: 11, color: colors.textMuted },
-  modelPrice: { fontSize: 11, color: colors.textMuted },
-  moreModels: { fontSize: 11, color: colors.textMuted, textAlign: 'center', marginTop: 4 },
+  toggleOff: { backgroundColor: colors.borderStrong },
+  modelId: { fontSize: 12, color: colors.text, fontFamily: font.mono },
+  modelDisabled: { color: colors.textMuted, opacity: 0.55 },
+  cliSubtitle: { fontSize: 10, color: colors.textMuted, marginLeft: 15, marginBottom: 4 },
+  addModelBtn: { marginTop: 6, padding: 6, alignItems: 'center' },
+  addModelText: { fontSize: 12, color: colors.textSecondary, fontWeight: '500' },
+  modelPicker: {
+    marginTop: 8, padding: 10,
+    backgroundColor: colors.sidebar, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.borderLight,
+  },
+  pickerItem: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: colors.borderLight,
+  },
+  pickerItemText: { fontSize: 12, color: colors.text, fontFamily: font.mono },
+  cliToggleRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 10,
+    padding: 10, backgroundColor: colors.sidebar, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.borderLight,
+  },
+  cliToggleLabel: { fontSize: 12.5, fontWeight: '600', color: colors.text },
+  cliToggleHint: { fontSize: 10.5, color: colors.textMuted, marginTop: 1 },
+  modelPrice: { fontSize: 10, color: colors.textMuted, fontFamily: font.mono },
+  moreModels: { fontSize: 10, color: colors.textMuted, textAlign: 'center', marginTop: 4 },
 
   // Add provider
-  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5 },
   chip: {
-    paddingVertical: 6, paddingHorizontal: 12, borderRadius: 6,
-    backgroundColor: colors.inputBg, borderWidth: 1, borderColor: colors.border,
+    paddingVertical: 5, paddingHorizontal: 10, borderRadius: radius.sm,
+    backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border,
   },
-  chipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  chipText: { fontSize: 12, color: colors.textSecondary },
-  chipTextActive: { color: colors.textInverse },
-  formRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 16 },
+  chipActive: { backgroundColor: colors.primaryLight, borderColor: colors.primary },
+  chipText: { fontSize: 11, color: colors.textSecondary, fontFamily: font.mono },
+  chipTextActive: { color: colors.primary, fontWeight: '600' },
+  formRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 14 },
   addBtn: {
     borderWidth: 1, borderColor: colors.border, borderStyle: 'dashed',
-    borderRadius: 10, padding: 14, alignItems: 'center', marginBottom: 10,
+    borderRadius: radius.lg, padding: 12, alignItems: 'center', marginBottom: 10,
+    backgroundColor: colors.surface,
   },
   addBtnContent: { flexDirection: 'row', alignItems: 'center' },
-  addBtnText: { fontSize: 14, color: colors.primary, fontWeight: '500', marginLeft: 8 },
+  addBtnText: { fontSize: 12.5, color: colors.textSecondary, fontWeight: '500', marginLeft: 6 },
 
   // Cost dashboard
-  costTabs: { flexDirection: 'row', gap: 8, marginBottom: 12 },
-  costTab: { paddingVertical: 4, paddingHorizontal: 14, borderRadius: 6, backgroundColor: colors.inputBg },
-  costTabActive: { backgroundColor: colors.primary },
-  costTabText: { fontSize: 12, color: colors.textSecondary, fontWeight: '500' },
-  costTabTextActive: { color: colors.textInverse },
-  costSummary: { flexDirection: 'row', justifyContent: 'space-around', marginBottom: 12 },
+  costTabs: { flexDirection: 'row', gap: 4, marginBottom: 12, backgroundColor: colors.sidebar, padding: 2, borderRadius: radius.md, alignSelf: 'flex-start', borderWidth: 1, borderColor: colors.borderLight },
+  costTab: { paddingVertical: 4, paddingHorizontal: 12, borderRadius: radius.sm },
+  costTabActive: { backgroundColor: colors.surface, shadowColor: colors.shadowColor, shadowOffset: { width: 0, height: 1 }, shadowOpacity: 1, shadowRadius: 2 },
+  costTabText: { fontSize: 11, color: colors.textMuted, fontWeight: '500' },
+  costTabTextActive: { color: colors.text, fontWeight: '600' },
+  costSummary: {
+    flexDirection: 'row', justifyContent: 'space-around',
+    marginBottom: 12, paddingVertical: 10,
+    borderTopWidth: 1, borderBottomWidth: 1, borderColor: colors.borderLight,
+  },
   costStat: { alignItems: 'center' },
-  costStatValue: { fontSize: 16, fontWeight: '700', color: colors.text },
-  costStatLabel: { fontSize: 11, color: colors.textMuted },
+  costStatValue: { fontSize: 17, fontWeight: '500', color: colors.text, fontFamily: font.display, letterSpacing: -0.3 },
+  costStatLabel: { fontSize: 9.5, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 0.8, marginTop: 2 },
   costTable: {},
   costHeaderRow: { flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: colors.border, paddingBottom: 6, marginBottom: 4 },
-  costHeaderText: { fontWeight: '600', color: colors.textSecondary },
-  costRow: { flexDirection: 'row', paddingVertical: 4, borderBottomWidth: 1, borderBottomColor: colors.borderLight },
-  costCell: { fontSize: 12, color: colors.text },
-  emptyText: { fontSize: 13, color: colors.textMuted, textAlign: 'center', paddingVertical: 16 },
+  costHeaderText: { fontWeight: '600', color: colors.textMuted, fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
+  costRow: { flexDirection: 'row', paddingVertical: 5, borderBottomWidth: 1, borderBottomColor: colors.borderLight },
+  costCell: { fontSize: 11.5, color: colors.text, fontFamily: font.mono },
+  emptyText: { fontSize: 12, color: colors.textMuted, textAlign: 'center', paddingVertical: 14 },
 });
