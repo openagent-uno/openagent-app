@@ -118,6 +118,46 @@ export async function uploadFile(file: File): Promise<{ path: string; filename: 
   return res.json();
 }
 
+// ── File Download (agent → client) ──
+
+/**
+ * URL of the ``/api/files`` endpoint for a given server-side path.
+ * Used when the agent returns an attachment in a ``response`` message
+ * and the client needs to fetch it (remote install) or just link to
+ * it (desktop w/ local gateway).
+ *
+ * The gateway token, if configured, is passed via ``?token=`` so the
+ * URL works in plain browser anchors / `<img src>` / webviews that
+ * can't set custom headers.
+ */
+export function fileUrl(path: string, token?: string): string {
+  const params = new URLSearchParams({ path });
+  if (token) params.set('token', token);
+  return `${baseUrl}/api/files?${params.toString()}`;
+}
+
+/**
+ * Fetch a file off the agent server and trigger a browser download.
+ * Works on web + in the Electron webview. On pure-native mobile this
+ * would need Expo FileSystem — not used today since the desktop app
+ * is the primary target.
+ */
+export async function downloadFile(path: string, filename: string, token?: string): Promise<void> {
+  const res = await fetch(fileUrl(path, token));
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+  const blob = await res.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = objectUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  // Give the browser a beat to initiate the save dialog before we
+  // revoke the ObjectURL — immediate revoke races on Firefox.
+  setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+}
+
 // ── Config API ──
 
 export async function getConfig(): Promise<AgentConfig> {

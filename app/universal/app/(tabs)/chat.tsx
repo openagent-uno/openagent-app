@@ -13,7 +13,7 @@ import { useChat } from '../../stores/chat';
 import Markdown from '../../components/Markdown';
 import PrimaryButton from '../../components/PrimaryButton';
 import ResponsiveSidebar from '../../components/ResponsiveSidebar';
-import { uploadFile } from '../../services/api';
+import { uploadFile, downloadFile } from '../../services/api';
 import { colors } from '../../theme';
 
 interface PendingFile {
@@ -286,6 +286,13 @@ export default function ChatScreen() {
                     {msg.role === 'assistant' ? (
                       <>
                         <Markdown text={msg.text} />
+                        {msg.attachments && msg.attachments.length > 0 && (
+                          <View style={styles.attachmentsRow}>
+                            {msg.attachments.map((att, i) => (
+                              <AttachmentView key={`${att.path}-${i}`} attachment={att} downloadable />
+                            ))}
+                          </View>
+                        )}
                         {msg.model && <Text style={styles.modelText}>Model: {msg.model}</Text>}
                       </>
                     ) : (
@@ -397,8 +404,20 @@ export default function ChatScreen() {
   );
 }
 
-/** File/image chip shown inside user message bubbles. */
-function AttachmentView({ attachment }: { attachment: Attachment }) {
+/**
+ * File/image chip shown inside message bubbles.
+ *
+ * Two modes:
+ * - **User-side** (default): just a visual chip for the upload the user
+ *   attached. No action — the file is already on the agent.
+ * - **Downloadable** (``downloadable=true``, used for assistant replies):
+ *   the agent sent us back a file living on its own filesystem. Tapping
+ *   the chip hits ``GET /api/files?path=...`` and triggers a browser
+ *   download. This works both for local (Electron + gateway on same
+ *   Mac) and remote (app on laptop, agent on VPS) setups because we
+ *   stream the bytes over HTTP rather than relying on a shared FS.
+ */
+function AttachmentView({ attachment, downloadable = false }: { attachment: Attachment; downloadable?: boolean }) {
   const iconName = attachment.type === 'image'
     ? 'image'
     : attachment.type === 'voice'
@@ -406,11 +425,35 @@ function AttachmentView({ attachment }: { attachment: Attachment }) {
       : attachment.type === 'video'
         ? 'film'
         : 'file';
+  const token = useConnection((s) => s.config?.token);
+  const chipInner = (
+    <>
+      <Feather name={iconName as any} size={12} color={downloadable ? colors.primary : colors.textInverse} />
+      <Text
+        style={[styles.attachmentText, downloadable && { color: colors.primary }]}
+        numberOfLines={1}
+      >
+        {attachment.filename}
+      </Text>
+      {downloadable ? <Feather name="download" size={11} color={colors.primary} style={{ marginLeft: 4 }} /> : null}
+    </>
+  );
+  if (!downloadable) {
+    return <View style={styles.attachmentChip}>{chipInner}</View>;
+  }
   return (
-    <View style={styles.attachmentChip}>
-      <Feather name={iconName as any} size={12} color={colors.textInverse} />
-      <Text style={styles.attachmentText} numberOfLines={1}>{attachment.filename}</Text>
-    </View>
+    <TouchableOpacity
+      style={[styles.attachmentChip, styles.attachmentChipDownloadable]}
+      onPress={async () => {
+        try {
+          await downloadFile(attachment.path, attachment.filename, token);
+        } catch (e) {
+          console.error('Download failed:', e);
+        }
+      }}
+    >
+      {chipInner}
+    </TouchableOpacity>
   );
 }
 
@@ -554,6 +597,15 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.18)',
     borderRadius: 10, paddingHorizontal: 8, paddingVertical: 4,
     marginRight: 6, marginBottom: 4, maxWidth: 220,
+  },
+  attachmentChipDownloadable: {
+    // Agent-side attachment (assistant message): use the muted bg that
+    // matches the assistant bubble rather than the white-on-primary
+    // style used for user-side chips, and hint at clickability with a
+    // subtle border.
+    backgroundColor: colors.primaryLight,
+    borderWidth: 1,
+    borderColor: colors.primary,
   },
   attachmentText: {
     color: colors.textInverse, fontSize: 12, fontWeight: '500',
