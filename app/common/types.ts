@@ -8,7 +8,15 @@
 export type ClientMessage =
   | { type: 'auth'; token: string; client_id?: string }
   | { type: 'message'; text: string; session_id: string }
-  | { type: 'command'; name: 'stop' | 'new' | 'status' | 'queue' | 'help' | 'usage' | 'update' | 'restart' }
+  // ``session_id`` MUST be passed for ``stop`` / ``new`` / ``clear`` / ``reset``
+  // when the client hosts multiple independent conversations on one ws
+  // (e.g. two chat tabs). The gateway scopes those commands to the tab's
+  // session so one tab's /clear doesn't wipe the others.
+  | {
+      type: 'command';
+      name: 'stop' | 'new' | 'clear' | 'reset' | 'status' | 'queue' | 'help' | 'usage' | 'update' | 'restart';
+      session_id?: string;
+    }
   | { type: 'ping' };
 
 export type ServerMessage =
