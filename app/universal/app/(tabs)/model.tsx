@@ -386,6 +386,9 @@ export default function ModelScreen() {
     ).sort();
     const canPickCli = addProvider_ === 'anthropic';
 
+    const noProviders = Object.keys(providers).length === 0;
+    const noModels = models.length === 0;
+
     return (
       <>
         <Text style={styles.sectionTitle}>Models</Text>
@@ -393,6 +396,28 @@ export default function ModelScreen() {
           Every row is a (provider, framework, model) triple. The smart router classifies each message and dispatches
           to one of these — Agno rows hit the provider's API, claude-cli rows hit the local Claude binary.
         </Text>
+
+        {/* Empty-state CTA: if the user has neither providers nor models,
+            the Add Model flow has nothing to offer for agno routes. Send
+            them to Providers first (claude-cli-only works without any
+            provider key, so we still surface the Add Model button below). */}
+        {noProviders && noModels && (
+          <Card>
+            <Text style={styles.emptyStateTitle}>No providers configured</Text>
+            <Text style={styles.emptyStateBody}>
+              Add a provider (openai, anthropic, …) with its API key first, then come back here to pick models from it.
+              Or skip providers entirely and add a claude-cli model below (Pro/Max subscription, no API key required).
+            </Text>
+            <View style={{ height: 10 }} />
+            <Button
+              variant="primary"
+              size="md"
+              label="Add a provider"
+              icon="key"
+              onPress={() => setActiveCategory('providers')}
+            />
+          </Card>
+        )}
 
         {(['agno', 'claude-cli'] as const).map((fw) => (
           <View key={fw} style={{ marginBottom: 14 }}>
@@ -672,6 +697,11 @@ const styles = StyleSheet.create({
     textTransform: 'none', letterSpacing: 0,
   },
   emptyText: { padding: 10, fontSize: 12, color: colors.textMuted, textAlign: 'center' },
+  emptyStateTitle: {
+    fontSize: 14, fontWeight: '600', color: colors.text,
+    marginBottom: 6, fontFamily: font.display, letterSpacing: -0.1,
+  },
+  emptyStateBody: { fontSize: 12, color: colors.textSecondary, lineHeight: 17 },
 
   row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 10, paddingHorizontal: 12 },
   rowBorder: { borderTopWidth: 1, borderTopColor: colors.borderLight },
