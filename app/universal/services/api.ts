@@ -349,6 +349,7 @@ export async function listDbModels(opts?: { provider?: string; enabledOnly?: boo
 export async function createDbModel(entry: {
   provider: string;
   model_id: string;
+  framework?: 'agno' | 'claude-cli';
   display_name?: string;
   input_cost_per_million?: number;
   output_cost_per_million?: number;

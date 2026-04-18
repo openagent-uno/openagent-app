@@ -157,9 +157,17 @@ export interface MCPEntry {
   updated_at: number;
 }
 
+// OpenAgent model-catalog vocabulary (v0.10+):
+//   provider  = the model's vendor/owner (anthropic, openai, google, zai, local…)
+//   framework = the runtime OpenAgent dispatches through ("agno" | "claude-cli")
+//   model_id  = the bare vendor id (gpt-4o-mini, claude-sonnet-4-6, glm-5…)
+//   runtime_id = canonical string used across REST / SmartRouter / usage logs
+export type ModelFramework = 'agno' | 'claude-cli';
+
 export interface ModelEntry {
   runtime_id: string;
   provider: string;
+  framework: ModelFramework;
   model_id: string;
   display_name?: string | null;
   input_cost_per_million?: number | null;
