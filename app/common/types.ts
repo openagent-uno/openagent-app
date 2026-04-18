@@ -95,9 +95,8 @@ export interface ProviderConfig {
   api_key?: string;
   api_key_display?: string;
   base_url?: string;
-  // NOTE: ``models`` used to live here as part of the yaml source of
-  // truth. Since v0.9.0 the per-provider model list lives in the
-  // ``models`` SQLite table — fetch it via ``listDbModels({provider})``.
+  // The per-provider model list lives in the ``models`` SQLite table —
+  // fetch it via ``listDbModels({provider})``.
 }
 
 export interface ModelCatalogEntry {
@@ -137,9 +136,9 @@ export interface McpServerConfig {
 }
 
 // ── DB-backed registries (mcps + models tables) ──
-// Managed via /api/mcps and /api/models/db. These replace the yaml
-// ``mcp:`` and ``providers.X.models:`` arrays as the source of truth —
-// the yaml is imported into the DB on first boot and then ignored.
+// Managed via /api/mcps and /api/models/db — the ``mcps`` and ``models``
+// SQLite tables are the source of truth. The ``mcps`` table is seeded
+// from any legacy yaml ``mcp:`` entries once on first boot.
 
 export interface MCPEntry {
   name: string;

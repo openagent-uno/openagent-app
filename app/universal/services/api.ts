@@ -195,12 +195,11 @@ export async function triggerRestart(): Promise<{ ok: boolean }> {
   return res.json();
 }
 
-// ── Providers API (DB-backed since v0.11.0) ──
+// ── Providers API (DB-backed) ──
 //
-// Provider keys now live in the SQLite ``providers`` table. Legacy
-// yaml-writing helpers (addModel/updateModel/deleteModel) are kept as
-// aliases that target the new REST endpoints so existing callers don't
-// break mid-upgrade.
+// Provider keys live in the SQLite ``providers`` table. The
+// addModel/updateModel/deleteModel helpers below target the DB-backed
+// ``/api/models/db`` endpoints.
 
 export async function getProviders(): Promise<Record<string, ProviderConfig>> {
   const data = await get<{ providers: Record<string, ProviderConfig> }>('/api/providers');
@@ -327,9 +326,9 @@ export async function disableMcp(name: string): Promise<MCPEntry> {
 
 // ── DB-backed Model catalog (maps to /api/models/db) ──
 //
-// These replace the per-provider ``models:`` arrays in yaml. Available
-// models (what a provider actually exposes for a given API key) live at
-// /api/models/available?provider=X.
+// The ``models`` SQLite table holds the per-provider model catalog.
+// Available models (what a provider actually exposes for a given API
+// key) live at /api/models/available?provider=X.
 
 export async function listDbModels(opts?: { provider?: string; enabledOnly?: boolean }): Promise<ModelEntry[]> {
   const params = new URLSearchParams();
