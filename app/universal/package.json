@@ -11,19 +11,23 @@
     "build:web": "expo export --platform web"
   },
   "dependencies": {
+    "@react-navigation/drawer": "^7.0.0",
+    "@types/dagre": "^0.7.54",
+    "dagre": "^0.8.5",
     "expo": "~55.0.0",
     "expo-linear-gradient": "~15.0.7",
     "expo-router": "~5.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
+    "react-markdown": "^9.0.0",
     "react-native": "~0.79.0",
-    "react-native-web": "~0.20.0",
     "react-native-gesture-handler": "~2.24.0",
     "react-native-reanimated": "~3.17.0",
-    "@react-navigation/drawer": "^7.0.0",
-    "zustand": "^5.0.0",
-    "react-markdown": "^9.0.0",
-    "react-syntax-highlighter": "^15.6.0"
+    "react-native-svg": "^15.15.4",
+    "react-native-web": "~0.20.0",
+    "react-syntax-highlighter": "^15.6.0",
+    "reactflow": "^11.11.4",
+    "zustand": "^5.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",

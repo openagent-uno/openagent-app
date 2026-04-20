@@ -21,7 +21,8 @@ import {
   ActivityIndicator, Platform,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useNavigation } from 'expo-router';
+import { StackActions } from '@react-navigation/native';
 import { useConnection } from '../../../stores/connection';
 import {
   setBaseUrl,
@@ -44,11 +45,19 @@ function defaultInstallName(registryName: string): string {
 }
 
 export default function InstallMcpScreen() {
-  const router = useRouter();
+  const navigation = useNavigation();
   const params = useLocalSearchParams<{ name?: string; version?: string }>();
   const name = typeof params.name === 'string' ? params.name : '';
   const version = typeof params.version === 'string' ? params.version : 'latest';
   const config = useConnection((s) => s.config);
+
+  // See the matching note in ``[name].tsx``: ``router.back()`` bubbles up
+  // to the Tabs navigator and lands on chat when this stack only holds one
+  // screen. ``POP_TO`` on the Stack directly pops to ``index`` or replaces
+  // this screen with it.
+  const backToList = useCallback(() => {
+    navigation.dispatch(StackActions.popTo('index'));
+  }, [navigation]);
 
   const [detail, setDetail] = useState<MarketplaceServerDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -159,7 +168,7 @@ export default function InstallMcpScreen() {
         headers: headerValues,
         placeholders: placeholderValues,
       });
-      router.back();
+      backToList();
     } catch (e: any) {
       const err = e as MarketplaceInstallError;
       if (err && err.status === 409) {
@@ -179,7 +188,7 @@ export default function InstallMcpScreen() {
     <View style={styles.root}>
       {/* Breadcrumb + close */}
       <View style={styles.topBar}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.topBarBtn} hitSlop={8}>
+        <TouchableOpacity onPress={backToList} style={styles.topBarBtn} hitSlop={8}>
           <Feather name="arrow-left" size={14} color={colors.textSecondary} />
           <Text style={styles.topBarText}>Marketplace</Text>
         </TouchableOpacity>
@@ -337,7 +346,7 @@ export default function InstallMcpScreen() {
             {installError && <ErrorInline message={installError} />}
 
             <View style={styles.footer}>
-              <Button variant="ghost" size="md" label="Cancel" onPress={() => router.back()} />
+              <Button variant="ghost" size="md" label="Cancel" onPress={backToList} />
               <Button
                 variant="primary"
                 size="md"

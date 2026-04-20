@@ -2,7 +2,14 @@
  * REST API client for OpenAgent vault operations.
  */
 
-import type { VaultNote, GraphData, AgentConfig, ProviderConfig, ModelsResponse, UsageData, ModelCatalogEntry, DailyUsageEntry, ScheduledTask, CreateScheduledTaskInput, UpdateScheduledTaskInput, MCPEntry, ModelEntry, AvailableModel } from '../../common/types';
+import type {
+  VaultNote, GraphData, AgentConfig, ProviderConfig, ModelsResponse,
+  UsageData, ModelCatalogEntry, DailyUsageEntry, ScheduledTask,
+  CreateScheduledTaskInput, UpdateScheduledTaskInput, MCPEntry,
+  ModelEntry, AvailableModel,
+  WorkflowTask, CreateWorkflowInput, UpdateWorkflowInput, WorkflowRun,
+  WorkflowStats, BlockTypeSpec, MCPToolkitDescriptor,
+} from '../../common/types';
 
 let baseUrl = '';
 
@@ -106,6 +113,135 @@ export async function updateScheduledTask(id: string, input: UpdateScheduledTask
 
 export async function deleteScheduledTask(id: string): Promise<void> {
   await del(`/api/scheduled-tasks/${encodeURIComponent(id)}`);
+}
+
+// ── Workflows API ──
+
+export async function getWorkflows(
+  opts: { enabledOnly?: boolean; triggerKind?: string } = {}
+): Promise<WorkflowTask[]> {
+  const params = new URLSearchParams();
+  if (opts.enabledOnly) params.set('enabled_only', 'true');
+  if (opts.triggerKind) params.set('trigger_kind', opts.triggerKind);
+  const qs = params.toString();
+  const data = await get<{ workflows: WorkflowTask[] }>(
+    `/api/workflows${qs ? `?${qs}` : ''}`
+  );
+  return data.workflows;
+}
+
+export async function getWorkflow(id: string): Promise<WorkflowTask> {
+  return get<WorkflowTask>(`/api/workflows/${encodeURIComponent(id)}`);
+}
+
+export async function createWorkflow(
+  input: CreateWorkflowInput
+): Promise<WorkflowTask> {
+  return post<WorkflowTask>('/api/workflows', input);
+}
+
+export async function updateWorkflow(
+  id: string,
+  input: UpdateWorkflowInput
+): Promise<WorkflowTask> {
+  return patch<WorkflowTask>(`/api/workflows/${encodeURIComponent(id)}`, input);
+}
+
+export async function deleteWorkflow(id: string): Promise<void> {
+  await del(`/api/workflows/${encodeURIComponent(id)}`);
+}
+
+// Trigger a run. When wait=true the server blocks until the run
+// finishes and returns the full WorkflowRun with trace; when wait=false
+// it returns {run_id, status:'running'} as soon as the executor has
+// inserted the row.
+export async function runWorkflow(
+  id: string,
+  opts: { inputs?: Record<string, unknown>; wait?: boolean; timeoutS?: number } = {}
+): Promise<WorkflowRun | { run_id: string | null; status: string }> {
+  return post(`/api/workflows/${encodeURIComponent(id)}/run`, {
+    inputs: opts.inputs,
+    wait: opts.wait ?? true,
+    timeout_s: opts.timeoutS,
+  });
+}
+
+export async function getWorkflowRuns(
+  id: string,
+  opts: { limit?: number; status?: string } = {}
+): Promise<WorkflowRun[]> {
+  const params = new URLSearchParams();
+  if (opts.limit) params.set('limit', String(opts.limit));
+  if (opts.status) params.set('status', opts.status);
+  const qs = params.toString();
+  const data = await get<{ runs: WorkflowRun[] }>(
+    `/api/workflows/${encodeURIComponent(id)}/runs${qs ? `?${qs}` : ''}`
+  );
+  return data.runs;
+}
+
+export async function getWorkflowRun(runId: string): Promise<WorkflowRun> {
+  return get<WorkflowRun>(`/api/workflow-runs/${encodeURIComponent(runId)}`);
+}
+
+export async function getWorkflowStats(
+  id: string,
+  opts: { last?: number } = {},
+): Promise<WorkflowStats> {
+  const qs = opts.last ? `?last=${opts.last}` : '';
+  return get<WorkflowStats>(
+    `/api/workflows/${encodeURIComponent(id)}/stats${qs}`,
+  );
+}
+
+export async function getWorkflowBlockTypes(): Promise<BlockTypeSpec[]> {
+  const data = await get<{ block_types: BlockTypeSpec[] }>(
+    '/api/workflow-block-types'
+  );
+  return data.block_types;
+}
+
+export async function getMcpTools(): Promise<MCPToolkitDescriptor[]> {
+  const data = await get<{ mcps: MCPToolkitDescriptor[] }>('/api/mcp-tools');
+  return data.mcps;
+}
+
+export interface CronDescribeResponse {
+  expression: string;
+  valid: boolean;
+  one_shot?: boolean;
+  upcoming?: Array<{ epoch: number; iso: string }>;
+  error?: string;
+}
+
+export async function describeCron(
+  expression: string,
+  count: number = 3,
+): Promise<CronDescribeResponse> {
+  const qs = `expression=${encodeURIComponent(expression)}&count=${count}`;
+  try {
+    return await get<CronDescribeResponse>(`/api/cron/describe?${qs}`);
+  } catch (e: any) {
+    // The gateway returns 400 with a JSON body describing the
+    // validation failure — re-shape that here so callers get a
+    // uniform ``{valid, error}`` payload without having to inspect
+    // HTTP status codes.
+    const msg = e?.message ?? String(e);
+    const match = /API \d+: (.+)$/.exec(msg);
+    if (match) {
+      try {
+        const body = JSON.parse(match[1]);
+        return {
+          expression,
+          valid: false,
+          error: body.error || msg,
+        };
+      } catch {
+        // fall through
+      }
+    }
+    return { expression, valid: false, error: msg };
+  }
 }
 
 // ── File Upload ──

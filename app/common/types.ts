@@ -264,3 +264,186 @@ export interface CreateScheduledTaskInput {
 export type UpdateScheduledTaskInput = Partial<
   Pick<ScheduledTask, 'name' | 'cron_expression' | 'prompt' | 'enabled'>
 >;
+
+// ── Workflows (n8n-style multi-block pipelines) ──
+
+// A workflow is a DAG of blocks (nodes) connected by edges. The
+// ``graph`` payload round-trips through the AI's workflow-manager
+// MCP, the REST API, and the React-Flow / SVG editor unchanged.
+
+export type WorkflowTriggerKind = 'manual' | 'schedule' | 'ai' | 'hybrid';
+
+export type WorkflowRunStatus = 'running' | 'success' | 'failed' | 'cancelled';
+
+export type BlockCategory = 'triggers' | 'ai' | 'tools' | 'flow' | 'utility';
+
+export type BlockType =
+  | 'trigger-manual'
+  | 'trigger-schedule'
+  | 'trigger-ai'
+  | 'mcp-tool'
+  | 'ai-prompt'
+  | 'if'
+  | 'loop'
+  | 'wait'
+  | 'parallel'
+  | 'merge'
+  | 'set-variable'
+  | 'http-request';
+
+export interface WorkflowNode {
+  id: string;
+  type: BlockType;
+  label?: string;
+  position: { x: number; y: number };
+  // Per-block config. Shape depends on ``type`` — see BlockTypeSpec.config_schema.
+  config: Record<string, unknown>;
+}
+
+export interface WorkflowEdge {
+  id: string;
+  source: string;
+  target: string;
+  sourceHandle?: string;  // 'out' by default; 'true'|'false' for if, etc.
+  targetHandle?: string;  // 'in' by default
+  label?: string | null;
+}
+
+export interface WorkflowGraph {
+  version: number;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  variables: Record<string, unknown>;
+}
+
+export interface WorkflowTask {
+  id: string;
+  name: string;
+  description?: string | null;
+  graph: WorkflowGraph;
+  trigger_kind: WorkflowTriggerKind;
+  cron_expression?: string | null;
+  enabled: boolean;
+  last_run_at: number | null;
+  next_run_at: number | null;
+  created_at: number;
+  updated_at: number;
+  last_run_at_iso?: string | null;
+  next_run_at_iso?: string | null;
+  created_at_iso?: string;
+  updated_at_iso?: string;
+}
+
+export interface CreateWorkflowInput {
+  name: string;
+  description?: string;
+  nodes?: WorkflowNode[];
+  edges?: WorkflowEdge[];
+  variables?: Record<string, unknown>;
+  trigger_kind?: WorkflowTriggerKind;
+  cron_expression?: string | null;
+}
+
+export type UpdateWorkflowInput = Partial<{
+  name: string;
+  description: string | null;
+  nodes: WorkflowNode[];
+  edges: WorkflowEdge[];
+  variables: Record<string, unknown>;
+  trigger_kind: WorkflowTriggerKind;
+  cron_expression: string | null;
+  enabled: boolean;
+}>;
+
+// Per-block trace entry appended to workflow_runs.trace_json after
+// each block finishes. Shared between the UI's RunHistoryDrawer and
+// the workflow-manager MCP's get_workflow_run tool.
+export interface WorkflowTraceEntry {
+  node_id: string;
+  type: BlockType;
+  started_at: number;
+  finished_at: number | null;
+  status: 'running' | 'success' | 'failed' | 'skipped';
+  input?: Record<string, unknown>;
+  output?: unknown;
+  error?: string | null;
+}
+
+export interface WorkflowRun {
+  id: string;
+  workflow_id: string;
+  trigger: 'manual' | 'schedule' | 'ai' | 'api';
+  status: WorkflowRunStatus;
+  started_at: number;
+  finished_at: number | null;
+  inputs: Record<string, unknown>;
+  outputs: Record<string, unknown>;
+  error: string | null;
+  trace: WorkflowTraceEntry[];
+  started_at_iso?: string;
+  finished_at_iso?: string | null;
+}
+
+// Block type catalog — one entry per BlockType. Served by
+// ``GET /api/workflow-block-types`` and consumed by the editor's
+// palette + properties panel.
+export interface BlockTypeFieldSpec {
+  type: 'string' | 'integer' | 'number' | 'object' | 'array' | 'boolean';
+  required?: boolean;
+  default?: unknown;
+  enum?: unknown[];
+  description?: string;
+  items?: BlockTypeFieldSpec;
+}
+
+export interface BlockTypeSpec {
+  type: BlockType;
+  category: BlockCategory;
+  description: string;
+  config_schema: Record<string, BlockTypeFieldSpec>;
+  source_handles: string[];
+  target_handles: string[];
+  output_shape: string;
+}
+
+// One MCP + its tools as seen by the editor's tool picker. Served by
+// ``GET /api/mcp-tools``.
+export interface MCPToolParameter {
+  name: string;
+  type?: string;
+  description?: string;
+  required?: boolean;
+}
+
+export interface MCPToolDescriptor {
+  name: string;
+  description?: string;
+  parameters_schema?: Record<string, unknown>;
+}
+
+export interface MCPToolkitDescriptor {
+  mcp_name: string;
+  tools: MCPToolDescriptor[];
+}
+
+// Stats surface for RunHistoryDrawer + list row sparklines.
+export interface WorkflowRunSummary {
+  id: string;
+  status: WorkflowRunStatus;
+  started_at: number;
+  finished_at: number | null;
+  duration_s: number | null;
+  started_at_iso?: string | null;
+  finished_at_iso?: string | null;
+}
+
+export interface WorkflowStats {
+  total_runs: number;
+  success_count: number;
+  failed_count: number;
+  cancelled_count: number;
+  running_count: number;
+  success_rate: number;
+  avg_duration_s: number | null;
+  last: WorkflowRunSummary[];
+}

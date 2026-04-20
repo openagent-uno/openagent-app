@@ -20,7 +20,8 @@ import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useNavigation } from 'expo-router';
+import { StackActions } from '@react-navigation/native';
 import { useConnection } from '../../../stores/connection';
 import {
   setBaseUrl, getMcp, updateMcp, deleteMcp,
@@ -32,11 +33,20 @@ import { useConfirm } from '../../../components/ConfirmDialog';
 import McpConfigForm, { type McpSubmitPayload } from '../../../components/mcps/McpConfigForm';
 
 export default function EditMcpScreen() {
-  const router = useRouter();
+  const navigation = useNavigation();
   const confirm = useConfirm();
   const params = useLocalSearchParams<{ name?: string }>();
   const name = typeof params.name === 'string' ? params.name : '';
   const config = useConnection((s) => s.config);
+
+  // Go back to the MCPs list. Dispatched to the enclosing Stack so the
+  // action can't bubble to the outer Tabs navigator (which defaults to
+  // ``backBehavior: 'firstRoute'`` and would jump to chat). ``POP_TO``
+  // pops to ``index`` if it's in the stack; otherwise it replaces this
+  // screen with a fresh ``index`` — correct either way.
+  const backToList = useCallback(() => {
+    navigation.dispatch(StackActions.popTo('index'));
+  }, [navigation]);
 
   const [entry, setEntry] = useState<MCPEntry | null>(null);
   const [loading, setLoading] = useState(true);
@@ -89,12 +99,12 @@ export default function EditMcpScreen() {
     }
     try {
       await updateMcp(entry.name, body);
-      router.back();
+      backToList();
     } catch (e: any) {
       setServerError(e?.message || String(e));
       throw e;
     }
-  }, [entry, router]);
+  }, [entry, backToList]);
 
   const handleRemove = useCallback(async () => {
     if (!entry) return;
@@ -108,20 +118,20 @@ export default function EditMcpScreen() {
     setServerError(null);
     try {
       await deleteMcp(entry.name);
-      router.back();
+      backToList();
     } catch (e: any) {
       setServerError(e?.message || String(e));
     } finally {
       setRemoving(false);
     }
-  }, [entry, confirm, router]);
+  }, [entry, confirm, backToList]);
 
   const isBuiltin = entry ? entry.kind !== 'custom' : false;
 
   return (
     <View style={styles.root}>
       <View style={styles.topBar}>
-        <TouchableOpacity onPress={() => router.back()} style={styles.topBarBtn} hitSlop={8}>
+        <TouchableOpacity onPress={backToList} style={styles.topBarBtn} hitSlop={8}>
           <Feather name="arrow-left" size={14} color={colors.textSecondary} />
           <Text style={styles.topBarText}>MCPs</Text>
         </TouchableOpacity>
@@ -157,7 +167,7 @@ export default function EditMcpScreen() {
               mode="edit"
               initial={entry}
               onSubmit={handleSubmit}
-              onCancel={() => router.back()}
+              onCancel={backToList}
               submitLabel="Save changes"
               submittingLabel="Saving…"
               serverError={serverError}
