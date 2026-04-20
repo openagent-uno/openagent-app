@@ -28,24 +28,25 @@ import Feather from '@expo/vector-icons/Feather';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useConnection } from '../../../stores/connection';
 import {
-  setBaseUrl, listMcps, deleteMcp, enableMcp, disableMcp,
+  setBaseUrl, listMcps, createMcp, deleteMcp, enableMcp, disableMcp,
   searchMcpMarketplace,
   type MarketplaceCard,
 } from '../../../services/api';
 import type { MCPEntry } from '../../../../common/types';
-import { colors, font, radius } from '../../../theme';
+import { colors, font, radius, tracking } from '../../../theme';
 import Button from '../../../components/Button';
 import TabStrip from '../../../components/TabStrip';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import McpTile from '../../../components/mcps/McpTile';
 import MarketplaceTile from '../../../components/mcps/MarketplaceTile';
+import McpConfigForm, { type McpSubmitPayload } from '../../../components/mcps/McpConfigForm';
 
-type Mode = 'builtin' | 'custom' | 'browse';
+type Mode = 'builtin' | 'custom' | 'browse' | 'new';
 
 const MARKETPLACE_SOURCE_PREFIX = 'marketplace:registry.modelcontextprotocol.io/';
 const SEARCH_DEBOUNCE_MS = 300;
-const TILE_MIN_WIDTH = 260;
-const TILE_MAX_COLS = 4;
+const TILE_MIN_WIDTH = 280;
+const TILE_MAX_COLS = 6;
 
 /**
  * Compute column count from the *container's* measured width. Base the
@@ -95,7 +96,12 @@ export default function McpsScreen() {
     // Debounce updates to avoid thrashing on web window resizes.
     if (Math.abs(w - containerWidth) > 1) setContainerWidth(w);
   }, [containerWidth]);
-  const cols = useMemo(() => columnsForWidth(containerWidth, 14), [containerWidth]);
+  // ``bodyInner`` carries the horizontal padding; the grid draws inside
+  // it so subtract that padding from the measured width.
+  const cols = useMemo(
+    () => columnsForWidth(Math.max(0, containerWidth - 48), 14),
+    [containerWidth],
+  );
 
   // ── Data loading ──
   const refresh = useCallback(async () => {
@@ -203,7 +209,7 @@ export default function McpsScreen() {
     [installed],
   );
 
-  // ── Marketplace install click ──
+  // ── Navigation helpers ──
   const onInstallClick = (card: MarketplaceCard) => {
     router.push({
       pathname: '/mcps/install',
@@ -211,53 +217,97 @@ export default function McpsScreen() {
     });
   };
 
+  const onTilePress = (entry: MCPEntry) => {
+    router.push({
+      pathname: '/mcps/[name]',
+      params: { name: entry.name },
+    });
+  };
+
+  // Handler for the "New" tab's form. On success, flip back to the Custom
+  // tab so the user sees their new row in context — and refresh the list
+  // since the pool's hot-reload keys on mcps.updated_at, which just bumped.
+  const [newServerError, setNewServerError] = useState<string | null>(null);
+  const [newFormNonce, setNewFormNonce] = useState(0); // remount-to-reset
+  const onSubmitNew = useCallback(async (payload: McpSubmitPayload) => {
+    setNewServerError(null);
+    try {
+      await createMcp({
+        name: payload.name,
+        command: payload.command || undefined,
+        url: payload.url || undefined,
+        env: payload.env,
+        headers: payload.headers,
+        oauth: payload.oauth,
+        enabled: payload.enabled,
+      });
+      setNewFormNonce((n) => n + 1); // clear form
+      setMode('custom');
+      await refresh();
+    } catch (e: any) {
+      setNewServerError(e?.message || String(e));
+      throw e;
+    }
+  }, [refresh]);
+
   // ── Render ──
+  // Split the screen into:
+  //   - fixed header: title, hint, refresh, tabs (never scrolls). Outer
+  //     band spans full width so its bottom border runs edge-to-edge;
+  //     inner content is centered at the screen's max column width.
+  //   - scrollable body: only the active pane's content, same centered
+  //     column. The body's inner View measures its own width so the grid
+  //     sizes to its real container (not the window, not the ScrollView).
   return (
     <View style={styles.root}>
+      <View style={styles.fixedHeader}>
+        <View style={styles.headerInner}>
+          <View style={styles.headerTopRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.title}>MCPs</Text>
+              <Text style={styles.hint}>
+                Model Context Protocol servers give the agent extra tools.{' '}
+                {installed.length} installed, {activeCount} active. Changes are live on the next message.
+              </Text>
+            </View>
+            <Button
+              variant="ghost"
+              size="sm"
+              icon="refresh-cw"
+              label="Refresh"
+              onPress={refresh}
+            />
+          </View>
+
+          <View style={styles.tabsRow}>
+            <TabStrip<Mode>
+              tabs={[
+                { id: 'builtin', label: `Builtin · ${builtinRows.length}`, icon: 'package' },
+                { id: 'custom', label: `Custom · ${customRows.length}`, icon: 'sliders' },
+                { id: 'browse', label: 'Browse', icon: 'compass' },
+                { id: 'new', label: 'New', icon: 'plus' },
+              ]}
+              active={mode}
+              onChange={setMode}
+              size="md"
+            />
+          </View>
+
+          {error && (
+            <View style={styles.errorBanner}>
+              <Feather name="alert-circle" size={13} color={colors.error} />
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
+          )}
+        </View>
+      </View>
+
       <ScrollView
         style={styles.scroll}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
-        onLayout={onContainerLayout}
       >
-        {/* Header — same style as other tabs (Geist display, hint under, no serif) */}
-        <View style={styles.header}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.title}>MCPs</Text>
-            <Text style={styles.hint}>
-              Model Context Protocol servers give the agent extra tools.{' '}
-              {installed.length} installed, {activeCount} active. Changes are live on the next message.
-            </Text>
-          </View>
-          <Button
-            variant="ghost"
-            size="sm"
-            icon="refresh-cw"
-            label="Refresh"
-            onPress={refresh}
-          />
-        </View>
-
-        <View style={styles.tabsRow}>
-          <TabStrip<Mode>
-            tabs={[
-              { id: 'builtin', label: `Builtin · ${builtinRows.length}`, icon: 'package' },
-              { id: 'custom', label: `Custom · ${customRows.length}`, icon: 'sliders' },
-              { id: 'browse', label: 'Browse', icon: 'compass' },
-            ]}
-            active={mode}
-            onChange={setMode}
-            size="md"
-          />
-        </View>
-
-        {error && (
-          <View style={styles.errorBanner}>
-            <Feather name="alert-circle" size={13} color={colors.error} />
-            <Text style={styles.errorText}>{error}</Text>
-          </View>
-        )}
-
+        <View style={styles.bodyInner} onLayout={onContainerLayout}>
         {mode === 'builtin' && (
           <InstalledPane
             kind="builtin"
@@ -267,6 +317,7 @@ export default function McpsScreen() {
             cols={cols}
             onToggle={toggleEntry}
             onRemove={undefined}
+            onTilePress={onTilePress}
           />
         )}
         {mode === 'custom' && (
@@ -279,6 +330,8 @@ export default function McpsScreen() {
             onToggle={toggleEntry}
             onRemove={removeEntry}
             onExplore={() => setMode('browse')}
+            onGoNew={() => setMode('new')}
+            onTilePress={onTilePress}
           />
         )}
         {mode === 'browse' && (
@@ -295,8 +348,17 @@ export default function McpsScreen() {
             onLoadMore={() => runSearch(mktQuery.trim(), mktCursor, true)}
           />
         )}
+        {mode === 'new' && (
+          <NewPane
+            key={`new-form-${newFormNonce}`}
+            onSubmit={onSubmitNew}
+            onCancel={() => setMode('custom')}
+            serverError={newServerError}
+          />
+        )}
 
-        <View style={{ height: 40 }} />
+          <View style={{ height: 40 }} />
+        </View>
       </ScrollView>
     </View>
   );
@@ -315,10 +377,12 @@ interface InstalledPaneProps {
   onToggle: (entry: MCPEntry) => void;
   onRemove?: (entry: MCPEntry) => void;
   onExplore?: () => void;
+  onGoNew?: () => void;
+  onTilePress?: (entry: MCPEntry) => void;
 }
 
 function InstalledPane({
-  kind, query, setQuery, items, cols, onToggle, onRemove, onExplore,
+  kind, query, setQuery, items, cols, onToggle, onRemove, onExplore, onGoNew, onTilePress,
 }: InstalledPaneProps) {
   const placeholder = kind === 'builtin'
     ? 'Filter bundled MCPs…'
@@ -330,7 +394,15 @@ function InstalledPane({
 
   const emptyMessage = kind === 'builtin'
     ? 'Builtins are seeded on every agent boot. If you see this, the bootstrap did not run — check the gateway logs.'
-    : 'Install one from the marketplace, or add a custom server directly via the gateway API.';
+    : 'Install one from the marketplace, or head to the New tab to wire up a command or URL by hand.';
+
+  // Empty-state actions jump to sibling tabs instead of pushing routes.
+  const emptyPrimary = kind === 'custom' && !query && onGoNew
+    ? { label: 'New MCP', icon: 'plus' as const, onPress: onGoNew }
+    : undefined;
+  const emptySecondary = kind === 'custom' && !query && onExplore
+    ? { label: 'Browse marketplace', icon: 'compass' as const, onPress: onExplore }
+    : undefined;
 
   return (
     <View style={{ gap: 14 }}>
@@ -352,11 +424,8 @@ function InstalledPane({
           icon={kind === 'builtin' ? 'package' : 'sliders'}
           title={emptyTitle}
           message={emptyMessage}
-          primary={
-            kind === 'custom' && onExplore && !query
-              ? { label: 'Browse marketplace', icon: 'compass', onPress: onExplore }
-              : undefined
-          }
+          primary={emptyPrimary}
+          secondary={emptySecondary}
         />
       ) : (
         <Grid cols={cols}>
@@ -366,10 +435,45 @@ function InstalledPane({
               entry={entry}
               onToggle={() => onToggle(entry)}
               onRemove={onRemove ? () => onRemove(entry) : undefined}
+              onPress={onTilePress ? () => onTilePress(entry) : undefined}
             />
           ))}
         </Grid>
       )}
+    </View>
+  );
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// New pane — inlined custom-MCP form under the 4th tab
+// ───────────────────────────────────────────────────────────────────────
+
+interface NewPaneProps {
+  onSubmit: (payload: McpSubmitPayload) => Promise<void>;
+  onCancel: () => void;
+  serverError: string | null;
+}
+
+function NewPane({ onSubmit, onCancel, serverError }: NewPaneProps) {
+  return (
+    <View style={styles.newPaneWrap}>
+      <View style={styles.newPaneHead}>
+        <Text style={styles.newPaneEyebrow}>ADD · CUSTOM MCP</Text>
+        <Text style={styles.newPaneTitle}>New custom server</Text>
+        <Text style={styles.newPaneHint}>
+          Wire up any MCP server you run locally or host remotely. Saved into the{' '}
+          <Text style={styles.newPaneMono}>mcps</Text> table; the pool hot-reloads on the next message.
+        </Text>
+      </View>
+      <View style={styles.newPaneRule} />
+      <McpConfigForm
+        mode="new"
+        onSubmit={onSubmit}
+        onCancel={onCancel}
+        submitLabel="Create MCP"
+        submittingLabel="Creating…"
+        serverError={serverError}
+      />
     </View>
   );
 }
@@ -467,19 +571,30 @@ function MarketplacePane({
 // ───────────────────────────────────────────────────────────────────────
 
 function Grid({ cols, children }: { cols: number; children: React.ReactNode }) {
-  // `basis` is the exact percentage width; `maxWidth` prevents a single
-  // last row orphan from stretching to full width.
+  // Chunk the children into fixed-size rows and give each cell ``flex: 1``.
+  // Why not ``flexBasis: 33.33%`` with wrap: percent-sized cells plus a
+  // ``gap`` overflow slightly, and the last-row orphans need explicit
+  // ``maxWidth`` caps to keep columns aligned. Row-chunking sidesteps both
+  // problems — every row is an independent flexbox with N equal cells,
+  // and the last row is padded with empty spacers so columns line up.
   const gap = 14;
   const nodes = Array.isArray(children) ? children : [children];
-  const basis = `${100 / cols}%` as `${number}%`;
+  const rows: React.ReactNode[][] = [];
+  for (let i = 0; i < nodes.length; i += cols) {
+    rows.push(nodes.slice(i, i + cols));
+  }
   return (
-    <View style={[gridStyles.grid, { gap }]}>
-      {nodes.map((child, i) => (
-        <View
-          key={i}
-          style={[gridStyles.cell, { flexBasis: basis, maxWidth: basis }]}
-        >
-          {child}
+    <View style={{ gap }}>
+      {rows.map((row, ri) => (
+        <View key={ri} style={[gridStyles.row, { gap }]}>
+          {row.map((child, ci) => (
+            <View key={ci} style={gridStyles.cell}>{child}</View>
+          ))}
+          {/* Pad short last row so remaining columns don't stretch. */}
+          {row.length < cols &&
+            Array.from({ length: cols - row.length }).map((_, pi) => (
+              <View key={`pad-${pi}`} style={gridStyles.cell} />
+            ))}
         </View>
       ))}
     </View>
@@ -522,22 +637,33 @@ function EmptyState({
 //   hint:  fontSize 12-13, textMuted, lineHeight 18
 // ───────────────────────────────────────────────────────────────────────
 
+const CONTENT_MAX_WIDTH = 1120; // same centering as settings.tsx (560) × 2
+
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
-  scroll: { flex: 1 },
-  scrollContent: {
-    padding: 24,
-    maxWidth: 1400,
+
+  // Fixed header: outer band spans the window so the bottom border runs
+  // edge-to-edge; the ``headerInner`` carries the same max-width column
+  // as the scrolling body so title, tabs and body line up vertically.
+  fixedHeader: {
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderLight,
+    backgroundColor: colors.bg,
+  },
+  headerInner: {
+    maxWidth: CONTENT_MAX_WIDTH,
     width: '100%',
     alignSelf: 'center',
+    paddingHorizontal: 24,
+    paddingTop: 24,
+    paddingBottom: 14,
+    gap: 14,
   },
-
-  header: {
+  headerTopRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: 12,
-    marginBottom: 16,
   },
   title: {
     fontSize: 20, fontWeight: '500', color: colors.text,
@@ -549,11 +675,22 @@ const styles = StyleSheet.create({
     maxWidth: 640,
   },
 
-  tabsRow: { marginBottom: 16 },
+  tabsRow: {},
+
+  scroll: { flex: 1 },
+  scrollContent: {
+    paddingBottom: 0,
+  },
+  bodyInner: {
+    maxWidth: CONTENT_MAX_WIDTH,
+    width: '100%',
+    alignSelf: 'center',
+    paddingHorizontal: 24,
+    paddingTop: 20,
+  },
 
   errorBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    marginBottom: 12,
     paddingHorizontal: 12, paddingVertical: 8,
     backgroundColor: colors.errorSoft,
     borderWidth: 1, borderColor: colors.errorBorder,
@@ -561,6 +698,9 @@ const styles = StyleSheet.create({
   },
   errorText: { color: colors.error, fontSize: 12, flex: 1 },
 
+  toolbar: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+  },
   searchBox: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingHorizontal: 12, paddingVertical: 8,
@@ -615,13 +755,39 @@ const styles = StyleSheet.create({
   emptyActions: { flexDirection: 'row', gap: 8, marginTop: 8 },
 
   loadMore: { alignItems: 'center', marginTop: 6 },
+
+  // ── New pane (4th tab) ──
+  // Narrow column (760) for readability; generous padding above the form
+  // so it doesn't crowd the fixed header.
+  newPaneWrap: {
+    maxWidth: 760, width: '100%', alignSelf: 'center',
+    paddingTop: 32, paddingBottom: 24,
+  },
+  newPaneHead: { marginBottom: 4 },
+  newPaneEyebrow: {
+    fontSize: 10, color: colors.primary, fontWeight: '700',
+    letterSpacing: tracking.wider, textTransform: 'uppercase',
+  },
+  newPaneTitle: {
+    fontSize: 22, color: colors.text, fontWeight: '500',
+    fontFamily: font.display, letterSpacing: -0.4,
+    marginTop: 2,
+  },
+  newPaneHint: {
+    fontSize: 12.5, color: colors.textMuted, lineHeight: 18,
+    marginTop: 6, maxWidth: 620,
+  },
+  newPaneMono: { fontFamily: font.mono, color: colors.textSecondary },
+  newPaneRule: {
+    height: 1, backgroundColor: colors.borderLight,
+    marginTop: 22, marginBottom: 28,
+  },
 });
 
 const gridStyles = StyleSheet.create({
-  grid: {
+  row: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
     alignItems: 'stretch',
   },
-  cell: { flexGrow: 1, flexShrink: 0 },
+  cell: { flex: 1, minWidth: 0 },
 });

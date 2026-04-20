@@ -19,6 +19,7 @@ interface Props {
   entry: MCPEntry;
   onToggle: () => void;
   onRemove?: () => void;
+  onPress?: () => void;
   style?: object;
 }
 
@@ -42,7 +43,7 @@ function sourceLabel(entry: MCPEntry): { label: string; tone: 'builtin' | 'custo
   return { label: 'custom', tone: 'custom' };
 }
 
-export default function McpTile({ entry, onToggle, onRemove, style }: Props) {
+export default function McpTile({ entry, onToggle, onRemove, onPress, style }: Props) {
   const runtime = useMemo(() => prettyRuntime(entry), [entry]);
   const src = useMemo(() => sourceLabel(entry), [entry]);
   const envCount = entry.env ? Object.keys(entry.env).length : 0;
@@ -53,8 +54,15 @@ export default function McpTile({ entry, onToggle, onRemove, style }: Props) {
     return '—';
   }, [entry]);
 
+  // The whole tile is a pressable surface that opens the edit screen;
+  // switches and remove buttons nested inside intercept their own taps
+  // (RN's gesture system picks the deepest responder). The edit affordance
+  // lives on the tile body — see ``styles.editHint`` in the footer.
   return (
-    <View
+    <TouchableOpacity
+      activeOpacity={onPress ? 0.9 : 1}
+      onPress={onPress}
+      disabled={!onPress}
       style={[styles.tile, !entry.enabled && styles.tileDisabled, style]}
       // @ts-ignore web-only class for subtle lift
       {...(Platform.OS === 'web' ? { className: 'oa-hover-lift' } : {})}
@@ -90,14 +98,22 @@ export default function McpTile({ entry, onToggle, onRemove, style }: Props) {
           )}
         </View>
 
-        {onRemove && (
-          <TouchableOpacity onPress={onRemove} style={styles.remove} hitSlop={8}>
-            <Feather name="trash-2" size={12} color={colors.textMuted} />
-            <Text style={styles.removeText}>Remove</Text>
-          </TouchableOpacity>
-        )}
+        <View style={styles.footRow}>
+          {onRemove ? (
+            <TouchableOpacity onPress={onRemove} style={styles.remove} hitSlop={8}>
+              <Feather name="trash-2" size={12} color={colors.textMuted} />
+              <Text style={styles.removeText}>Remove</Text>
+            </TouchableOpacity>
+          ) : <View />}
+          {onPress && (
+            <View style={styles.editHint}>
+              <Text style={styles.editHintText}>Edit</Text>
+              <Feather name="chevron-right" size={12} color={colors.textMuted} />
+            </View>
+          )}
+        </View>
       </View>
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -168,17 +184,33 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontWeight: '600',
   },
+  footRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 2,
+  },
   remove: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    alignSelf: 'flex-start',
-    marginTop: 2,
     paddingVertical: 3,
   },
   removeText: {
     fontSize: 10.5,
     color: colors.textMuted,
     fontWeight: '500',
+  },
+  editHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    paddingVertical: 3,
+  },
+  editHintText: {
+    fontSize: 10.5,
+    color: colors.textMuted,
+    fontWeight: '500',
+    letterSpacing: 0.2,
   },
 });

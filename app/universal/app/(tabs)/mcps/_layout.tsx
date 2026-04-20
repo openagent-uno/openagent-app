@@ -1,10 +1,14 @@
 /**
  * MCPs tab — Expo Router Stack.
  *
- * The tab opens on the grid dashboard (``index``). Two deeper screens
- * push onto this stack:
+ * The tab opens on the grid dashboard (``index``). Deeper screens push
+ * onto this stack:
  *   - ``install``: secret-entry form for a marketplace server the user
  *     chose to install (params: name, version).
+ *   - ``[name]``: edit screen for any installed MCP row.
+ *
+ * The "new custom MCP" form lives inline as the 4th tab on the dashboard,
+ * not as a pushed route — so there is no ``new`` screen registered here.
  *
  * Expo Router is layered on react-navigation; the ``<Stack />`` below
  * is the same native stack navigator, so native back gestures and
@@ -19,6 +23,7 @@ export default function MCPsStackLayout() {
     <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
       <Stack.Screen name="index" />
       <Stack.Screen name="install" />
+      <Stack.Screen name="[name]" />
     </Stack>
   );
 }
