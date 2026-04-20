@@ -313,6 +313,141 @@ export async function disableMcp(name: string): Promise<MCPEntry> {
   return data.mcp;
 }
 
+// ── MCP Marketplace (registry.modelcontextprotocol.io via gateway proxy) ──
+//
+// Search hits a 5-min in-memory cache on the gateway; detail hits a 1-hr
+// cache (server.json is immutable per version). Install writes the row
+// straight to the same ``mcps`` table the manual "Add MCP" form uses, so
+// the pool's hot-reload picks it up on the next message.
+
+export type MarketplaceCard = {
+  name: string;
+  version?: string;
+  title?: string;
+  description?: string;
+  status?: string;
+  _meta?: Record<string, unknown>;
+};
+
+export type MarketplaceField = {
+  name: string;
+  isSecret: boolean;
+  isRequired: boolean;
+  description?: string;
+  default?: string;
+  value_template?: string;
+};
+
+export type MarketplacePlaceholder = {
+  token: string;
+  description?: string;
+};
+
+export type MarketplacePackage = {
+  index: number;
+  runtime: string;
+  registryType?: string;
+  identifier?: string;
+  version?: string;
+  transport?: string;
+  env_required: MarketplaceField[];
+  placeholders: MarketplacePlaceholder[];
+  supported: boolean;
+};
+
+export type MarketplaceRemote = {
+  index: number;
+  url?: string;
+  transport?: string;
+  header_required: MarketplaceField[];
+  placeholders: MarketplacePlaceholder[];
+};
+
+export type MarketplaceRequirements = {
+  packages: MarketplacePackage[];
+  remotes: MarketplaceRemote[];
+};
+
+export type MarketplaceSearchResult = {
+  servers: MarketplaceCard[];
+  nextCursor?: string;
+  count?: number;
+};
+
+export type MarketplaceServerDetail = {
+  server: any;
+  _meta?: Record<string, unknown>;
+  requirements: MarketplaceRequirements;
+};
+
+export type MarketplaceInstallChoice = { kind: 'package' | 'remote'; index: number };
+
+export type MarketplaceInstallPayload = {
+  name: string;
+  version?: string;
+  choice: MarketplaceInstallChoice;
+  install_name?: string;
+  env?: Record<string, string>;
+  headers?: Record<string, string>;
+  placeholders?: Record<string, string>;
+};
+
+export type MarketplaceInstallError = {
+  status: number;
+  error: string;
+  suggested_name?: string;
+};
+
+export async function searchMcpMarketplace(
+  q: string,
+  cursor?: string,
+  limit?: number,
+): Promise<MarketplaceSearchResult> {
+  const params = new URLSearchParams();
+  if (q) params.set('q', q);
+  if (cursor) params.set('cursor', cursor);
+  if (limit) params.set('limit', String(limit));
+  const qs = params.toString();
+  return await get<MarketplaceSearchResult>(`/api/marketplace/search${qs ? `?${qs}` : ''}`);
+}
+
+export async function getMarketplaceServer(
+  name: string,
+  version: string = 'latest',
+): Promise<MarketplaceServerDetail> {
+  const params = new URLSearchParams({ name, version });
+  return await get<MarketplaceServerDetail>(`/api/marketplace/servers?${params.toString()}`);
+}
+
+/**
+ * Install an MCP from the marketplace. Returns the new MCPEntry on success.
+ *
+ * On 409 (name collision) the gateway returns ``{error, suggested_name}``;
+ * we surface that as a typed ``MarketplaceInstallError`` thrown from this
+ * function so the caller can offer the suggestion inline.
+ */
+export async function installFromMarketplace(
+  payload: MarketplaceInstallPayload,
+): Promise<MCPEntry> {
+  const res = await fetch(`${baseUrl}/api/marketplace/install`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const text = await res.text();
+  let body: any = null;
+  try { body = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
+  if (!res.ok) {
+    const err: MarketplaceInstallError = {
+      status: res.status,
+      error: (body && body.error) || text || `HTTP ${res.status}`,
+      suggested_name: body && body.suggested_name,
+    };
+    throw err;
+  }
+  return (body as { mcp: MCPEntry }).mcp;
+}
+
 // ── DB-backed Model catalog (/api/models) ──
 //
 // Each row is a (provider_id, model) pair under a provider row. The

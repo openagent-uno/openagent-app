@@ -24,6 +24,7 @@ import Card from '../../components/Card';
 import CategorySidebar from '../../components/CategorySidebar';
 import ResponsiveSidebar from '../../components/ResponsiveSidebar';
 import ThemedSwitch from '../../components/ThemedSwitch';
+import MarketplaceBrowser from '../../components/MarketplaceBrowser';
 
 type CategoryId = 'default' | 'custom';
 
@@ -32,6 +33,7 @@ export default function McpsScreen() {
   const [mcps, setMcps] = useState<MCPEntry[]>([]);
   const [activeCategory, setActiveCategory] = useState<CategoryId>('default');
   const [addingNew, setAddingNew] = useState(false);
+  const [browsing, setBrowsing] = useState(false);
   const [newName, setNewName] = useState('');
   const [newCommand, setNewCommand] = useState('');
   const [newUrl, setNewUrl] = useState('');
@@ -163,6 +165,12 @@ export default function McpsScreen() {
             <Text style={styles.sectionHint}>
               Extra MCP servers you've added. Changes are live on the next message.
             </Text>
+            {browsing && (
+              <MarketplaceBrowser
+                onInstalled={refresh}
+                onClose={() => setBrowsing(false)}
+              />
+            )}
             {renderRows(customs, 'No custom MCPs configured')}
             {addingNew ? (
               <Card padded={false}>
@@ -195,13 +203,20 @@ export default function McpsScreen() {
                 </View>
               </Card>
             ) : (
-              <View style={styles.addBtnWrap}>
+              <View style={styles.addBtnRow}>
+                <Button
+                  variant="secondary"
+                  label={browsing ? 'Hide marketplace' : 'Browse marketplace'}
+                  icon="search"
+                  onPress={() => setBrowsing((b) => !b)}
+                  style={styles.addBtnFlex}
+                />
                 <Button
                   variant="primary"
-                  label="Add MCP Server"
+                  label="Add manually"
                   icon="plus"
-                  fullWidth
                   onPress={() => setAddingNew(true)}
+                  style={styles.addBtnFlex}
                 />
               </View>
             )}
@@ -234,6 +249,8 @@ const styles = StyleSheet.create({
   removeBtn: { padding: 6, marginLeft: 8 },
   emptyText: { padding: 14, fontSize: 12, color: colors.textMuted, textAlign: 'center' },
   addBtnWrap: { marginTop: 10 },
+  addBtnRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
+  addBtnFlex: { flex: 1 },
   addForm: { padding: 12 },
   input: {
     backgroundColor: colors.inputBg, borderRadius: radius.md,
