@@ -279,6 +279,15 @@ export default function ModelScreen() {
     const duplicateCli = newProvName
       && newProvFramework === 'claude-cli'
       && existingKeys.has(`${newProvName}:claude-cli`);
+    // claude-cli dispatches the local `claude` binary, which only speaks
+    // Anthropic — so the framework chip only appears for that vendor.
+    const isAnthropicProv = newProvName.trim().toLowerCase() === 'anthropic';
+    const handleProvNameChange = (text: string) => {
+      setNewProvName(text);
+      if (text.trim().toLowerCase() !== 'anthropic' && newProvFramework === 'claude-cli') {
+        setNewProvFramework('agno');
+      }
+    };
 
     return (
       <>
@@ -322,7 +331,7 @@ export default function ModelScreen() {
             <TextInput
               style={[styles.input, { marginBottom: 8 }]}
               value={newProvName}
-              onChangeText={setNewProvName}
+              onChangeText={handleProvNameChange}
               placeholder="Type or pick below"
               placeholderTextColor={colors.textMuted}
             />
@@ -354,14 +363,16 @@ export default function ModelScreen() {
               >
                 <Text style={[styles.chipText, newProvFramework === 'agno' && styles.chipTextActive]}>agno (API)</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.chip, newProvFramework === 'claude-cli' && styles.chipActive]}
-                onPress={() => setNewProvFramework('claude-cli')}
-              >
-                <Text style={[styles.chipText, newProvFramework === 'claude-cli' && styles.chipTextActive]}>
-                  claude-cli (subscription)
-                </Text>
-              </TouchableOpacity>
+              {isAnthropicProv && (
+                <TouchableOpacity
+                  style={[styles.chip, newProvFramework === 'claude-cli' && styles.chipActive]}
+                  onPress={() => setNewProvFramework('claude-cli')}
+                >
+                  <Text style={[styles.chipText, newProvFramework === 'claude-cli' && styles.chipTextActive]}>
+                    claude-cli (subscription)
+                  </Text>
+                </TouchableOpacity>
+              )}
             </View>
             {(duplicateAgno || duplicateCli) && (
               <Text style={styles.warnText}>
