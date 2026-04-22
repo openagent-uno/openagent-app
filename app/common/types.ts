@@ -270,8 +270,12 @@ export type UpdateScheduledTaskInput = Partial<
 // A workflow is a DAG of blocks (nodes) connected by edges. The
 // ``graph`` payload round-trips through the AI's workflow-manager
 // MCP, the REST API, and the React-Flow / SVG editor unchanged.
-
-export type WorkflowTriggerKind = 'manual' | 'schedule' | 'ai' | 'hybrid';
+//
+// Triggering is declared *inside the graph* via trigger-* blocks
+// (trigger-manual, trigger-schedule, trigger-ai). A workflow has no
+// row-level trigger field — any workflow can be fired manually, by
+// the AI, or on a schedule at any time, depending on what blocks it
+// carries. Multiple trigger-schedule blocks fire independently.
 
 export type WorkflowRunStatus = 'running' | 'success' | 'failed' | 'cancelled';
 
@@ -316,22 +320,43 @@ export interface WorkflowGraph {
   variables: Record<string, unknown>;
 }
 
+// One schedule per ``trigger-schedule`` block, keyed by node_id. The
+// scheduler loop polls this shape; the UI's list row + history drawer
+// surface ``next_run_at_iso`` / ``last_run_at_iso``.
+export interface WorkflowSchedule {
+  id: string;
+  workflow_id: string;
+  node_id: string;
+  cron_expression: string;
+  next_run_at: number;
+  last_run_at: number | null;
+  enabled: boolean;
+  created_at: number;
+  updated_at: number;
+  next_run_at_iso?: string | null;
+  last_run_at_iso?: string | null;
+  created_at_iso?: string;
+  updated_at_iso?: string;
+}
+
 export interface WorkflowTask {
   id: string;
   name: string;
   description?: string | null;
   graph: WorkflowGraph;
-  trigger_kind: WorkflowTriggerKind;
-  cron_expression?: string | null;
   enabled: boolean;
   last_run_at: number | null;
-  next_run_at: number | null;
   created_at: number;
   updated_at: number;
   last_run_at_iso?: string | null;
-  next_run_at_iso?: string | null;
   created_at_iso?: string;
   updated_at_iso?: string;
+  // Derived server-side from graph nodes — e.g. ``['trigger-manual',
+  // 'trigger-schedule']`` when the workflow carries both kinds. Used
+  // by the list badge + AI's ``has_trigger_type`` filter.
+  trigger_types: string[];
+  // Per-block schedule state (one row per ``trigger-schedule`` block).
+  schedules: WorkflowSchedule[];
 }
 
 export interface CreateWorkflowInput {
@@ -340,8 +365,6 @@ export interface CreateWorkflowInput {
   nodes?: WorkflowNode[];
   edges?: WorkflowEdge[];
   variables?: Record<string, unknown>;
-  trigger_kind?: WorkflowTriggerKind;
-  cron_expression?: string | null;
 }
 
 export type UpdateWorkflowInput = Partial<{
@@ -350,8 +373,6 @@ export type UpdateWorkflowInput = Partial<{
   nodes: WorkflowNode[];
   edges: WorkflowEdge[];
   variables: Record<string, unknown>;
-  trigger_kind: WorkflowTriggerKind;
-  cron_expression: string | null;
   enabled: boolean;
 }>;
 

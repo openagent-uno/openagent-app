@@ -118,11 +118,11 @@ export async function deleteScheduledTask(id: string): Promise<void> {
 // ── Workflows API ──
 
 export async function getWorkflows(
-  opts: { enabledOnly?: boolean; triggerKind?: string } = {}
+  opts: { enabledOnly?: boolean; hasTriggerType?: string } = {}
 ): Promise<WorkflowTask[]> {
   const params = new URLSearchParams();
   if (opts.enabledOnly) params.set('enabled_only', 'true');
-  if (opts.triggerKind) params.set('trigger_kind', opts.triggerKind);
+  if (opts.hasTriggerType) params.set('has_trigger_type', opts.hasTriggerType);
   const qs = params.toString();
   const data = await get<{ workflows: WorkflowTask[] }>(
     `/api/workflows${qs ? `?${qs}` : ''}`

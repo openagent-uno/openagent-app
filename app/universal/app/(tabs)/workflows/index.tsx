@@ -31,33 +31,47 @@ import { setBaseUrl } from '../../../services/api';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import Button from '../../../components/Button';
 import Card from '../../../components/Card';
-import CronPicker from '../../../components/CronPicker';
 import ThemedSwitch from '../../../components/ThemedSwitch';
 import type {
   CreateWorkflowInput,
+  WorkflowNode,
   WorkflowTask,
-  WorkflowTriggerKind,
 } from '../../../../common/types';
 
-const TRIGGER_LABELS: Record<WorkflowTriggerKind, string> = {
-  manual: 'Manual',
-  schedule: 'Scheduled',
-  ai: 'AI',
-  hybrid: 'Hybrid',
+// Trigger-type → (label, icon). Keyed on the block type that appears
+// inside the graph; a workflow badge renders the union of the types
+// it carries so users see "Manual + Scheduled" at a glance.
+const TRIGGER_LABELS: Record<string, string> = {
+  'trigger-manual': 'Manual',
+  'trigger-schedule': 'Scheduled',
+  'trigger-ai': 'AI',
 };
 
-const TRIGGER_ICONS: Record<WorkflowTriggerKind, string> = {
-  manual: 'play-circle',
-  schedule: 'clock',
-  ai: 'cpu',
-  hybrid: 'git-merge',
+const TRIGGER_ICONS: Record<string, string> = {
+  'trigger-manual': 'play-circle',
+  'trigger-schedule': 'clock',
+  'trigger-ai': 'cpu',
 };
 
 const EMPTY_CREATE: CreateWorkflowInput = {
   name: '',
   description: '',
-  trigger_kind: 'manual',
 };
+
+// Fresh workflows get a single ``trigger-manual`` block so they're
+// runnable from the Run button immediately. Users can add more
+// triggers (scheduled, AI) inside the editor's palette if they want.
+function initialGraphNodes(): WorkflowNode[] {
+  return [
+    {
+      id: 'n1',
+      type: 'trigger-manual',
+      label: 'Run',
+      position: { x: 120, y: 120 },
+      config: {},
+    },
+  ];
+}
 
 export default function WorkflowsScreen() {
   const router = useRouter();
@@ -91,12 +105,19 @@ export default function WorkflowsScreen() {
   const handleCreate = async () => {
     const name = form.name.trim();
     if (!name) return;
-    const created = await createWorkflow({ ...form, name });
+    // Seed every new workflow with a manual trigger so it can run
+    // from the Run button without the user first opening the editor.
+    // They can add a schedule trigger or AI trigger inside the editor
+    // later.
+    const created = await createWorkflow({
+      ...form,
+      name,
+      nodes: initialGraphNodes(),
+      edges: [],
+    });
     if (created) {
       setCreating(false);
       setForm(EMPTY_CREATE);
-      // Jump straight into the editor so the user can start wiring
-      // blocks on their fresh workflow without an extra click.
       router.push(`/workflows/${created.id}` as any);
     }
   };
@@ -143,8 +164,13 @@ export default function WorkflowsScreen() {
 
           {workflows.map((wf, i) => {
             const lastRun = runs[wf.id];
-            const triggerKind = wf.trigger_kind;
-            const triggerIcon = TRIGGER_ICONS[triggerKind] as any;
+            // ``trigger_types`` is server-decorated from the graph — an
+            // array like ``['trigger-manual', 'trigger-schedule']``.
+            // Empty means the workflow has no triggers (orphaned) and
+            // can only be fired via the AI or an explicit API call.
+            const triggers = wf.trigger_types ?? [];
+            const scheduleCount = wf.schedules?.length ?? 0;
+            const nextRunIso = wf.schedules?.[0]?.next_run_at_iso;
             const nodeCount = wf.graph?.nodes?.length ?? 0;
             const edgeCount = wf.graph?.edges?.length ?? 0;
             const isRunning = runningId === wf.id;
@@ -160,17 +186,27 @@ export default function WorkflowsScreen() {
                   accessibilityLabel={`Open workflow ${wf.name}`}
                 >
                   <View style={styles.rowHeader}>
-                    <Feather
-                      name={triggerIcon}
-                      size={12}
-                      color={colors.primary}
-                      style={styles.triggerIcon}
-                    />
-                    <Text style={styles.triggerBadge}>
-                      {TRIGGER_LABELS[triggerKind]}
-                    </Text>
-                    {wf.cron_expression ? (
-                      <Text style={styles.cronText}>{wf.cron_expression}</Text>
+                    {triggers.length > 0 ? (
+                      triggers.map((t) => (
+                        <View key={t} style={styles.triggerChipInline}>
+                          <Feather
+                            name={(TRIGGER_ICONS[t] || 'circle') as any}
+                            size={11}
+                            color={colors.primary}
+                          />
+                          <Text style={styles.triggerBadge}>
+                            {TRIGGER_LABELS[t] || t.replace('trigger-', '')}
+                          </Text>
+                        </View>
+                      ))
+                    ) : (
+                      <Text style={styles.triggerBadgeMuted}>No triggers</Text>
+                    )}
+                    {scheduleCount > 0 && nextRunIso ? (
+                      <Text style={styles.cronText}>
+                        next {nextRunIso}
+                        {scheduleCount > 1 ? ` (+${scheduleCount - 1})` : ''}
+                      </Text>
                     ) : null}
                     <Text style={styles.blockCount}>
                       {nodeCount} block{nodeCount === 1 ? '' : 's'} ·{' '}
@@ -287,50 +323,11 @@ export default function WorkflowsScreen() {
                   multiline
                 />
               )}
-              <View style={styles.triggerPicker}>
-                {(Object.keys(TRIGGER_LABELS) as WorkflowTriggerKind[]).map(
-                  (kind) => (
-                    <TouchableOpacity
-                      key={kind}
-                      onPress={() => setForm({ ...form, trigger_kind: kind })}
-                      style={[
-                        styles.triggerChip,
-                        form.trigger_kind === kind && styles.triggerChipActive,
-                      ]}
-                    >
-                      <Feather
-                        name={TRIGGER_ICONS[kind] as any}
-                        size={12}
-                        color={
-                          form.trigger_kind === kind
-                            ? colors.primary
-                            : colors.textMuted
-                        }
-                      />
-                      <Text
-                        style={[
-                          styles.triggerChipText,
-                          form.trigger_kind === kind &&
-                            styles.triggerChipTextActive,
-                        ]}
-                      >
-                        {TRIGGER_LABELS[kind]}
-                      </Text>
-                    </TouchableOpacity>
-                  ),
-                )}
-              </View>
-              {(form.trigger_kind === 'schedule' ||
-                form.trigger_kind === 'hybrid') && (
-                <View style={{ marginBottom: 10 }}>
-                  <CronPicker
-                    value={form.cron_expression || ''}
-                    onChange={(expr) =>
-                      setForm({ ...form, cron_expression: expr })
-                    }
-                  />
-                </View>
-              )}
+              <Text style={styles.createHint}>
+                Starts with a manual trigger so you can Run it right
+                away. Add scheduled or AI triggers from the editor's
+                block palette.
+              </Text>
               <View style={styles.formActions}>
                 <Button
                   variant="ghost"
@@ -416,15 +413,39 @@ const styles = StyleSheet.create({
   },
   rowBorder: { borderTopWidth: 1, borderTopColor: colors.borderLight },
   rowInfo: { flex: 1, marginRight: 10 },
-  rowHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 3 },
+  rowHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    marginBottom: 3,
+    gap: 4,
+  },
   triggerIcon: { marginRight: 4 },
+  triggerChipInline: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: colors.primarySoft,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    marginRight: 4,
+  },
   triggerBadge: {
     fontSize: 10,
     color: colors.primary,
     fontWeight: '600',
     letterSpacing: 0.3,
     textTransform: 'uppercase',
+  },
+  triggerBadgeMuted: {
+    fontSize: 10,
+    color: colors.textMuted,
+    fontWeight: '500',
+    letterSpacing: 0.3,
+    textTransform: 'uppercase',
     marginRight: 8,
+    fontStyle: 'italic',
   },
   cronText: {
     fontSize: 11,
@@ -487,33 +508,13 @@ const styles = StyleSheet.create({
     fontSize: 12,
     marginBottom: 8,
   },
-  triggerPicker: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    marginBottom: 10,
-  },
-  triggerChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: radius.pill,
-    backgroundColor: colors.inputBg,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  triggerChipActive: {
-    backgroundColor: colors.primarySoft,
-    borderColor: colors.primary,
-  },
-  triggerChipText: {
+  createHint: {
     fontSize: 11,
     color: colors.textMuted,
-    fontWeight: '500',
+    lineHeight: 16,
+    marginBottom: 10,
+    fontStyle: 'italic',
   },
-  triggerChipTextActive: { color: colors.primary },
   formActions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
