@@ -19,6 +19,9 @@ export type ClientMessage =
     }
   | { type: 'ping' };
 
+export type ResourceKind = 'mcp' | 'scheduled_task' | 'workflow' | 'vault' | 'config';
+export type ResourceAction = 'created' | 'updated' | 'deleted' | 'changed';
+
 export type ServerMessage =
   | { type: 'auth_ok'; agent_name: string; version: string }
   | { type: 'auth_error'; reason: string }
@@ -27,7 +30,10 @@ export type ServerMessage =
   | { type: 'error'; text: string }
   | { type: 'queued'; position: number }
   | { type: 'command_result'; text: string }
-  | { type: 'pong' };
+  | { type: 'pong' }
+  // Resource-change ping: a list the desktop app might be showing
+  // moved on the server. Subscribed stores refetch on receipt.
+  | { type: 'resource_event'; resource: ResourceKind; action: ResourceAction; id?: string };
 
 export interface Attachment {
   type: 'image' | 'file' | 'voice' | 'video';
@@ -205,6 +211,10 @@ export interface AgentConfig {
   name?: string;
   system_prompt?: string;
   dream_mode?: { enabled: boolean; time: string };
+  // Weekly self-review built-in. Cron defaults to "0 9 * * MON" — the
+  // settings panel can override it; toggle ``enabled`` to suppress
+  // the scheduled run without removing the row from the database.
+  manager_review?: { enabled: boolean; cron: string };
   auto_update?: { enabled: boolean; mode: string; check_interval: string };
   channels?: Record<string, any>;
   services?: Record<string, any>;

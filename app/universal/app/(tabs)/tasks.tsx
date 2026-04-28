@@ -14,11 +14,13 @@ import {
   View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Platform,
 } from 'react-native';
 import { useConnection } from '../../stores/connection';
+import { useEvents } from '../../stores/events';
 import { useTasks } from '../../stores/tasks';
 import { setBaseUrl } from '../../services/api';
 import { useConfirm } from '../../components/ConfirmDialog';
 import Button from '../../components/Button';
 import Card from '../../components/Card';
+import CronPicker from '../../components/CronPicker';
 import ThemedSwitch from '../../components/ThemedSwitch';
 import type { ScheduledTask } from '../../../common/types';
 
@@ -48,6 +50,13 @@ export default function TasksScreen() {
       loadTasks();
     }
   }, [connConfig]);
+
+  // Refetch on chat-driven creates, scheduler ticks, etc.
+  useEffect(() => {
+    return useEvents.getState().subscribe('scheduled_task', () => {
+      void loadTasks();
+    });
+  }, [loadTasks]);
 
   const handleRemove = async (id: string) => {
     const t = tasks.find((x) => x.id === id);
@@ -131,13 +140,13 @@ export default function TasksScreen() {
               placeholder="Name (e.g. health-check)"
               placeholderTextColor={colors.textMuted}
             />
-            <TextInput
-              style={styles.input}
-              value={form.cron_expression}
-              onChangeText={(v) => setForm({ ...form, cron_expression: v })}
-              placeholder="Cron (e.g. */30 * * * *)"
-              placeholderTextColor={colors.textMuted}
-            />
+            <View style={styles.cronSlot}>
+              <CronPicker
+                label="Schedule"
+                value={form.cron_expression}
+                onChange={(v) => setForm({ ...form, cron_expression: v })}
+              />
+            </View>
             {Platform.OS === 'web' ? (
               <textarea
                 value={form.prompt}
@@ -234,6 +243,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 11, paddingVertical: 9,
     color: colors.text, fontSize: 12, marginBottom: 6, fontFamily: font.mono,
   },
+  cronSlot: { marginBottom: 8 },
   formActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 6, marginTop: 4 },
   cancelBtn: { padding: 6 },
   cancelBtnText: { color: colors.textMuted, fontSize: 12 },

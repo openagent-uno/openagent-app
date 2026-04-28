@@ -26,6 +26,7 @@ import {
 } from 'react-native';
 import { colors, font, radius } from '../../../theme';
 import { useConnection } from '../../../stores/connection';
+import { useEvents } from '../../../stores/events';
 import { useWorkflows } from '../../../stores/workflows';
 import { setBaseUrl } from '../../../services/api';
 import { useConfirm } from '../../../components/ConfirmDialog';
@@ -101,6 +102,16 @@ export default function WorkflowsScreen() {
       void loadWorkflows();
     }
   }, [connConfig]);
+
+  // Workflow-list refresh fires on every gateway-side change: chat-driven
+  // create_workflow, manual run start/end, schedule tick. The store
+  // already manages its own runningId, so a refetch never strands a
+  // spinner.
+  useEffect(() => {
+    return useEvents.getState().subscribe('workflow', () => {
+      void loadWorkflows();
+    });
+  }, [loadWorkflows]);
 
   const handleCreate = async () => {
     const name = form.name.trim();

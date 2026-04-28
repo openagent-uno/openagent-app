@@ -15,6 +15,7 @@ import GraphView from '../../../components/GraphView';
 import ResponsiveSidebar from '../../../components/ResponsiveSidebar';
 import VaultSidebar from '../../../components/memory/VaultSidebar';
 import { useConnection } from '../../../stores/connection';
+import { useEvents } from '../../../stores/events';
 import { useVault } from '../../../stores/vault';
 import { setBaseUrl } from '../../../services/api';
 import { colors } from '../../../theme';
@@ -31,6 +32,14 @@ export default function MemoryGraphScreen() {
       loadGraph();
     }
   }, [config]);
+
+  // Refetch when the agent (or another tab) writes/deletes a vault note.
+  useEffect(() => {
+    return useEvents.getState().subscribe('vault', () => {
+      void loadNotes();
+      void loadGraph();
+    });
+  }, [loadNotes, loadGraph]);
 
   const openNote = (path: string) => {
     // Split on ``/`` so folder segments become individual route segments

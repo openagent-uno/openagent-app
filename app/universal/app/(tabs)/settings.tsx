@@ -19,6 +19,7 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import Button from '../../components/Button';
 import Card from '../../components/Card';
 import CategorySidebar from '../../components/CategorySidebar';
+import CronPicker from '../../components/CronPicker';
 import TabStrip from '../../components/TabStrip';
 import ResponsiveSidebar from '../../components/ResponsiveSidebar';
 import ThemedSwitch from '../../components/ThemedSwitch';
@@ -28,6 +29,7 @@ type CategoryId =
   | 'appearance'
   | 'channels'
   | 'dream'
+  | 'manager_review'
   | 'auto_update'
   | 'controls'
   | 'connection';
@@ -44,6 +46,7 @@ const CATEGORIES: Category[] = [
   { id: 'appearance', label: 'Appearance', icon: 'sun', description: 'Light and dark theme' },
   { id: 'channels', label: 'Channels', icon: 'message-square', description: 'Gateway, Telegram, Discord, WhatsApp' },
   { id: 'dream', label: 'Dream Mode', icon: 'moon', description: 'Nightly reflection' },
+  { id: 'manager_review', label: 'Manager Review', icon: 'clipboard', description: 'Weekly self-review' },
   { id: 'auto_update', label: 'Auto-Update', icon: 'refresh-cw', description: 'Release check cadence' },
   { id: 'controls', label: 'Controls', icon: 'sliders', description: 'Update and restart' },
   { id: 'connection', label: 'Connection', icon: 'link', description: 'Account and host' },
@@ -83,6 +86,8 @@ export default function SettingsScreen() {
   const [systemPrompt, setSystemPrompt] = useState('');
   const [dreamEnabled, setDreamEnabled] = useState(false);
   const [dreamTime, setDreamTime] = useState('3:00');
+  const [managerReviewEnabled, setManagerReviewEnabled] = useState(true);
+  const [managerReviewCron, setManagerReviewCron] = useState('0 9 * * MON');
   const [autoUpdateEnabled, setAutoUpdateEnabled] = useState(false);
   const [autoUpdateMode, setAutoUpdateMode] = useState('auto');
   const [autoUpdateInterval, setAutoUpdateInterval] = useState('17 */6 * * *');
@@ -119,6 +124,8 @@ export default function SettingsScreen() {
     setSystemPrompt(agentConfig.system_prompt || '');
     setDreamEnabled(agentConfig.dream_mode?.enabled ?? false);
     setDreamTime(agentConfig.dream_mode?.time || '3:00');
+    setManagerReviewEnabled(agentConfig.manager_review?.enabled ?? true);
+    setManagerReviewCron(agentConfig.manager_review?.cron || '0 9 * * MON');
     setAutoUpdateEnabled(agentConfig.auto_update?.enabled ?? false);
     setAutoUpdateMode(agentConfig.auto_update?.mode || 'auto');
     setAutoUpdateInterval(agentConfig.auto_update?.check_interval || '17 */6 * * *');
@@ -384,6 +391,10 @@ export default function SettingsScreen() {
     <>
       <Text style={styles.sectionTitle}>Dream Mode</Text>
       <Card>
+        <Text style={styles.channelHint}>
+          Nightly hygiene routine — temp cleanup, vault curation, and a
+          health check. Disabled by default.
+        </Text>
         <View style={styles.toggleRow}>
           <Text style={styles.toggleLabel}>Enabled</Text>
           <ThemedSwitch value={dreamEnabled} onValueChange={setDreamEnabled} />
@@ -394,6 +405,39 @@ export default function SettingsScreen() {
           label="Save Dream Mode"
           saved={saved === 'dream'}
           onPress={() => saveSection('dream_mode', { enabled: dreamEnabled, time: dreamTime }, 'dream')}
+        />
+      </Card>
+    </>
+  );
+
+  const renderManagerReview = () => (
+    <>
+      <Text style={styles.sectionTitle}>Manager Review</Text>
+      <Card>
+        <Text style={styles.channelHint}>
+          Weekly self-review — the agent audits its own work as a project
+          manager would. Toggle here; the row never shows up in the
+          Tasks screen because it's owned by OpenAgent.
+        </Text>
+        <View style={styles.toggleRow}>
+          <Text style={styles.toggleLabel}>Enabled</Text>
+          <ThemedSwitch value={managerReviewEnabled} onValueChange={setManagerReviewEnabled} />
+        </View>
+        <View style={{ marginTop: 6 }}>
+          <CronPicker
+            label="Schedule"
+            value={managerReviewCron}
+            onChange={setManagerReviewCron}
+          />
+        </View>
+        <SaveBtn
+          label="Save Manager Review"
+          saved={saved === 'manager_review'}
+          onPress={() => saveSection(
+            'manager_review',
+            { enabled: managerReviewEnabled, cron: managerReviewCron },
+            'manager_review',
+          )}
         />
       </Card>
     </>
@@ -507,6 +551,7 @@ export default function SettingsScreen() {
       case 'appearance': return renderAppearance();
       case 'channels': return renderChannels();
       case 'dream': return renderDream();
+      case 'manager_review': return renderManagerReview();
       case 'auto_update': return renderAutoUpdate();
       case 'controls': return renderControls();
       case 'connection': return renderConnection();

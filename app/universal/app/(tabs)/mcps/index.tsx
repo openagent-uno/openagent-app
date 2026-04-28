@@ -27,6 +27,7 @@ import {
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useConnection } from '../../../stores/connection';
+import { useEvents } from '../../../stores/events';
 import {
   setBaseUrl, listMcps, createMcp, deleteMcp, enableMcp, disableMcp,
   searchMcpMarketplace,
@@ -126,6 +127,15 @@ export default function McpsScreen() {
       refresh();
     }, [refresh]),
   );
+
+  // Subscribe to gateway-driven MCP changes (a chat-installed MCP, an
+  // edit from another tab, marketplace install completing) so this
+  // screen reflects them without a manual reload.
+  useEffect(() => {
+    return useEvents.getState().subscribe('mcp', () => {
+      void refresh();
+    });
+  }, [refresh]);
 
   // ── Installed actions ──
   const toggleEntry = async (entry: MCPEntry) => {
