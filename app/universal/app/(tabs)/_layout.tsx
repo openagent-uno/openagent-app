@@ -1,27 +1,36 @@
 import { colors, font } from '../../theme';
 import Feather from '@expo/vector-icons/Feather';
 import { Tabs } from 'expo-router';
+import { JarvisDock } from '../../components/jarvis';
 
 export default function TabsLayout() {
   return (
     <Tabs
+      tabBar={(props) => <JarvisDock {...props} />}
       screenOptions={{
         headerShown: false,
+        sceneStyle: { backgroundColor: 'transparent' },
+        // Position the tab-bar wrapper absolutely so screen content
+        // fills the full viewport and flows *under* the floating
+        // JarvisDock (rather than the navigator reserving a slot
+        // that would otherwise paint a default white surface).
         tabBarStyle: {
-          backgroundColor: colors.sidebar,
-          borderTopColor: colors.borderLight,
-          borderTopWidth: 1,
-          height: 54,
-          paddingBottom: 6,
-          paddingTop: 6,
+          position: 'absolute',
+          left: 0,
+          right: 0,
+          bottom: 0,
+          backgroundColor: 'transparent',
+          borderTopWidth: 0,
+          elevation: 0,
+          shadowOpacity: 0,
         },
-        tabBarActiveTintColor: colors.primary,
-        tabBarInactiveTintColor: colors.textMuted,
+        tabBarActiveTintColor: colors.accent,
+        tabBarInactiveTintColor: colors.textSecondary,
         tabBarLabelStyle: {
-          fontSize: 10,
-          fontWeight: '500',
+          fontSize: 9.5,
+          fontWeight: '600',
           fontFamily: font.sans,
-          letterSpacing: 0.2,
+          letterSpacing: 1.5,
         },
       }}
     >
@@ -30,6 +39,13 @@ export default function TabsLayout() {
         options={{
           title: 'Chat',
           tabBarIcon: ({ color }) => <Feather name="message-circle" size={18} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="voice"
+        options={{
+          title: 'Voice',
+          tabBarIcon: ({ color }) => <Feather name="mic" size={18} color={color} />,
         }}
       />
       <Tabs.Screen
@@ -78,6 +94,13 @@ export default function TabsLayout() {
         options={{
           title: 'Model',
           tabBarIcon: ({ color }) => <Feather name="cpu" size={18} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="system"
+        options={{
+          title: 'System',
+          tabBarIcon: ({ color }) => <Feather name="activity" size={18} color={color} />,
         }}
       />
       <Tabs.Screen

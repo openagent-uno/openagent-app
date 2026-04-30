@@ -65,8 +65,23 @@ export class OpenAgentWS {
     }
   }
 
-  sendMessage(text: string, sessionId: string): void {
-    this.send({ type: 'message', text, session_id: sessionId });
+  sendMessage(
+    text: string,
+    sessionId: string,
+    options?: { inputWasVoice?: boolean; voiceLanguage?: string },
+  ): void {
+    const payload: ClientMessage = { type: 'message', text, session_id: sessionId };
+    if (options?.inputWasVoice) {
+      (payload as { input_was_voice?: boolean }).input_was_voice = true;
+    }
+    // ``voiceLanguage`` is meaningful only for voice messages — gateway
+    // ignores it on typed messages — but we pass it whenever the
+    // caller has it so future text-mode features (e.g. agent locale
+    // hints) can hook in without protocol churn.
+    if (options?.voiceLanguage) {
+      (payload as { voice_language?: string }).voice_language = options.voiceLanguage;
+    }
+    this.send(payload);
   }
 
   sendCommand(

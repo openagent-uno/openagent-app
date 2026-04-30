@@ -51,14 +51,21 @@ type CategoryId = 'overview' | 'providers' | 'models' | 'costs';
 const CATEGORIES = [
   { id: 'overview' as const, label: 'Overview', icon: 'dollar-sign' as const, description: 'Usage summary' },
   { id: 'providers' as const, label: 'Providers', icon: 'key' as const, description: 'API keys' },
-  { id: 'models' as const, label: 'Models', icon: 'cpu' as const, description: 'Routable models' },
+  { id: 'models' as const, label: 'Models', icon: 'cpu' as const, description: 'LLM, TTS, STT' },
   { id: 'costs' as const, label: 'Costs', icon: 'bar-chart-2' as const, description: 'Daily breakdown' },
 ];
 
 const FALLBACK_PROVIDERS = [
   'anthropic', 'openai', 'google', 'zai', 'groq', 'mistral',
   'xai', 'deepseek', 'cerebras', 'openrouter', 'local',
+  // Audio-only vendors. They ship via litellm dispatch, so the framework
+  // chip auto-flips to "litellm" when one of these is picked.
+  'elevenlabs', 'deepgram', 'azure',
 ];
+
+// Vendors that don't speak any LLM API — picking them in the Providers
+// form should default the framework to litellm (TTS/STT only).
+const AUDIO_ONLY_VENDORS = new Set(['elevenlabs', 'deepgram']);
 
 export default function ModelScreen() {
   const connConfig = useConnection((s) => s.config);
@@ -187,6 +194,9 @@ export default function ModelScreen() {
         provider_id: addProviderId,
         model: entry.id,
         display_name: entry.display_name,
+        // ``kind`` comes straight from discovery — ``tts-1`` lands as
+        // kind=tts, ``whisper-1`` as kind=stt, everything else as llm.
+        kind: entry.kind ?? 'llm',
       });
       await reload();
     } catch (e: any) {
@@ -273,12 +283,8 @@ export default function ModelScreen() {
 
   const renderProviders = () => {
     const existingKeys = new Set(providers.map((p) => `${p.name}:${p.framework}`));
-    const duplicateAgno = newProvName
-      && newProvFramework === 'agno'
-      && existingKeys.has(`${newProvName}:agno`);
-    const duplicateCli = newProvName
-      && newProvFramework === 'claude-cli'
-      && existingKeys.has(`${newProvName}:claude-cli`);
+    const duplicate = newProvName
+      && existingKeys.has(`${newProvName}:${newProvFramework}`);
     // claude-cli dispatches the local `claude` binary, which only speaks
     // Anthropic — so the framework chip only appears for that vendor.
     const isAnthropicProv = newProvName.trim().toLowerCase() === 'anthropic';
@@ -343,9 +349,11 @@ export default function ModelScreen() {
                   onPress={() => {
                     setNewProvName(p);
                     // Anthropic defaults to claude-cli unless an agno row
-                    // already exists under that name.
+                    // already exists; audio-only vendors default to litellm.
                     if (p === 'anthropic' && !existingKeys.has('anthropic:claude-cli')) {
                       setNewProvFramework('claude-cli');
+                    } else if (AUDIO_ONLY_VENDORS.has(p)) {
+                      setNewProvFramework('litellm');
                     } else {
                       setNewProvFramework('agno');
                     }
@@ -363,6 +371,14 @@ export default function ModelScreen() {
               >
                 <Text style={[styles.chipText, newProvFramework === 'agno' && styles.chipTextActive]}>agno (API)</Text>
               </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.chip, newProvFramework === 'litellm' && styles.chipActive]}
+                onPress={() => setNewProvFramework('litellm')}
+              >
+                <Text style={[styles.chipText, newProvFramework === 'litellm' && styles.chipTextActive]}>
+                  litellm (TTS/STT)
+                </Text>
+              </TouchableOpacity>
               {isAnthropicProv && (
                 <TouchableOpacity
                   style={[styles.chip, newProvFramework === 'claude-cli' && styles.chipActive]}
@@ -374,12 +390,12 @@ export default function ModelScreen() {
                 </TouchableOpacity>
               )}
             </View>
-            {(duplicateAgno || duplicateCli) && (
+            {duplicate && (
               <Text style={styles.warnText}>
-                {newProvName} already exists under {newProvFramework}. Pick the other framework.
+                {newProvName} already exists under {newProvFramework}. Pick another framework.
               </Text>
             )}
-            {newProvFramework === 'agno' && (
+            {newProvFramework !== 'claude-cli' && (
               <>
                 <Text style={styles.label}>API Key</Text>
                 <TextInput
@@ -410,7 +426,7 @@ export default function ModelScreen() {
               <Button
                 variant="primary" size="md" label="Add"
                 onPress={submitAddProvider}
-                disabled={!newProvName.trim() || !!duplicateAgno || !!duplicateCli}
+                disabled={!newProvName.trim() || !!duplicate}
               />
             </View>
           </View>
@@ -487,6 +503,12 @@ export default function ModelScreen() {
                     <View style={styles.rowInfo}>
                       <Text style={styles.rowTitle}>
                         <Text style={styles.rowModel}>{m.model}</Text>
+                        {m.kind && m.kind !== 'llm' && (
+                          <>
+                            <Text style={styles.rowSep}>  ·  </Text>
+                            <Text style={styles.kindBadge}>{m.kind.toUpperCase()}</Text>
+                          </>
+                        )}
                         {m.display_name && (
                           <>
                             <Text style={styles.rowSep}>  ·  </Text>
@@ -502,6 +524,15 @@ export default function ModelScreen() {
                       </Text>
                       {p.framework === 'claude-cli' ? (
                         <Text style={styles.rowMeta}>subscription</Text>
+                      ) : m.kind === 'tts' ? (
+                        <Text style={styles.rowMeta}>
+                          voice: {((m.metadata as Record<string, unknown>)?.voice_id as string) ?? '—'}
+                          {(m.metadata as Record<string, unknown>)?.voice_id_source === 'default' && (
+                            <Text style={styles.rowMetaMuted}> (default)</Text>
+                          )}
+                        </Text>
+                      ) : m.kind === 'stt' ? (
+                        <Text style={styles.rowMeta}>transcription</Text>
                       ) : (m.input_cost_per_million || m.output_cost_per_million) ? (
                         <Text style={styles.rowMeta}>
                           ${m.input_cost_per_million ?? '-'} / ${m.output_cost_per_million ?? '-'} per M
@@ -510,19 +541,21 @@ export default function ModelScreen() {
                         <Text style={styles.rowMeta}>no pricing</Text>
                       )}
                     </View>
-                    <TouchableOpacity
-                      style={styles.classifierBtn}
-                      onPress={() => toggleClassifier(m)}
-                      accessibilityLabel={
-                        m.is_classifier ? 'Unset router classifier' : 'Set as router classifier'
-                      }
-                    >
-                      <Feather
-                        name="git-branch"
-                        size={14}
-                        color={m.is_classifier ? colors.primary : colors.textMuted}
-                      />
-                    </TouchableOpacity>
+                    {(m.kind ?? 'llm') === 'llm' && (
+                      <TouchableOpacity
+                        style={styles.classifierBtn}
+                        onPress={() => toggleClassifier(m)}
+                        accessibilityLabel={
+                          m.is_classifier ? 'Unset router classifier' : 'Set as router classifier'
+                        }
+                      >
+                        <Feather
+                          name="git-branch"
+                          size={14}
+                          color={m.is_classifier ? colors.primary : colors.textMuted}
+                        />
+                      </TouchableOpacity>
+                    )}
                     <TouchableOpacity style={styles.toggleBtn} onPress={() => toggleModel(m)}>
                       <View style={[styles.toggleDot, m.enabled ? styles.toggleOn : styles.toggleOff]} />
                     </TouchableOpacity>
@@ -569,8 +602,14 @@ export default function ModelScreen() {
                         key={a.id}
                         style={styles.pickerItem}
                         onPress={() => registerModel(a)}
+                        disabled={a.added}
                       >
-                        <Text style={styles.pickerItemText}>{a.id}</Text>
+                        <Text style={styles.pickerItemText}>
+                          {a.id}
+                          {a.kind && a.kind !== 'llm' && (
+                            <Text style={styles.kindBadgeInline}>  {a.kind.toUpperCase()}</Text>
+                          )}
+                        </Text>
                         <Text style={styles.pickerItemMeta}>
                           {a.added ? 'added' : a.display_name || ''}
                         </Text>
@@ -734,6 +773,14 @@ const styles = StyleSheet.create({
   keyDisplay: { fontSize: 11, color: colors.textMuted, marginTop: 4, fontFamily: font.mono },
   testOk: { fontSize: 11, color: colors.success, marginTop: 6 },
   testFail: { fontSize: 11, color: colors.error, marginTop: 6 },
+  kindBadge: {
+    fontSize: 9, fontWeight: '700', color: colors.primary,
+    fontFamily: font.mono, letterSpacing: 0.5,
+  },
+  kindBadgeInline: {
+    fontSize: 9, fontWeight: '700', color: colors.primary,
+    fontFamily: font.mono, letterSpacing: 0.5,
+  },
 
   addBtn: {
     borderWidth: 1, borderStyle: 'dashed', borderColor: colors.border,
@@ -776,6 +823,7 @@ const styles = StyleSheet.create({
   rowSep: { color: colors.textMuted },
   rowModel: { color: colors.text, fontFamily: font.mono, fontWeight: '600' },
   rowMeta: { fontSize: 11, color: colors.textMuted, marginTop: 2, fontFamily: font.mono },
+  rowMetaMuted: { color: colors.textMuted, fontStyle: 'italic' },
 
   toggleBtn: { padding: 6, marginHorizontal: 4 },
   toggleDot: { width: 10, height: 10, borderRadius: 5 },

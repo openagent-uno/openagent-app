@@ -11,10 +11,21 @@ const genId = () => `msg-${nextMsgId++}-${Date.now()}`;
 interface ChatState {
   sessions: ChatSession[];
   activeSessionId: string | null;
+  // Tracked separately from ``activeSessionId`` so the Voice screen
+  // resumes its own session across tab switches without disturbing
+  // the Chat tab's selection. Lives only in memory — a fresh app
+  // launch always opens the Voice tab on a brand-new session.
+  voiceSessionId: string | null;
 
   createSession: () => string;
   setActiveSession: (id: string) => void;
   removeSession: (id: string) => void;
+  /** Returns the existing voice session id, or creates a new one. */
+  getOrCreateVoiceSession: () => string;
+  /** Clear the voice session pointer (next visit makes a fresh one).
+   * Does NOT delete the session row from ``sessions[]`` so the Chat
+   * tab's sidebar can still show the transcript. */
+  clearVoiceSession: () => void;
   addUserMessage: (sessionId: string, text: string, attachments?: Attachment[]) => void;
   handleServerMessage: (msg: ServerMessage) => void;
   clearAll: () => void;
@@ -23,6 +34,7 @@ interface ChatState {
 export const useChat = create<ChatState>((set, get) => ({
   sessions: [],
   activeSessionId: null,
+  voiceSessionId: null,
 
   createSession: () => {
     const id = `session-${Date.now()}`;
@@ -46,8 +58,28 @@ export const useChat = create<ChatState>((set, get) => ({
     const activeSessionId = s.activeSessionId === id
       ? (sessions[0]?.id ?? null)
       : s.activeSessionId;
-    return { sessions, activeSessionId };
+    const voiceSessionId = s.voiceSessionId === id ? null : s.voiceSessionId;
+    return { sessions, activeSessionId, voiceSessionId };
   }),
+
+  getOrCreateVoiceSession: () => {
+    const existing = get().voiceSessionId;
+    if (existing && get().sessions.some((s) => s.id === existing)) return existing;
+    const id = `session-${Date.now()}`;
+    const session: ChatSession = {
+      id,
+      title: 'Voice Chat',
+      messages: [],
+      isProcessing: false,
+    };
+    set((s) => ({
+      sessions: [...s.sessions, session],
+      voiceSessionId: id,
+    }));
+    return id;
+  },
+
+  clearVoiceSession: () => set({ voiceSessionId: null }),
 
   addUserMessage: (sessionId, text, attachments) => set((s) => ({
     sessions: s.sessions.map((ses) =>
@@ -133,31 +165,84 @@ export const useChat = create<ChatState>((set, get) => ({
       };
     }
 
+    if (msg.type === 'delta') {
+      // Token-streaming chunk for the in-progress assistant bubble.
+      // First delta of a turn creates the bubble (so it shows up
+      // immediately in the transcript); subsequent deltas append to
+      // the same bubble. The ``response`` frame replaces the bubble's
+      // text with the canonical clean version + attaches metadata.
+      const delta = msg.text || '';
+      if (!delta) return {};
+      return {
+        sessions: s.sessions.map((ses) => {
+          if (ses.id !== msg.session_id) return ses;
+          const msgs = [...ses.messages];
+          const last = msgs[msgs.length - 1];
+          if (last && last.role === 'assistant' && last.streaming) {
+            msgs[msgs.length - 1] = { ...last, text: last.text + delta };
+          } else {
+            msgs.push({
+              id: genId(),
+              role: 'assistant' as const,
+              text: delta,
+              timestamp: Date.now(),
+              streaming: true,
+            });
+          }
+          return { ...ses, messages: msgs, statusText: undefined };
+        }),
+      };
+    }
+
     if (msg.type === 'response') {
       return {
-        sessions: s.sessions.map((ses) =>
-          ses.id !== msg.session_id ? ses : {
-            ...ses,
-            isProcessing: false,
-            statusText: undefined,
-            messages: [...ses.messages, {
+        sessions: s.sessions.map((ses) => {
+          if (ses.id !== msg.session_id) return ses;
+          const msgs = [...ses.messages];
+          const last = msgs[msgs.length - 1];
+          // If a streaming bubble is in-flight, replace its content
+          // with the canonical RESPONSE text (which strips attachment
+          // markers + carries model meta). Otherwise append a new
+          // bubble — the legacy single-RESPONSE path used by older
+          // gateways and clients that ignore ``delta``.
+          if (last && last.role === 'assistant' && last.streaming) {
+            msgs[msgs.length - 1] = {
+              ...last,
+              text: msg.text,
+              attachments: msg.attachments ?? undefined,
+              model: msg.model,
+              streaming: false,
+            };
+          } else {
+            msgs.push({
               id: genId(),
               role: 'assistant' as const,
               text: msg.text,
               timestamp: Date.now(),
               attachments: msg.attachments ?? undefined,
               model: msg.model,
-            }],
-          },
-        ),
+            });
+          }
+          return {
+            ...ses,
+            isProcessing: false,
+            statusText: undefined,
+            messages: msgs,
+          };
+        }),
       };
     }
 
     if (msg.type === 'error') {
-      const activeId = s.activeSessionId;
+      // Route to the originating session (gateway sets session_id on
+      // errors raised inside _process_message). Fall back to the chat
+      // tab's active session for legacy/global errors with no id —
+      // without this fallback an old gateway would silently swallow
+      // every error frame.
+      const targetId = msg.session_id ?? s.activeSessionId;
       return {
         sessions: s.sessions.map((ses) =>
-          ses.id !== activeId ? ses : {
+          ses.id !== targetId ? ses : {
             ...ses,
             isProcessing: false,
             statusText: undefined,
@@ -175,5 +260,5 @@ export const useChat = create<ChatState>((set, get) => ({
     return {};
   }),
 
-  clearAll: () => set({ sessions: [], activeSessionId: null }),
+  clearAll: () => set({ sessions: [], activeSessionId: null, voiceSessionId: null }),
 }));

@@ -7,7 +7,22 @@
 
 export type ClientMessage =
   | { type: 'auth'; token: string; client_id?: string }
-  | { type: 'message'; text: string; session_id: string }
+  // ``input_was_voice``: true when the user just spoke (mic + ASR via
+  // /api/upload). The gateway responds via the streaming TTS pipeline
+  // when a TTS provider is configured, falling through to text-only
+  // otherwise. Mirror-modality semantics — text-typed messages get
+  // text-only replies regardless of voice mode.
+  // ``voice_language``: ISO-639-1 hint matching what Whisper used for
+  // transcription. The gateway forwards it to Piper so a transcribed
+  // Italian message gets spoken with an Italian voice instead of the
+  // default American one. Ignored unless ``input_was_voice`` is true.
+  | {
+      type: 'message';
+      text: string;
+      session_id: string;
+      input_was_voice?: boolean;
+      voice_language?: string;
+    }
   // ``session_id`` MUST be passed for ``stop`` / ``new`` / ``clear`` / ``reset``
   // when the client hosts multiple independent conversations on one ws
   // (e.g. two chat tabs). The gateway scopes those commands to the tab's
@@ -26,14 +41,36 @@ export type ServerMessage =
   | { type: 'auth_ok'; agent_name: string; version: string }
   | { type: 'auth_error'; reason: string }
   | { type: 'status'; text: string; session_id: string }
+  // Token-streaming frame for text-mode chat. Clients accumulate each
+  // ``text`` chunk into the in-progress assistant bubble; the trailing
+  // ``response`` is the canonical record (full text + attachments +
+  // model meta) and replaces the streamed buffer. Older clients that
+  // don't recognize ``delta`` ignore it and render the final
+  // ``response`` like before — backward-compatible.
+  | { type: 'delta'; text: string; session_id: string }
   | { type: 'response'; text: string; session_id: string; attachments?: Attachment[]; model?: string }
-  | { type: 'error'; text: string }
+  // ``session_id`` is set by the gateway when the error originated from
+  // a specific session's processing (see _process_message). Older client
+  // builds tolerated its absence — keep it optional for back-compat.
+  | { type: 'error'; text: string; session_id?: string }
   | { type: 'queued'; position: number }
   | { type: 'command_result'; text: string }
   | { type: 'pong' }
   // Resource-change ping: a list the desktop app might be showing
   // moved on the server. Subscribed stores refetch on receipt.
-  | { type: 'resource_event'; resource: ResourceKind; action: ResourceAction; id?: string };
+  | { type: 'resource_event'; resource: ResourceKind; action: ResourceAction; id?: string }
+  // Live host telemetry — emitted every ~2s by the gateway when at
+  // least one client is connected. The System screen subscribes here
+  // and re-renders without polling.
+  | { type: 'system_snapshot'; snapshot: SystemSnapshot }
+  // Streaming TTS frames for voice-mode replies. ``audio_start`` opens
+  // the playback queue, ``audio_chunk`` carries one segment of audio
+  // (base64 of MP3 frames by default — see ``mime``), ``audio_end``
+  // closes it. The trailing ``response`` event still carries the full
+  // text + attachments so non-audio-aware clients render unchanged.
+  | { type: 'audio_start'; session_id: string; format: string; voice_id: string; mime: string }
+  | { type: 'audio_chunk'; session_id: string; seq: number; data: string }
+  | { type: 'audio_end'; session_id: string; total_chunks: number };
 
 export interface Attachment {
   type: 'image' | 'file' | 'voice' | 'video';
@@ -59,6 +96,12 @@ export interface ChatMessage {
   attachments?: Attachment[];
   toolInfo?: ToolInfo;
   model?: string;
+  // True while the assistant bubble is being progressively populated
+  // by ``delta`` frames. The trailing ``response`` clears the flag and
+  // replaces ``text`` with the canonical clean version (strips the
+  // attachment markers ``parse_response_markers`` extracted on the
+  // server side). Used by MessageList to render a soft caret / cursor.
+  streaming?: boolean;
 }
 
 export interface ChatSession {
@@ -67,6 +110,98 @@ export interface ChatSession {
   messages: ChatMessage[];
   isProcessing: boolean;
   statusText?: string;
+}
+
+// ── System telemetry ──
+
+// Mirror of the dict produced by openagent/gateway/api/system.py.
+// Cross-platform: same shape on Windows, macOS, Linux. Values from
+// psutil are byte counts (memory, disk, network); the UI converts
+// to human units. Fields that the host doesn't expose surface as
+// 0 or null rather than being omitted, so consumers can render a
+// stable layout.
+export interface SystemSnapshot {
+  timestamp: number;
+  host: SystemHost;
+  cpu: SystemCpu;
+  memory: SystemMemory;
+  swap: SystemSwap;
+  disks: SystemDisk[];
+  network: SystemNetwork;
+  processes: SystemProcess[];
+}
+
+export interface SystemHost {
+  hostname: string;
+  platform: string;          // 'Darwin' | 'Linux' | 'Windows'
+  os: string;                // human-readable, e.g. 'macOS 15.2', 'Windows 11'
+  release: string;
+  arch: string;              // 'arm64', 'x86_64', ...
+  uptime_seconds: number;
+  boot_time: number;         // epoch seconds
+  loadavg: [number, number, number];
+  users: number;
+  python_version: string;
+  openagent_version: string;
+}
+
+export interface SystemCpu {
+  model: string;
+  cores_physical: number;
+  cores_logical: number;
+  freq_mhz: number;
+  freq_min_mhz: number;
+  freq_max_mhz: number;
+  usage_pct: number;
+  per_core_pct: number[];
+  temp_c: number | null;     // null when sensors unavailable (typical on Windows/macOS)
+}
+
+export interface SystemMemory {
+  total_bytes: number;
+  used_bytes: number;
+  available_bytes: number;
+  free_bytes: number;
+  cached_bytes: number | null;  // Linux-only
+  percent: number;
+}
+
+export interface SystemSwap {
+  total_bytes: number;
+  used_bytes: number;
+  free_bytes: number;
+  percent: number;
+}
+
+export interface SystemDisk {
+  mount: string;
+  device: string;
+  fs: string;
+  total_bytes: number;
+  used_bytes: number;
+  free_bytes: number;
+  percent: number;
+}
+
+export interface SystemNetwork {
+  primary_iface: string;
+  ipv4: string;
+  ipv6: string;
+  rx_bytes_total: number;
+  tx_bytes_total: number;
+  rx_bps: number;            // bytes/sec, computed across snapshots
+  tx_bps: number;
+  connections: number;
+}
+
+export interface SystemProcess {
+  pid: number;
+  name: string;
+  user: string;
+  cpu_pct: number;
+  rss_bytes: number;
+  threads: number;
+  status: string;
 }
 
 // ── Connection ──
@@ -90,12 +225,17 @@ export interface SavedAccount extends ConnectionConfig {
 //   - provider row = (name, framework) pair with a surrogate integer id
 //   - the same vendor can appear twice (e.g. anthropic+agno and anthropic+claude-cli)
 //   - api_key is NULL for claude-cli rows (subscription auth, no API key)
-export type ModelFramework = 'agno' | 'claude-cli';
+export type ModelFramework = 'agno' | 'claude-cli' | 'litellm';
+// ``llm`` covers the existing text-generation rows; ``tts`` covers
+// audio synthesis providers (ElevenLabs in v1). The LLM dispatcher
+// filters to ``kind='llm'`` so a TTS row never gets handed a turn.
+export type ProviderKind = 'llm' | 'tts' | 'stt';
 
 export interface ProviderConfig {
   id: number;
   name: string;
   framework: ModelFramework;
+  kind: ProviderKind;
   api_key_display: string;    // "****abcd" | "${VAR}" | "—"
   base_url: string | null;
   enabled: boolean;
@@ -177,6 +317,10 @@ export interface ModelEntry {
   provider_id: number;
   provider_name: string;
   framework: ModelFramework;
+  // Capability discriminator. ``llm`` rows go through the SmartRouter;
+  // ``tts`` / ``stt`` rows are picked by the audio resolvers and
+  // dispatched via LiteLLM.
+  kind: ProviderKind;
   runtime_id: string;
   model: string;
   display_name?: string | null;
@@ -201,6 +345,10 @@ export interface AvailableModel {
   display_name: string;
   runtime_id?: string;
   added?: boolean;
+  // Inferred by ``discovery.py`` from the model id (``tts-1`` → tts,
+  // ``whisper-1`` → stt). The Add Model flow forwards this to
+  // /api/models so the row lands with the correct ``kind``.
+  kind?: ProviderKind;
 }
 
 // Source-of-truth yaml fields. Providers, models, MCPs, and scheduled

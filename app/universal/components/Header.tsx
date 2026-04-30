@@ -11,7 +11,6 @@ import { useRouter } from 'expo-router';
 import { useConnection } from '../stores/connection';
 import { useIsWideScreen } from '../hooks/useLayout';
 import { useDrawer } from '../stores/drawer';
-import { useThemeStore } from '../stores/theme';
 import { useConfirm } from './ConfirmDialog';
 
 function getDesktopPlatform(): 'darwin' | 'win32' | 'linux' | null {
@@ -27,8 +26,6 @@ export default function Header() {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const isWide = useIsWideScreen();
   const requestToggle = useDrawer((s) => s.requestToggle);
-  const themeMode = useThemeStore((s) => s.mode);
-  const toggleTheme = useThemeStore((s) => s.toggle);
   const confirm = useConfirm();
 
   const {
@@ -114,24 +111,6 @@ export default function Header() {
       >
         <Feather name="plus" size={14} color={colors.textSecondary} />
       </TouchableOpacity>
-
-      {isWide && (
-        <TouchableOpacity
-          onPress={toggleTheme}
-          accessibilityLabel={themeMode === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-          style={[
-            styles.themeBtn,
-            // @ts-ignore
-            { WebkitAppRegion: 'no-drag' },
-          ]}
-        >
-          <Feather
-            name={themeMode === 'dark' ? 'sun' : 'moon'}
-            size={14}
-            color={colors.textSecondary}
-          />
-        </TouchableOpacity>
-      )}
 
       {(platform === 'win32' || platform === 'linux') && <View style={styles.winPadding} />}
 

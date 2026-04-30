@@ -5,6 +5,7 @@ import { useConnection } from '../stores/connection';
 import { useChat } from '../stores/chat';
 import { ConfirmProvider } from '../components/ConfirmDialog';
 import Header from '../components/Header';
+import { JarvisCanvas } from '../components/jarvis';
 import { colors } from '../theme';
 
 export default function RootLayout() {
@@ -25,15 +26,25 @@ export default function RootLayout() {
 
   return (
     <ConfirmProvider>
-      <View style={styles.root}>
+      {/*
+        JarvisCanvas paints the grid backdrop + edge ticks + corner
+        brackets so every screen below shares the same engineering
+        canvas without each having to re-implement it.
+      */}
+      <JarvisCanvas style={styles.root}>
         {Platform.OS === 'web' && <Header />}
         <View style={styles.content}>
-          <Stack screenOptions={{ headerShown: false }}>
+          <Stack
+            screenOptions={{
+              headerShown: false,
+              contentStyle: { backgroundColor: 'transparent' },
+            }}
+          >
             <Stack.Screen name="index" />
             <Stack.Screen name="(tabs)" />
           </Stack>
         </View>
-      </View>
+      </JarvisCanvas>
     </ConfirmProvider>
   );
 }

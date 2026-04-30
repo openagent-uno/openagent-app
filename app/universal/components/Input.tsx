@@ -44,15 +44,19 @@ export default function Input({
         backgroundColor: colors.inputBg,
         borderRadius: radius.md,
         border: `1px solid ${colors.border}`,
+        borderTopWidth: 1.5,
+        borderTopColor: colors.accentDim,
         padding: '9px 11px',
         color: colors.text,
         fontSize: 13,
         fontFamily,
+        letterSpacing: 0.3,
         resize: 'vertical',
         outline: 'none',
         width: '100%',
         boxSizing: 'border-box',
         minHeight: 72,
+        transition: 'box-shadow 160ms ease, border-color 160ms ease',
       } as any}
     />
   ) : (
@@ -98,10 +102,13 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
+    borderTopWidth: 1.5,
+    borderTopColor: colors.accentDim,
     paddingHorizontal: 11,
     paddingVertical: 9,
     color: colors.text,
     fontSize: 13,
+    letterSpacing: 0.3,
   },
   multiline: {
     minHeight: 72,

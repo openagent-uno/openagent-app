@@ -3,10 +3,9 @@
  */
 
 import { colors, font, radius } from '../theme';
-import { useThemeStore } from '../stores/theme';
 import Feather from '@expo/vector-icons/Feather';
 import { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, Image } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useConnection } from '../stores/connection';
 import { useChat } from '../stores/chat';
@@ -14,9 +13,7 @@ import { useConfirm } from '../components/ConfirmDialog';
 import Button from '../components/Button';
 import Card from '../components/Card';
 import Input from '../components/Input';
-
-const logoAsset = require('../assets/openagent-logo.png');
-const iconAsset = require('../assets/openagent-icon.png');
+import { JarvisOrb, JarvisClock } from '../components/jarvis';
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -26,8 +23,6 @@ export default function LoginScreen() {
   } = useConnection();
   const createSession = useChat((s) => s.createSession);
   const confirm = useConfirm();
-  const themeMode = useThemeStore((s) => s.mode);
-  const isDark = themeMode === 'dark';
 
   const [host, setHost] = useState('localhost');
   const [port, setPort] = useState('8765');
@@ -73,18 +68,12 @@ export default function LoginScreen() {
         // @ts-ignore
         {...(Platform.OS === 'web' ? { className: 'oa-slide-up' } : {})}
       >
-        {/* Brand */}
-        <View style={styles.brand}>
-          {/* On dark theme the wordmark in openagent-logo.png is black,
-              so fall back to the icon + our own wordmark text. */}
-          {isDark ? (
-            <>
-              <Image source={iconAsset} style={styles.brandIcon} resizeMode="contain" />
-              <Text style={styles.brandName}>openagent</Text>
-            </>
-          ) : (
-            <Image source={logoAsset} style={styles.brandLogo} resizeMode="contain" />
-          )}
+        {/* JARVIS wake-up scene — orb + clock above the connect form. */}
+        <View style={styles.wakeScene}>
+          <JarvisOrb size={180} label="OPENAGENT" />
+          <View style={styles.clockWrap}>
+            <JarvisClock size="md" />
+          </View>
         </View>
 
         {hasSaved && (
@@ -184,30 +173,16 @@ const styles = StyleSheet.create({
     padding: 24,
   },
   inner: {
-    width: 420,
+    width: 460,
     maxWidth: '100%',
   },
-  brand: {
+  wakeScene: {
     alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 10,
-    marginBottom: 28,
+    marginBottom: 32,
+    marginTop: 8,
   },
-  brandLogo: {
-    width: 220,
-    height: 44,
-  },
-  brandIcon: {
-    width: 40,
-    height: 40,
-  },
-  brandName: {
-    fontSize: 28,
-    fontWeight: '600',
-    color: colors.text,
-    letterSpacing: -0.8,
-    fontFamily: font.display,
+  clockWrap: {
+    marginTop: 12,
   },
   sectionKicker: {
     fontSize: 10, fontWeight: '600', color: colors.textMuted,

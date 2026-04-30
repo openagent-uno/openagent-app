@@ -13,7 +13,7 @@ import {
 import { useRouter } from 'expo-router';
 import { useConnection } from '../../stores/connection';
 import { useConfig } from '../../stores/config';
-import { useThemeStore } from '../../stores/theme';
+import { useVoiceConfig, VOICE_DEFAULTS, VOICE_LANGUAGES, type VoiceConfig } from '../../stores/voice';
 import { setBaseUrl, triggerUpdate, triggerRestart } from '../../services/api';
 import { useConfirm } from '../../components/ConfirmDialog';
 import Button from '../../components/Button';
@@ -26,7 +26,7 @@ import ThemedSwitch from '../../components/ThemedSwitch';
 
 type CategoryId =
   | 'identity'
-  | 'appearance'
+  | 'voice'
   | 'channels'
   | 'dream'
   | 'manager_review'
@@ -43,7 +43,7 @@ interface Category {
 
 const CATEGORIES: Category[] = [
   { id: 'identity', label: 'Agent Identity', icon: 'user', description: 'Name and system prompt' },
-  { id: 'appearance', label: 'Appearance', icon: 'sun', description: 'Light and dark theme' },
+  { id: 'voice', label: 'Voice', icon: 'mic', description: 'VAD sensitivity for the Voice tab' },
   { id: 'channels', label: 'Channels', icon: 'message-square', description: 'Gateway, Telegram, Discord, WhatsApp' },
   { id: 'dream', label: 'Dream Mode', icon: 'moon', description: 'Nightly reflection' },
   { id: 'manager_review', label: 'Manager Review', icon: 'clipboard', description: 'Weekly self-review' },
@@ -71,8 +71,9 @@ export default function SettingsScreen() {
   const router = useRouter();
   const { agentName, agentVersion, config: connConfig, activeAccountId, accounts, disconnect, removeAccount } = useConnection();
   const { config: agentConfig, loadConfig, updateSection } = useConfig();
-  const themeMode = useThemeStore((s) => s.mode);
-  const setThemeMode = useThemeStore((s) => s.setMode);
+  const voiceCfg = useVoiceConfig((s) => s.config);
+  const setVoiceCfg = useVoiceConfig((s) => s.setConfig);
+  const resetVoiceCfg = useVoiceConfig((s) => s.reset);
   const activeAccount = accounts.find((a) => a.id === activeAccountId);
   const confirm = useConfirm();
 
@@ -275,27 +276,6 @@ export default function SettingsScreen() {
     </>
   );
 
-  const renderAppearance = () => (
-    <>
-      <Text style={styles.sectionTitle}>Appearance</Text>
-      <Card>
-        <View style={styles.toggleRow}>
-          <View style={{ flex: 1, paddingRight: 12 }}>
-            <Text style={styles.toggleLabel}>Dark mode</Text>
-            <Text style={styles.channelHint}>
-              Use a dark color scheme across the app. The window reloads when the
-              theme changes so all styles pick up the new palette.
-            </Text>
-          </View>
-          <ThemedSwitch
-            value={themeMode === 'dark'}
-            onValueChange={(v) => setThemeMode(v ? 'dark' : 'light')}
-          />
-        </View>
-      </Card>
-    </>
-  );
-
   // Each sub-panel is shown in isolation under the Channels screen; the
   // sub-tab strip switches between Gateway/Telegram/Discord/WhatsApp.
 
@@ -443,6 +423,77 @@ export default function SettingsScreen() {
     </>
   );
 
+  const renderVoice = () => {
+    const fields: { key: keyof VoiceConfig; label: string; hint: string }[] = [
+      { key: 'speechThreshold', label: 'Speech threshold (RMS, 0..1)', hint: 'Higher = needs louder speech to start. Default 0.050.' },
+      { key: 'silenceThreshold', label: 'Silence threshold (RMS, 0..1)', hint: 'Lower = stricter silence definition. Default 0.020.' },
+      { key: 'speechFrames', label: 'Speech-start frames (×30ms)', hint: 'Frames above threshold to confirm speech. Default 5 (~150ms).' },
+      { key: 'silenceFrames', label: 'Speech-end frames (×30ms)', hint: 'Frames below threshold to fire end-of-utterance. Default 35 (~1050ms).' },
+      { key: 'minUtteranceMs', label: 'Min utterance (ms)', hint: 'Drop utterances shorter than this — filters out clicks. Default 350.' },
+      { key: 'maxUtteranceMs', label: 'Max utterance (ms)', hint: 'Hard cap on a single utterance if VAD wedges. Default 30000.' },
+    ];
+    return (
+      <>
+        <Text style={styles.sectionTitle}>Voice</Text>
+        <Card>
+          <Text style={styles.label}>Input language</Text>
+          <Text style={styles.fieldHint}>
+            Hint passed to Whisper. Auto-detect on the bundled ``base`` model is unreliable for
+            short utterances (Italian → Cyrillic gibberish has been observed); set this if you
+            always speak the same language.
+          </Text>
+          <View style={styles.langRow}>
+            {VOICE_LANGUAGES.map((l) => (
+              <TouchableOpacity
+                key={l.code || 'auto'}
+                style={[styles.langChip, voiceCfg.language === l.code && styles.langChipActive]}
+                onPress={() => setVoiceCfg({ language: l.code })}
+              >
+                <Text
+                  style={[
+                    styles.langChipText,
+                    voiceCfg.language === l.code && styles.langChipTextActive,
+                  ]}
+                >
+                  {l.code ? l.code.toUpperCase() : 'Auto'}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          <Text style={[styles.label, { marginTop: 16 }]}>VAD sensitivity</Text>
+          <Text style={styles.fieldHint}>
+            Tunables for the always-listening Voice tab. Changes apply on the next time you focus
+            the Voice tab. Stored locally in your browser only.
+          </Text>
+          {fields.map((f) => (
+            <VoiceField
+              key={f.key}
+              label={f.label}
+              hint={f.hint}
+              value={String(voiceCfg[f.key])}
+              onChange={(v) => {
+                const n = Number(v);
+                if (Number.isFinite(n)) setVoiceCfg({ [f.key]: n } as Partial<VoiceConfig>);
+              }}
+            />
+          ))}
+          <Button
+            variant="secondary"
+            label="Reset to defaults"
+            fullWidth
+            style={{ marginTop: 8 }}
+            onPress={resetVoiceCfg}
+          />
+          <Text style={styles.fieldHint}>
+            Defaults: speech={VOICE_DEFAULTS.speechThreshold}, silence={VOICE_DEFAULTS.silenceThreshold},
+            speechFrames={VOICE_DEFAULTS.speechFrames}, silenceFrames={VOICE_DEFAULTS.silenceFrames}.
+          </Text>
+        </Card>
+      </>
+    );
+  };
+
   const renderAutoUpdate = () => (
     <>
       <Text style={styles.sectionTitle}>Auto-Update</Text>
@@ -548,7 +599,7 @@ export default function SettingsScreen() {
   const renderCategory = () => {
     switch (activeCategory) {
       case 'identity': return renderIdentity();
-      case 'appearance': return renderAppearance();
+      case 'voice': return renderVoice();
       case 'channels': return renderChannels();
       case 'dream': return renderDream();
       case 'manager_review': return renderManagerReview();
@@ -565,6 +616,24 @@ export default function SettingsScreen() {
         <View style={{ height: 40 }} />
       </ScrollView>
     </ResponsiveSidebar>
+  );
+}
+
+function VoiceField({
+  label, hint, value, onChange,
+}: { label: string; hint: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <View style={{ marginTop: 8 }}>
+      <Text style={styles.label}>{label}</Text>
+      <TextInput
+        style={styles.input}
+        value={value}
+        onChangeText={onChange}
+        keyboardType="numeric"
+        placeholderTextColor={colors.textMuted}
+      />
+      <Text style={styles.fieldHint}>{hint}</Text>
+    </View>
   );
 }
 
@@ -612,6 +681,19 @@ const styles = StyleSheet.create({
     paddingHorizontal: 11, paddingVertical: 9,
     color: colors.text, fontSize: 13, fontFamily: font.mono,
   },
+  fieldHint: {
+    fontSize: 11, color: colors.textMuted, marginTop: 4, lineHeight: 15,
+  },
+  langRow: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 8,
+  },
+  langChip: {
+    paddingHorizontal: 10, paddingVertical: 5, borderRadius: 14,
+    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.inputBg,
+  },
+  langChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
+  langChipText: { fontSize: 11, color: colors.textSecondary, fontFamily: font.mono },
+  langChipTextActive: { color: colors.textInverse, fontWeight: '600' },
   toggleRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 },
   toggleLabel: { fontSize: 13, color: colors.text, fontWeight: '500' },
   segmented: {

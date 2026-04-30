@@ -62,7 +62,9 @@ export default function Button({
         <Feather name={icon} size={s.iconSize} color={color} style={label || children ? { marginRight: 6 } : undefined} />
       )}
       {children ?? (label ? (
-        <Text style={[styles.label, { color, fontSize: s.fontSize }, textStyle]}>{label}</Text>
+        <Text style={[styles.label, { color, fontSize: s.fontSize }, textStyle]}>
+          {typeof label === 'string' ? label.toUpperCase() : label}
+        </Text>
       ) : null)}
       {icon && iconPosition === 'right' && (
         <Feather name={icon} size={s.iconSize} color={color} style={label || children ? { marginLeft: 6 } : undefined} />
@@ -114,13 +116,15 @@ function variantStyle(variant: Exclude<ButtonVariant, 'primary'>): ViewStyle {
   switch (variant) {
     case 'secondary':
       return {
-        backgroundColor: colors.surface,
+        backgroundColor: colors.panelBg ?? colors.surface,
         borderWidth: 1,
-        borderColor: colors.border,
+        borderColor: colors.borderStrong,
       };
     case 'ghost':
       return {
         backgroundColor: 'transparent',
+        borderWidth: 1,
+        borderColor: colors.border,
       };
     case 'danger':
       return {
@@ -150,6 +154,6 @@ const styles = StyleSheet.create({
   label: {
     fontWeight: '600',
     fontFamily: font.sans,
-    letterSpacing: -0.1,
+    letterSpacing: 1.4,
   },
 });

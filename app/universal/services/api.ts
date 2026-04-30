@@ -9,6 +9,7 @@ import type {
   ModelEntry, AvailableModel,
   WorkflowTask, CreateWorkflowInput, UpdateWorkflowInput, WorkflowRun,
   WorkflowStats, BlockTypeSpec, MCPToolkitDescriptor,
+  SystemSnapshot,
 } from '../../common/types';
 
 let baseUrl = '';
@@ -246,10 +247,28 @@ export async function describeCron(
 
 // ── File Upload ──
 
-export async function uploadFile(file: File): Promise<{ path: string; filename: string; transcription?: string }> {
+export async function uploadFile(
+  file: File | Blob,
+  filename = 'upload',
+  opts?: { language?: string },
+): Promise<{
+  path: string;
+  filename: string;
+  transcription?: string;
+  // Set by /api/upload when the file is audio. The chat screen flips
+  // ``input_was_voice`` on the WS message so the gateway returns a
+  // spoken reply (mirror modality).
+  transcribed_from_voice?: boolean;
+}> {
   const form = new FormData();
-  form.append('file', file);
-  const res = await fetch(`${baseUrl}/api/upload`, { method: 'POST', body: form });
+  if (file instanceof File) {
+    form.append('file', file);
+  } else {
+    form.append('file', file, filename);
+  }
+  // ``lang`` (ISO-639-1) hints the STT backend; empty means auto-detect.
+  const qs = opts?.language ? `?lang=${encodeURIComponent(opts.language)}` : '';
+  const res = await fetch(`${baseUrl}/api/upload${qs}`, { method: 'POST', body: form });
   if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
   return res.json();
 }
@@ -354,9 +373,14 @@ export async function testProvider(
 
 export async function addProvider(body: {
   name: string;
-  framework: 'agno' | 'claude-cli';
+  framework: 'agno' | 'claude-cli' | 'litellm';
   api_key?: string;
   base_url?: string;
+  // ``kind`` defaults server-side to ``'llm'``. Audio providers (TTS
+  // / STT) pass ``'tts'`` or ``'stt'`` so the LLM dispatcher skips them
+  // and the audio modules route via LiteLLM.
+  kind?: 'llm' | 'tts' | 'stt';
+  metadata?: Record<string, unknown>;
 }): Promise<{ ok: boolean; provider: ProviderConfig }> {
   return post('/api/providers', body);
 }
@@ -615,6 +639,9 @@ export async function createDbModel(entry: {
   enabled?: boolean;
   is_classifier?: boolean;
   metadata?: Record<string, unknown>;
+  // ``llm`` (default) goes to the SmartRouter; ``tts`` / ``stt`` rows
+  // are picked by the audio resolvers and dispatched via LiteLLM.
+  kind?: 'llm' | 'tts' | 'stt';
 }): Promise<ModelEntry> {
   const data = await post<{ model: ModelEntry }>('/api/models', entry);
   return data.model;
@@ -656,4 +683,10 @@ export async function listAvailableModels(providerId: number): Promise<Available
     `/api/models/available?provider_id=${providerId}`,
   );
   return data.models;
+}
+
+// ── System telemetry ──
+
+export async function getSystemSnapshot(): Promise<SystemSnapshot> {
+  return get<SystemSnapshot>('/api/system');
 }
