@@ -112,6 +112,20 @@ export default function Header() {
         <Feather name="plus" size={14} color={colors.textSecondary} />
       </TouchableOpacity>
 
+      {platform && (
+        <TouchableOpacity
+          onPress={() => { void (window as any).desktop?.quit?.(); }}
+          style={[
+            styles.closeBtn,
+            // @ts-ignore
+            { WebkitAppRegion: 'no-drag' },
+          ]}
+          accessibilityLabel="Quit OpenAgent"
+        >
+          <Feather name="x" size={14} color={colors.textSecondary} />
+        </TouchableOpacity>
+      )}
+
       {(platform === 'win32' || platform === 'linux') && <View style={styles.winPadding} />}
 
       {dropdownOpen && (
@@ -202,6 +216,11 @@ const styles = StyleSheet.create({
     width: 24, height: 24, borderRadius: radius.sm,
     alignItems: 'center', justifyContent: 'center',
     marginRight: 6,
+  },
+  closeBtn: {
+    width: 24, height: 24, borderRadius: radius.sm,
+    alignItems: 'center', justifyContent: 'center',
+    marginRight: 8,
   },
   themeBtn: {
     width: 24, height: 24, borderRadius: radius.sm,

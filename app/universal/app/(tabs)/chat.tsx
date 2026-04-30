@@ -26,9 +26,16 @@ import { colors, font, radius } from '../../theme';
 export default function ChatScreen() {
   const ws = useConnection((s) => s.ws);
   const {
-    sessions, activeSessionId, createSession, setActiveSession, removeSession,
+    sessions, activeSessionId, voiceSessionId,
+    createSession, setActiveSession, removeSession,
     addUserMessage,
   } = useChat();
+  // The voice session lives in its own tab — it has no place in the
+  // text-chat sidebar. Filtering here (rather than removing it from
+  // ``sessions[]`` entirely) keeps the voice tab's transcript intact
+  // and lets ``handleServerMessage`` route DELTA / RESPONSE frames to
+  // either session by id without special-casing.
+  const chatSessions = sessions.filter((s) => s.id !== voiceSessionId);
 
   const [input, setInput] = useState('');
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
@@ -225,7 +232,7 @@ export default function ChatScreen() {
         </TouchableOpacity>
       </View>
       <ScrollView style={styles.sessionList}>
-        {sessions.map((ses) => (
+        {chatSessions.map((ses) => (
           <TouchableOpacity
             key={ses.id}
             style={[styles.sessionItem, ses.id === activeSessionId && styles.sessionActive]}
@@ -246,7 +253,7 @@ export default function ChatScreen() {
             )}
           </TouchableOpacity>
         ))}
-        {sessions.length === 0 && (
+        {chatSessions.length === 0 && (
           <Text style={styles.sidebarEmpty}>No sessions yet</Text>
         )}
       </ScrollView>

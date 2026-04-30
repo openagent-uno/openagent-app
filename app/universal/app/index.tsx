@@ -22,6 +22,7 @@ export default function LoginScreen() {
     saveAccount, switchAccount, removeAccount,
   } = useConnection();
   const createSession = useChat((s) => s.createSession);
+  const getOrCreateVoiceSession = useChat((s) => s.getOrCreateVoiceSession);
   const confirm = useConfirm();
 
   const [host, setHost] = useState('localhost');
@@ -55,6 +56,12 @@ export default function LoginScreen() {
   useEffect(() => {
     if (isConnected && agentName) {
       createSession();
+      // Mint the voice session at login too so the Voice tab is ready
+      // the moment the user navigates there — no first-visit lag while
+      // the page mounts and the session id is created lazily. Safe to
+      // call regardless of which agent the user logged into; the store
+      // is reset by ``switchAccount`` on agent switch.
+      getOrCreateVoiceSession();
       router.replace('/(tabs)/chat');
     }
   }, [isConnected, agentName]);

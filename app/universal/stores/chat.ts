@@ -55,10 +55,17 @@ export const useChat = create<ChatState>((set, get) => ({
 
   removeSession: (id) => set((s) => {
     const sessions = s.sessions.filter((ses) => ses.id !== id);
-    const activeSessionId = s.activeSessionId === id
-      ? (sessions[0]?.id ?? null)
-      : s.activeSessionId;
     const voiceSessionId = s.voiceSessionId === id ? null : s.voiceSessionId;
+    // When the deleted session was the active chat tab, fall back to
+    // the next CHAT session — not the voice session, even if voice is
+    // the only remaining row. The voice session lives in its own tab
+    // and the chat sidebar filters it out, so picking it here would
+    // leave the chat tab pointing at an invisible session.
+    let activeSessionId = s.activeSessionId;
+    if (s.activeSessionId === id) {
+      const nextChat = sessions.find((ses) => ses.id !== voiceSessionId);
+      activeSessionId = nextChat?.id ?? null;
+    }
     return { sessions, activeSessionId, voiceSessionId };
   }),
 

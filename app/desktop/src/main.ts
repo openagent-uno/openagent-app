@@ -188,12 +188,12 @@ function startStaticServer(): Promise<number> {
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    minWidth: 375,
-    minHeight: 500,
+    fullscreen: true,
+    kiosk: true,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
     title: 'OpenAgent',
-    titleBarStyle: 'hiddenInset',
     show: true,
     backgroundColor: '#F5F6F8',  // match theme bg, avoids white flash
     webPreferences: {
@@ -201,6 +201,15 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+
+  // Defensive re-entry: kiosk should make this unreachable, but if any path
+  // (unusual Linux WM, future Electron change) drops out of fullscreen, snap
+  // straight back in.
+  mainWindow.on('leave-full-screen', () => {
+    if (!mainWindow) return;
+    mainWindow.setKiosk(true);
+    mainWindow.setFullScreen(true);
   });
 
   if (isDev) {
@@ -251,6 +260,12 @@ function setupAutoUpdater(): void {
 app.whenReady().then(async () => {
   registerStorageHandlers();
   registerDialogHandlers();
+
+  // Renderer-initiated quit. The window is locked in kiosk fullscreen with no
+  // traffic-lights, so we expose an IPC the in-app close button can call.
+  ipcMain.handle('app:quit', () => {
+    app.quit();
+  });
 
   // In production, start a local HTTP server for the web build
   // (Expo Router needs proper URL routing that file:// can't do)

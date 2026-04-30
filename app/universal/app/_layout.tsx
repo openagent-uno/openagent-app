@@ -18,7 +18,18 @@ export default function RootLayout() {
   useEffect(() => {
     if (!ws) return;
     return ws.onMessage((msg) => {
-      if (msg.type === 'status' || msg.type === 'response' || msg.type === 'error') {
+      // ``delta`` frames carry token-streaming chunks for the in-flight
+      // assistant bubble — without forwarding them here the chat store's
+      // typewriter handler (chat.ts:168) is dead code and the UI only
+      // updates when the trailing ``response`` lands. ``audio_*`` frames
+      // are intentionally NOT here: the Voice tab taps the WS directly
+      // (voice.tsx:123) so audio routing stays out of the chat store.
+      if (
+        msg.type === 'status'
+        || msg.type === 'delta'
+        || msg.type === 'response'
+        || msg.type === 'error'
+      ) {
         handleServerMessage(msg);
       }
     });
