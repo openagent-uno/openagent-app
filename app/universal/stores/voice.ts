@@ -28,6 +28,12 @@ export interface VoiceConfig {
    * utterances and has misidentified Italian as Cyrillic — set this if
    * you always speak the same language. */
   language: string;
+  /** When true, the Chat tab mounts the same continuous mic + VAD loop
+   * the Voice tab uses. Each utterance lands in the active chat as a
+   * ``text_final(source='stt')`` so the StreamSession routes it through
+   * the instant-barge-in path AND speaks the reply (mirror-modality
+   * rule on the server side). Off by default — explicit opt-in. */
+  chatAlwaysListen: boolean;
 }
 
 export const VOICE_DEFAULTS: VoiceConfig = {
@@ -43,6 +49,7 @@ export const VOICE_DEFAULTS: VoiceConfig = {
   // visiting Settings → Voice. Empty here only kicks in when the
   // browser has no resolvable locale (rare; private mode + no APIs).
   language: '',
+  chatAlwaysListen: false,
 };
 
 /** Map a browser `navigator.language` value to a Whisper-supported

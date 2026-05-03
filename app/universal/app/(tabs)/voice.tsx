@@ -1,14 +1,29 @@
 /**
- * Voice — always-listening conversational screen.
+ * Voice — always-listening conversational screen with streaming I/O.
  *
- * Loop: VAD detects speech → records utterance → uploads to gateway →
- * gateway transcribes + replies + streams TTS chunks back over the WS →
- * AudioQueuePlayer plays them → mic auto-mutes during playback to
- * prevent echo → unmutes when playback ends, mic re-arms instantly.
+ * Streaming flow (Deepgram + StreamSession):
+ *   focus → ws.sendSessionOpen({ language })
+ *   VAD speech_start → MediaRecorder begins, chunks fire every ~250 ms
+ *   each chunk → ws.sendAudioChunkIn(base64, { encoding: 'webm' })
+ *   VAD speech_end → ws.sendAudioEndIn(sessionId)  (flushes the STT pump)
+ *   server emits OutTextDelta (partial transcript), then TextFinal (committed
+ *   user line, source='stt'), then DELTA + AUDIO_* + RESPONSE for the reply
+ *   blur → ws.sendSessionClose(sessionId)
  *
- * Web/Electron only — native RN doesn't ship MediaRecorder. The screen
- * still renders with a fallback message + a typed-input composer so the
- * tab is at least usable on iOS/Android (text only).
+ * Server-side (StreamSession) drives the STT transducer live, so the
+ * Deepgram WS is fed audio as the user speaks — partials in ~150 ms,
+ * final inside the user's last syllable. Replaces the legacy REST
+ * upload + Whisper one-shot path which capped TTFA at ~3 s.
+ *
+ * Video (LLM path): two toggles next to the new-session button start
+ * webcam / screen capture loops at 1 fps. Each frame ships via
+ * ws.sendVideoFrame(stream, base64). Server-side, StreamSession keeps a
+ * ring of 8 frames per stream and snapshots the latest as an image
+ * attachment at turn-trigger time, so the model "sees" what was on
+ * screen / camera the moment the user stopped speaking.
+ *
+ * Web/Electron only — native RN doesn't ship MediaRecorder /
+ * getUserMedia. The screen falls back to typed-input on iOS/Android.
  *
  * Session: a fresh chat session is created on first visit per app launch
  * (``getOrCreateVoiceSession``); subsequent visits resume it. App reload
@@ -23,20 +38,20 @@ import {
 } from 'react-native';
 
 const logoIcon = require('../../assets/openagent-icon.png');
-import type { ServerMessage } from '../../../common/types';
 import { useConnection } from '../../stores/connection';
 import { useChat } from '../../stores/chat';
 import { useVoiceConfig } from '../../stores/voice';
 import MessageComposer from '../../components/MessageComposer';
 import MessageList from '../../components/MessageList';
 import SoundWaves, { type SoundWavesState } from '../../components/SoundWaves';
-import { uploadFile, listDbModels } from '../../services/api';
-import { AudioQueuePlayer, VoiceLoop } from '../../services/voice';
+import { listDbModels } from '../../services/api';
+import {
+  startWebcamCapture, startScreenCapture, useStreamingMic,
+  type VideoStreamHandle,
+} from '../../services/voice';
 import { colors, font, radius } from '../../theme';
 
 const log = (event: string, data?: Record<string, unknown>) => {
-  // Tagged client log so the events read as a single timeline in
-  // browser devtools alongside server elog lines.
   console.log(`[voice] ${event}`, data ?? {});
 };
 
@@ -53,18 +68,23 @@ export default function VoiceScreen() {
   const voiceConfig = useVoiceConfig((s) => s.config);
 
   const [input, setInput] = useState('');
-  const [energy, setEnergy] = useState(0);
-  const [vadState, setVadState] = useState<'idle' | 'listening'>('idle');
-  const [audioState, setAudioState] = useState<'idle' | 'playing'>('idle');
-  const [micError, setMicError] = useState<string | null>(null);
   // ``null`` = unknown (still loading), ``true`` = configured, ``false`` =
   // missing → render the diagnostic banner. Re-checked on every focus so
   // adding a TTS row in another tab clears the banner immediately.
   const [hasTts, setHasTts] = useState<boolean | null>(null);
+  const [webcamOn, setWebcamOn] = useState(false);
+  const [screenOn, setScreenOn] = useState(false);
 
-  const audioPlayerRef = useRef<AudioQueuePlayer | null>(null);
-  const voiceLoopRef = useRef<VoiceLoop | null>(null);
   const scrollRef = useRef<ScrollView>(null);
+  const webcamHandleRef = useRef<VideoStreamHandle | null>(null);
+  const screenHandleRef = useRef<VideoStreamHandle | null>(null);
+  // The frame-grab loops capture this ref instead of ``voiceSessionId``
+  // directly so a "New session" mid-share keeps streaming to the
+  // currently active voice session — without it the closure pinned the
+  // first sid forever and the agent's per-turn snapshot landed against
+  // a session whose dispatch loop had already torn down.
+  const voiceSessionIdRef = useRef<string | null>(voiceSessionId ?? null);
+  voiceSessionIdRef.current = voiceSessionId ?? null;
 
   const browserAvailable =
     Platform.OS === 'web' &&
@@ -72,172 +92,70 @@ export default function VoiceScreen() {
     !!navigator.mediaDevices?.getUserMedia &&
     typeof MediaRecorder !== 'undefined';
 
-  // Ensure a voice session exists on mount.
   useEffect(() => {
     if (!voiceSessionId) getOrCreateVoiceSession();
   }, [voiceSessionId, getOrCreateVoiceSession]);
 
-  // Scroll transcript to end on new messages.
   useEffect(() => {
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 60);
   }, [voiceSession?.messages.length, voiceSession?.statusText]);
 
-  // Start the mic + AudioQueuePlayer only while the tab is focused.
-  // ``useFocusEffect`` fires its setup on focus and runs the cleanup on
-  // blur — Expo Router's ``<Tabs>`` keeps the screen mounted across tab
-  // switches, so the older mount-only useEffect leaked the mic stream.
+  const langHint = voiceConfig.language && voiceConfig.language !== 'auto'
+    ? voiceConfig.language : undefined;
+
+  const handleVoiceTranscript = useCallback((text: string) => {
+    if (voiceSessionId) {
+      log('stt.committed', { chars: text.length });
+      addUserMessage(voiceSessionId, text);
+    }
+  }, [voiceSessionId, addUserMessage]);
+
+  const { vadState, audioState, energy, micError } = useStreamingMic({
+    ws,
+    sessionId: voiceSessionId ?? null,
+    enabled: browserAvailable,
+    voiceConfig,
+    sessionOpen: { profile: 'realtime', clientKind: 'webapp', language: langHint },
+    onTranscript: handleVoiceTranscript,
+    onLog: log,
+    onFirstPcmFrame: (info) => log('pcm.first_frame', info),
+  });
+
+  // Voice-tab-only focus lifecycle: TTS-availability probe + video
+  // capture cleanup + explicit ``sendSessionClose`` on blur (the chat
+  // tab keeps its session alive across tab switches; voice mode tears
+  // down so a fresh ``sendSessionOpen`` re-pins the language on next
+  // focus).
   useFocusEffect(
     useCallback(() => {
-      if (!browserAvailable || !ws) {
-        log('focus.skip', { browserAvailable, hasWs: !!ws });
-        return;
-      }
-      log('focus.start', { sessionId: voiceSessionId ?? null });
+      if (!ws) return;
+      const sid = voiceSessionId;
+      if (!sid) return;
 
-      // Check whether any enabled kind='tts' model row exists. The
-      // banner surfaces the no-audio root cause without the user
-      // having to grep server logs for ``voice.tts_not_configured``.
       void (async () => {
         try {
           const all = await listDbModels({ enabledOnly: true });
-          const tts = all.filter((m) => m.kind === 'tts');
-          log('tts.check', { enabledTtsCount: tts.length });
-          setHasTts(tts.length > 0);
+          setHasTts(all.some((m) => m.kind === 'tts'));
         } catch (e) {
-          // Don't block voice mode on a probe failure — assume present.
           log('tts.check_error', { error: String(e) });
           setHasTts(true);
         }
       })();
 
-      let cancelled = false;
-      const player = new AudioQueuePlayer({
-        onStateChange: (state) => {
-          log('audio.state', { state });
-          setAudioState(state);
-        },
-        onPlayingChange: (playing) => voiceLoopRef.current?.setMuted(playing),
-      });
-      audioPlayerRef.current = player;
-
-      const offWs = ws.onMessage((msg: ServerMessage) => {
-        // Tap the global stream just for voice-tab diagnostics — the
-        // store-side handler in app/_layout.tsx still owns response /
-        // status / error routing into the chat session.
-        if (msg.type === 'response' && (msg as { session_id?: string }).session_id === voiceSessionId) {
-          log('ws.response', {
-            sessionId: msg.session_id,
-            chars: msg.text?.length ?? 0,
-          });
-        } else if (msg.type === 'error' && (msg as { session_id?: string }).session_id === voiceSessionId) {
-          log('ws.error', {
-            sessionId: (msg as { session_id?: string }).session_id,
-            text: msg.text,
-          });
-        } else if (msg.type === 'audio_start') {
-          log('audio.start', { mime: msg.mime, voice: msg.voice_id });
-          player.start(msg.mime || 'audio/mpeg');
-        } else if (msg.type === 'audio_chunk') {
-          player.enqueue(msg.seq, msg.data);
-        } else if (msg.type === 'audio_end') {
-          log('audio.end', { totalChunks: msg.total_chunks });
-          player.end(msg.total_chunks ?? 0);
-        }
-      });
-
-      const loop = new VoiceLoop({
-        speechThreshold: voiceConfig.speechThreshold,
-        silenceThreshold: voiceConfig.silenceThreshold,
-        speechFrames: voiceConfig.speechFrames,
-        silenceFrames: voiceConfig.silenceFrames,
-        maxUtteranceMs: voiceConfig.maxUtteranceMs,
-        minUtteranceMs: voiceConfig.minUtteranceMs,
-        onUtterance: async (blob) => {
-          const sid = voiceSessionId ?? getOrCreateVoiceSession();
-          if (!ws) return;
-          // 'auto' and '' both mean "no language hint" — the picker
-          // uses 'auto' as the explicit user choice, '' is the
-          // never-picked sentinel. Either way the backend should
-          // auto-detect, so don't send the query param.
-          const langHint = voiceConfig.language && voiceConfig.language !== 'auto'
-            ? voiceConfig.language
-            : undefined;
-          log('utterance.upload', {
-            bytes: blob.size, sessionId: sid,
-            language: langHint || 'auto',
-          });
-          try {
-            const res = await uploadFile(blob, 'voice.webm', {
-              language: langHint,
-            });
-            if (!res.transcription) {
-              log('utterance.no_transcription', { filename: res.filename });
-              return;
-            }
-            log('utterance.transcribed', {
-              chars: res.transcription.length,
-              preview: res.transcription.slice(0, 80),
-            });
-            addUserMessage(sid, res.transcription);
-            log('ws.send', {
-              sessionId: sid,
-              chars: res.transcription.length,
-              inputWasVoice: true,
-              voiceLanguage: langHint || 'auto',
-            });
-            // Forward the same ISO-639-1 hint Whisper used so Piper
-            // synthesises the reply with a matching voice — without it
-            // an Italian transcription gets read in an American accent.
-            ws.sendMessage(res.transcription, sid, {
-              inputWasVoice: true,
-              voiceLanguage: langHint,
-            });
-          } catch (e) {
-            console.error('[voice] upload failed:', e);
-            log('utterance.upload_error', { error: String(e) });
-          }
-        },
-        onSpeechStart: () => {
-          if (cancelled) return;
-          log('vad.speech_start');
-          setVadState('listening');
-        },
-        onSpeechEnd: () => {
-          if (cancelled) return;
-          log('vad.speech_end');
-          setVadState('idle');
-        },
-        onEnergy: (level) => { if (!cancelled) setEnergy(level); },
-        onMicError: (reason) => {
-          console.warn('[voice] mic error:', reason);
-          log('mic.error', { reason });
-          if (!cancelled) {
-            setVadState('idle');
-            setEnergy(0);
-            setMicError(reason);
-          }
-        },
-      });
-      voiceLoopRef.current = loop;
-      void loop.start().then((ok) => log('mic.start', { ok }));
-
       return () => {
-        log('focus.cleanup');
-        cancelled = true;
-        offWs();
-        loop.stop();
-        player.stop();
-        if (voiceLoopRef.current === loop) voiceLoopRef.current = null;
-        if (audioPlayerRef.current === player) audioPlayerRef.current = null;
-        setVadState('idle');
-        setEnergy(0);
-        setAudioState('idle');
-        setMicError(null);
+        if (webcamHandleRef.current) {
+          webcamHandleRef.current.stop();
+          webcamHandleRef.current = null;
+        }
+        if (screenHandleRef.current) {
+          screenHandleRef.current.stop();
+          screenHandleRef.current = null;
+        }
+        setWebcamOn(false);
+        setScreenOn(false);
+        ws.sendSessionClose(sid);
       };
-    }, [
-      browserAvailable, ws, voiceSessionId, addUserMessage,
-      getOrCreateVoiceSession, voiceConfig,
-    ]),
+    }, [ws, voiceSessionId]),
   );
 
   // Derived SoundWaves state. ``processing`` only when we have a session
@@ -269,6 +187,77 @@ export default function VoiceScreen() {
     getOrCreateVoiceSession();
   }, [clearVoiceSession, getOrCreateVoiceSession]);
 
+  const toggleWebcam = useCallback(async () => {
+    if (!ws) return;
+    if (webcamHandleRef.current) {
+      webcamHandleRef.current.stop();
+      webcamHandleRef.current = null;
+      setWebcamOn(false);
+      log('webcam.stop');
+      return;
+    }
+    // Make sure a session exists before opening the camera. Seed the
+    // ref synchronously so the first-second frame doesn't drop on the
+    // floor while React waits to re-render. Subsequent frames keep
+    // reading ``voiceSessionIdRef.current`` so a "New session" click
+    // mid-share rebinds to whatever session is now live.
+    if (!voiceSessionIdRef.current) {
+      voiceSessionIdRef.current = getOrCreateVoiceSession();
+    }
+    try {
+      const handle = await startWebcamCapture(
+        (b64, w, h) => {
+          const sid = voiceSessionIdRef.current;
+          if (!sid) return;
+          ws.sendVideoFrame(sid, 'webcam', b64, { width: w, height: h });
+        },
+        { fps: 1 },
+      );
+      webcamHandleRef.current = handle;
+      setWebcamOn(true);
+      log('webcam.start');
+    } catch (e) {
+      log('webcam.error', { error: String(e) });
+    }
+  }, [ws, getOrCreateVoiceSession]);
+
+  const toggleScreen = useCallback(async () => {
+    if (!ws) return;
+    if (screenHandleRef.current) {
+      screenHandleRef.current.stop();
+      screenHandleRef.current = null;
+      setScreenOn(false);
+      log('screen.stop');
+      return;
+    }
+    if (!voiceSessionIdRef.current) {
+      voiceSessionIdRef.current = getOrCreateVoiceSession();
+    }
+    try {
+      const handle = await startScreenCapture(
+        (b64, w, h) => {
+          const sid = voiceSessionIdRef.current;
+          if (!sid) return;
+          ws.sendVideoFrame(sid, 'screen', b64, { width: w, height: h });
+        },
+        { fps: 1 },
+      );
+      screenHandleRef.current = handle;
+      setScreenOn(true);
+      log('screen.start');
+    } catch (e) {
+      // User cancelled the share-picker, or browser declined.
+      log('screen.error', { error: String(e) });
+    }
+  }, [ws, getOrCreateVoiceSession]);
+
+  const videoSupported = browserAvailable
+    && typeof navigator !== 'undefined'
+    && !!navigator.mediaDevices?.getUserMedia;
+  const screenSupported = videoSupported
+    // ``getDisplayMedia`` lives on ``mediaDevices`` in modern browsers.
+    && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
+
   return (
     <View style={styles.screen}>
       <View style={styles.header}>
@@ -276,10 +265,38 @@ export default function VoiceScreen() {
           <Image source={logoIcon} style={styles.headerLogo} resizeMode="contain" />
           <Text style={styles.headerTitle}>Voice Chat</Text>
         </View>
-        <TouchableOpacity style={styles.newBtn} onPress={handleNewSession}>
-          <Feather name="plus" size={12} color={colors.textSecondary} />
-          <Text style={styles.newBtnText}>New session</Text>
-        </TouchableOpacity>
+        <View style={styles.headerRight}>
+          {videoSupported && (
+            <TouchableOpacity
+              style={[styles.iconBtn, webcamOn && styles.iconBtnActive]}
+              onPress={toggleWebcam}
+              accessibilityLabel={webcamOn ? 'Stop webcam' : 'Share webcam'}
+            >
+              <Feather
+                name={webcamOn ? 'video' : 'video-off'}
+                size={14}
+                color={webcamOn ? colors.text : colors.textSecondary}
+              />
+            </TouchableOpacity>
+          )}
+          {screenSupported && (
+            <TouchableOpacity
+              style={[styles.iconBtn, screenOn && styles.iconBtnActive]}
+              onPress={toggleScreen}
+              accessibilityLabel={screenOn ? 'Stop screen share' : 'Share screen'}
+            >
+              <Feather
+                name={screenOn ? 'monitor' : 'cast'}
+                size={14}
+                color={screenOn ? colors.text : colors.textSecondary}
+              />
+            </TouchableOpacity>
+          )}
+          <TouchableOpacity style={styles.newBtn} onPress={handleNewSession}>
+            <Feather name="plus" size={12} color={colors.textSecondary} />
+            <Text style={styles.newBtnText}>New session</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {hasTts === false && (
@@ -297,6 +314,11 @@ export default function VoiceScreen() {
           <>
             <SoundWaves level={energy} state={swState} />
             <Text style={styles.caption}>{caption}</Text>
+            {(webcamOn || screenOn) && (
+              <Text style={styles.shareBadge}>
+                Sharing: {[webcamOn && 'webcam', screenOn && 'screen'].filter(Boolean).join(' + ')}
+              </Text>
+            )}
           </>
         ) : (
           <View style={styles.fallback}>
@@ -350,10 +372,21 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1, borderBottomColor: colors.borderLight,
   },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  headerRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   headerLogo: { width: 22, height: 22 },
   headerTitle: {
     fontSize: 14, fontWeight: '500', color: colors.text,
     fontFamily: font.display, letterSpacing: -0.2,
+  },
+  iconBtn: {
+    width: 28, height: 28, alignItems: 'center', justifyContent: 'center',
+    borderRadius: radius.sm,
+    borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  iconBtnActive: {
+    borderColor: colors.text,
+    backgroundColor: colors.borderLight,
   },
   newBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 5,
@@ -384,6 +417,10 @@ const styles = StyleSheet.create({
   caption: {
     marginTop: 18, fontSize: 12, color: colors.textMuted,
     fontFamily: font.mono, letterSpacing: 0.6, textTransform: 'uppercase',
+  },
+  shareBadge: {
+    marginTop: 6, fontSize: 10, color: colors.textSecondary,
+    fontFamily: font.mono, letterSpacing: 0.4,
   },
 
   fallback: {

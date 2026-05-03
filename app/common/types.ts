@@ -32,7 +32,73 @@ export type ClientMessage =
       name: 'stop' | 'new' | 'clear' | 'reset' | 'status' | 'queue' | 'help' | 'usage' | 'update' | 'restart';
       session_id?: string;
     }
-  | { type: 'ping' };
+  | { type: 'ping' }
+  // ── Stream protocol (additive) ──
+  // Long-lived realtime sessions carry typed events on top of the same
+  // WS. ``session_open`` begins; ``audio_chunk_in`` / ``video_frame`` /
+  // ``text_delta`` / ``text_final`` / ``attachment`` push input;
+  // ``interrupt`` triggers barge-in; ``session_close`` ends. The legacy
+  // ``message`` frame still works for one-shot text turns; the new
+  // surface is opt-in. Audio/video bytes are base64-encoded.
+  | {
+      type: 'session_open';
+      session_id: string;
+      profile?: 'realtime' | 'batched';
+      llm_pin?: string;
+      stt_pin?: string;
+      tts_pin?: string;
+      language?: string;
+      client_kind?: string;
+      // Debounce window for typed-text bursts. Server-side StreamSession
+      // coalesces messages arriving during an in-flight turn into a
+      // single merged turn. ``0`` = disabled (preempt-on-each-message).
+      // Voice/STT messages always bypass the window.
+      coalesce_window_ms?: number;
+      // When false, the session never invokes its TTS sidecar even if
+      // a provider is configured. Chat-tab sessions pass false so typed
+      // replies stay silent; voice-mode sessions keep the default.
+      speak?: boolean;
+    }
+  | { type: 'session_close'; session_id: string }
+  | { type: 'text_delta'; session_id: string; text: string; final?: boolean }
+  | {
+      type: 'text_final';
+      session_id: string;
+      text: string;
+      source?: 'user_typed' | 'stt' | 'system';
+      attachments?: Attachment[];
+    }
+  | {
+      type: 'audio_chunk_in';
+      session_id: string;
+      data: string;
+      end_of_speech?: boolean;
+      sample_rate?: number;
+      encoding?: string;
+    }
+  | { type: 'audio_end_in'; session_id: string }
+  | {
+      type: 'video_frame';
+      session_id: string;
+      stream: string;
+      data: string;
+      width?: number;
+      height?: number;
+      keyframe?: boolean;
+    }
+  | {
+      type: 'attachment';
+      session_id: string;
+      kind: 'image' | 'file' | 'voice' | 'video';
+      path?: string;
+      filename?: string;
+      mime_type?: string;
+    }
+  | {
+      type: 'interrupt';
+      session_id: string;
+      reason?: 'user_speech' | 'user_text' | 'manual';
+    };
 
 export type ResourceKind = 'mcp' | 'scheduled_task' | 'workflow' | 'vault' | 'config';
 export type ResourceAction = 'created' | 'updated' | 'deleted' | 'changed';
@@ -70,7 +136,34 @@ export type ServerMessage =
   // text + attachments so non-audio-aware clients render unchanged.
   | { type: 'audio_start'; session_id: string; format: string; voice_id: string; mime: string }
   | { type: 'audio_chunk'; session_id: string; seq: number; data: string }
-  | { type: 'audio_end'; session_id: string; total_chunks: number };
+  | { type: 'audio_end'; session_id: string; total_chunks: number }
+  // ── Stream protocol (additive) ──
+  // ``turn_complete`` marks the end of one logical assistant turn for
+  // batched-channel consumers; realtime clients can ignore it (the
+  // ``response`` frame already drives "Thinking…" → "Done"). Backward
+  // compat: clients that don't recognise these types ignore them.
+  //
+  // ``text_final`` echoes a recognised user utterance from streaming
+  // STT — voice mode renders it as the user message in the transcript
+  // without round-tripping through the legacy REST upload. ``source``
+  // distinguishes user-typed (no UI update needed; chat already added
+  // it) from STT (server-recognised — UI adds it now).
+  | { type: 'turn_complete'; session_id: string }
+  | {
+      type: 'text_final';
+      session_id: string;
+      text: string;
+      source?: 'user_typed' | 'stt' | 'system';
+      attachments?: Attachment[];
+    }
+  | {
+      type: 'video_frame_out';
+      session_id: string;
+      stream: string;
+      data: string;
+      width?: number;
+      height?: number;
+    };
 
 export interface Attachment {
   type: 'image' | 'file' | 'voice' | 'video';

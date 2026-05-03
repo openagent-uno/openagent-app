@@ -33,6 +33,14 @@ export interface MessageComposerProps {
   recording?: boolean;                 // omit → no mic button
   onStartRecord?: () => void;
   onStopRecord?: () => void;
+  // Continuous always-listening toggle. When ``alwaysListening`` is
+  // defined the composer renders a second mic-style icon (a
+  // headphones glyph) that toggles the persistent VAD loop. While
+  // it's on, the manual ``recording`` button hides — the two modes
+  // are mutually exclusive (you'd capture every utterance twice
+  // otherwise).
+  alwaysListening?: boolean;
+  onToggleAlwaysListen?: () => void;
   placeholder?: string;
   showHint?: boolean;                  // default true (Enter / Shift+Enter)
 }
@@ -48,6 +56,8 @@ export default function MessageComposer({
   recording,
   onStartRecord,
   onStopRecord,
+  alwaysListening,
+  onToggleAlwaysListen,
   placeholder = 'Message OpenAgent...',
   showHint = true,
 }: MessageComposerProps) {
@@ -58,7 +68,16 @@ export default function MessageComposer({
     }
   }, [onSend]);
 
-  const showMic = recording !== undefined && Platform.OS === 'web';
+  // The two mic-style buttons are mutually exclusive — when
+  // continuous listening is on, hide the manual record button so the
+  // user can't accidentally double-capture an utterance via both
+  // pipelines at once.
+  const showAlways = alwaysListening !== undefined && Platform.OS === 'web';
+  const showMic = (
+    recording !== undefined
+    && Platform.OS === 'web'
+    && !alwaysListening
+  );
   const files = pendingFiles ?? [];
   const canSend = (input.trim().length > 0 || files.length > 0) && !disabled;
 
@@ -123,6 +142,21 @@ export default function MessageComposer({
                   name={recording ? 'stop-circle' : 'mic'}
                   size={13}
                   color={recording ? colors.textInverse : colors.textSecondary}
+                />
+              </TouchableOpacity>
+            )}
+            {showAlways && (
+              <TouchableOpacity
+                style={[styles.iconBtn, alwaysListening && styles.iconBtnActive]}
+                onPress={onToggleAlwaysListen}
+                accessibilityLabel={
+                  alwaysListening ? 'Stop continuous listening' : 'Start continuous listening'
+                }
+              >
+                <Feather
+                  name="headphones"
+                  size={13}
+                  color={alwaysListening ? colors.textInverse : colors.textSecondary}
                 />
               </TouchableOpacity>
             )}

@@ -5,7 +5,7 @@
  * prose. Tool invocations inline as compact rows.
  */
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import Feather from '@expo/vector-icons/Feather';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, Image,
@@ -21,6 +21,7 @@ import MessageList from '../../components/MessageList';
 import { JarvisOrb } from '../../components/jarvis';
 import { uploadFile } from '../../services/api';
 import { useVoiceConfig } from '../../stores/voice';
+import { useStreamingMic, useAudioPlayback } from '../../services/voice';
 import { colors, font, radius } from '../../theme';
 
 export default function ChatScreen() {
@@ -42,10 +43,49 @@ export default function ChatScreen() {
   const isDesktop = typeof window !== 'undefined' && !!window.desktop?.isDesktop;
   const [recording, setRecording] = useState(false);
   const voiceLanguage = useVoiceConfig((s) => s.config.language);
+  const voiceConfig = useVoiceConfig((s) => s.config);
+  const setVoiceConfig = useVoiceConfig((s) => s.setConfig);
   const mediaRecorderRef = useRef<any>(null);
   const chunksRef = useRef<Blob[]>([]);
   const scrollRef = useRef<ScrollView>(null);
   const activeSession = sessions.find((s) => s.id === activeSessionId);
+
+  const toggleAlwaysListen = useCallback(() => {
+    setVoiceConfig({ chatAlwaysListen: !voiceConfig.chatAlwaysListen });
+  }, [setVoiceConfig, voiceConfig.chatAlwaysListen]);
+
+  const handleStreamTranscript = useCallback((text: string) => {
+    if (activeSessionId) addUserMessage(activeSessionId, text);
+  }, [activeSessionId, addUserMessage]);
+
+  // Continuous-mic mode for the chat tab. When the user toggles
+  // ``chatAlwaysListen`` on, this hook mounts the same VoiceLoop +
+  // AudioQueuePlayer pipeline the Voice tab uses and routes
+  // recognised utterances into the active chat thread as
+  // ``text_final(source='stt')`` — server-side mirror-modality re-
+  // enables TTS replies even though chat-tab sessions opened with
+  // ``speak: false``.
+  useStreamingMic({
+    ws,
+    sessionId: activeSessionId ?? null,
+    enabled: voiceConfig.chatAlwaysListen,
+    voiceConfig,
+    sessionOpen: { profile: 'batched', clientKind: 'webapp-chat', speak: false },
+    onTranscript: handleStreamTranscript,
+  });
+
+  // Standalone audio playback for the OFF-mic case. When the user
+  // records a voice note via the composer's mic button (or the server
+  // mirror-modality rule otherwise speaks a reply), we still need a
+  // client-side player even if continuous-listen is off — without
+  // this hook the gateway streams audio_chunk frames into the void.
+  // No-op once ``chatAlwaysListen`` is on because ``useStreamingMic``
+  // already mounts its own player for that session.
+  useAudioPlayback({
+    ws,
+    sessionId: activeSessionId ?? null,
+    enabled: !voiceConfig.chatAlwaysListen,
+  });
 
   useEffect(() => {
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
@@ -195,7 +235,11 @@ export default function ChatScreen() {
             ? transcription
             : `The user sent a voice message:\n- audio: ${result.filename} — local path: ${result.path}\nUse Read to inspect it.`;
           addUserMessage(activeSessionId, 'Voice message');
-          ws.sendMessage(msg, activeSessionId);
+          // Tag as STT so the StreamSession (a) bypasses the typed
+          // coalescence window for instant barge-in and (b) speaks the
+          // reply back even though the chat-tab session was opened
+          // with speak=false (mirror-modality rule).
+          ws.sendMessage(msg, activeSessionId, { source: 'stt' });
         } catch (e: any) {
           console.error('Voice upload failed:', e);
         }
@@ -295,6 +339,10 @@ export default function ChatScreen() {
               recording={Platform.OS === 'web' ? recording : undefined}
               onStartRecord={startRecording}
               onStopRecord={stopRecording}
+              alwaysListening={
+                Platform.OS === 'web' ? voiceConfig.chatAlwaysListen : undefined
+              }
+              onToggleAlwaysListen={toggleAlwaysListen}
             />
           </>
         ) : (

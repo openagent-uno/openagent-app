@@ -7,21 +7,32 @@
  *
  * Approach: ``getUserMedia`` with browser AEC enabled, fed into an
  * ``AnalyserNode`` we sample every ~30ms for RMS energy. A small state
- * machine tracks "silent → speech → silent" transitions:
+ * machine tracks "silent → speech → silent" transitions.
  *
- *   - ``SPEECH_THRESHOLD`` (RMS) above ``activeFrames`` consecutive
- *     frames → speech start; we begin a fresh ``MediaRecorder`` blob.
- *   - ``SILENCE_THRESHOLD`` below ``silentFrames`` consecutive frames →
- *     speech end; recorder stops, the blob is handed to ``onUtterance``.
+ * Two capture pipelines, picked at construction time:
+ *
+ *   - **PCM streaming (preferred)**: when ``onPcmChunk`` is supplied
+ *     and ``AudioWorklet`` is available, the same MediaStream feeds an
+ *     AudioWorkletNode that emits 16 kHz mono Int16 frames. ``onPcmChunk``
+ *     fires live during speech windows. Server-side StreamSession either
+ *     wraps these in a WAV header (Whisper/LiteLLM) or passes them
+ *     straight to Deepgram WS for sub-1 s TTFA partials.
+ *   - **WebM full-blob fallback**: when ``onPcmChunk`` is absent (or
+ *     AudioWorklet isn't supported), VoiceLoop uses MediaRecorder
+ *     without timeslice — ``onUtterance`` fires once at speech_end with
+ *     the complete WebM blob. Reliable across all backends, no live
+ *     partials.
  *
  * Echo handling is the caller's responsibility: while the agent's TTS
  * reply is playing, call ``setMuted(true)`` so loud speakers don't
- * trigger speech-start despite the browser's AEC.
+ * trigger speech-start despite the browser's AEC. Mute also pauses PCM
+ * forwarding so the assistant's voice doesn't bleed into Deepgram.
  *
  * If the mic is denied or yanked mid-conversation, ``onMicError`` fires
  * once with a stable reason; the caller surfaces a toast and falls back
  * to the text input.
  */
+import { PCMStreamCapture, type PCMStreamHandle } from './pcmCapture';
 
 export interface VoiceLoopOptions {
   /** RMS energy above which a frame is considered "loud". 0..1.
@@ -46,6 +57,16 @@ export interface VoiceLoopOptions {
    * uses this to drive the SoundWaves equalizer. ``muted`` ticks emit 0
    * so the bars settle while TTS is playing. */
   onEnergy?: (level: number) => void;
+  /** When set AND AudioWorklet is supported, VoiceLoop uses raw PCM
+   * streaming instead of MediaRecorder. ``onPcmChunk`` fires during
+   * speech windows with ~64 ms of 16 kHz mono Int16 samples. The Voice
+   * screen ships each frame as ``audio_chunk_in`` (encoding=pcm16) so
+   * Deepgram WS gets live frames for sub-1 s TTFA partials, while
+   * Whisper-class backends server-side buffer the whole utterance and
+   * wrap with a WAV header before transcribing. Falls back to the
+   * MediaRecorder/onUtterance path automatically when AudioWorklet is
+   * unavailable. */
+  onPcmChunk?: (chunk: Int16Array, info: { sampleRate: number; first: boolean }) => void | Promise<void>;
 }
 
 // Conservative defaults tuned for a quiet desk mic with typing/fan
@@ -62,12 +83,17 @@ const DEFAULTS = {
 };
 
 export class VoiceLoop {
-  private opts: Required<Omit<VoiceLoopOptions, 'onUtterance' | 'onSpeechStart' | 'onSpeechEnd' | 'onMicError' | 'onEnergy'>>;
+  private opts: Required<Pick<VoiceLoopOptions,
+    'speechThreshold' | 'silenceThreshold' | 'speechFrames' | 'silenceFrames'
+    | 'maxUtteranceMs' | 'minUtteranceMs'>>;
   private onUtterance: VoiceLoopOptions['onUtterance'];
   private onSpeechStart?: () => void;
   private onSpeechEnd?: () => void;
   private onMicError?: VoiceLoopOptions['onMicError'];
   private onEnergy?: VoiceLoopOptions['onEnergy'];
+  private onPcmChunk?: VoiceLoopOptions['onPcmChunk'];
+  private pcm: PCMStreamHandle | null = null;
+  private pcmFirstSent = false;
 
   private stream: MediaStream | null = null;
   private context: AudioContext | null = null;
@@ -103,6 +129,13 @@ export class VoiceLoop {
     this.onSpeechEnd = options.onSpeechEnd;
     this.onMicError = options.onMicError;
     this.onEnergy = options.onEnergy;
+    this.onPcmChunk = options.onPcmChunk;
+  }
+
+  /** True iff the live PCM streaming path is active for this loop.
+   * False means the loop falls back to MediaRecorder + onUtterance. */
+  get usingPcmStream(): boolean {
+    return this.pcm !== null;
   }
 
   async start(): Promise<boolean> {
@@ -149,6 +182,41 @@ export class VoiceLoop {
     this.buffer = new Float32Array(this.analyser.fftSize);
     source.connect(this.analyser);
 
+    // Try the AudioWorklet PCM path first (live frames → server STT).
+    // Fall back to MediaRecorder when AudioWorklet is missing or the
+    // caller didn't supply ``onPcmChunk``. Both pipelines share the same
+    // MediaStream + AudioContext, so the PCM worklet runs in parallel
+    // to the analyser without doubling the mic open.
+    if (this.onPcmChunk && PCMStreamCapture.isSupported()) {
+      try {
+        this.pcm = await PCMStreamCapture.attach(
+          this.stream,
+          this.context,
+          (frame) => {
+            const cb = this.onPcmChunk;
+            if (!cb) return;
+            const first = !this.pcmFirstSent;
+            this.pcmFirstSent = true;
+            try {
+              void cb(frame, {
+                sampleRate: PCMStreamCapture.TARGET_SAMPLE_RATE,
+                first,
+              });
+            } catch {
+              // Don't let a slow handler stall the worklet thread.
+            }
+          },
+        );
+      } catch (err) {
+        // AudioWorklet attach failed (CSP, permissions, etc.) — fall
+        // back to MediaRecorder. Surface as an error log but keep the
+        // mic running; voice mode degrades gracefully.
+        // eslint-disable-next-line no-console
+        console.warn('[voice] PCM stream attach failed, falling back:', err);
+        this.pcm = null;
+      }
+    }
+
     this.recordingMime = pickRecorderMime();
     this.running = true;
     this.timerId = setInterval(() => this.tick(), 30);
@@ -166,6 +234,11 @@ export class VoiceLoop {
     }
     this.recorder = null;
     this.chunks = [];
+    if (this.pcm) {
+      try { this.pcm.detach(); } catch { /* ignore */ }
+      this.pcm = null;
+    }
+    this.pcmFirstSent = false;
     if (this.stream) {
       const tracks = this.stream.getAudioTracks();
       if (this.trackEndedListener && tracks[0]) {
@@ -190,6 +263,10 @@ export class VoiceLoop {
    * The mic stream stays open so re-arming has zero latency. */
   setMuted(muted: boolean): void {
     this.muted = muted;
+    // While muted, the PCM worklet keeps decoding frames in the
+    // background but ``setActive(false)`` discards them — prevents
+    // the assistant's own voice from bleeding into the STT pump.
+    if (this.pcm) this.pcm.setActive(!muted && this.inSpeech);
     if (muted && this.inSpeech) {
       // Drop any in-flight utterance — we don't want to upload our own
       // playback as user speech.
@@ -238,7 +315,15 @@ export class VoiceLoop {
     if (!this.inSpeech) {
       if (this.aboveCount >= this.opts.speechFrames) {
         this.inSpeech = true;
-        this.beginRecording();
+        this.recordingStartedAt = Date.now();
+        if (this.pcm) {
+          // PCM streaming path: just toggle the gate — the worklet has
+          // been emitting frames in the background since start().
+          this.pcmFirstSent = false;
+          this.pcm.setActive(true);
+        } else {
+          this.beginRecording();
+        }
         this.onSpeechStart?.();
       }
     } else {
@@ -246,7 +331,14 @@ export class VoiceLoop {
       if (this.belowCount >= this.opts.silenceFrames || elapsed >= this.opts.maxUtteranceMs) {
         this.inSpeech = false;
         this.onSpeechEnd?.();
-        void this.endRecording(elapsed);
+        if (this.pcm) {
+          // Stop forwarding live PCM. The Voice screen sends
+          // ``audio_end_in`` itself in onSpeechEnd to close the STT
+          // window server-side.
+          this.pcm.setActive(false);
+        } else {
+          void this.endRecording(elapsed);
+        }
       }
     }
   }
@@ -264,11 +356,16 @@ export class VoiceLoop {
         return;
       }
     }
-    this.recorder.ondataavailable = (e) => {
-      if (e.data && e.data.size > 0) this.chunks.push(e.data);
+    const recorder = this.recorder;
+    recorder.ondataavailable = (e) => {
+      if (!e.data || e.data.size === 0) return;
+      this.chunks.push(e.data);
     };
-    this.recordingStartedAt = Date.now();
-    this.recorder.start();
+    // No timeslice: a single ``ondataavailable`` fires when ``stop()``
+    // flushes the complete WebM file. Partial timeslice chunks omit
+    // the EBML header on every frame after the first and don't
+    // round-trip through ffmpeg cleanly.
+    recorder.start();
   }
 
   private async endRecording(elapsedMs: number): Promise<void> {

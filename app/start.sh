@@ -22,7 +22,7 @@ echo ""
 start_desktop() {
     # Start web dev server in background, then launch Electron
     cd "$SCRIPT_DIR/universal"
-    npx expo start --web &
+    BROWSER=none npx expo start --web &
     WEB_PID=$!
     trap 'kill $WEB_PID 2>/dev/null || true' EXIT
     echo "⏳ Waiting for web dev server..."
