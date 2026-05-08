@@ -58,7 +58,9 @@ export function decodeTicket(s: string): InviteTicket {
   if (!looksLikeTicket(s)) {
     throw new TicketError(`not an OpenAgent ticket: ${JSON.stringify(s.slice(0, 8))}`);
   }
-  const body = s.slice(TICKET_PREFIX.length).toUpperCase();
+  let body = s.slice(TICKET_PREFIX.length);
+  body = body.replace(/[^A-Za-z2-7]/g, '');
+  body = body.toUpperCase();
   // Python's b32decode wants padding to a multiple of 8.
   const padded = body + '='.repeat((8 - (body.length % 8)) % 8);
   let raw: Uint8Array;
