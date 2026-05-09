@@ -4,6 +4,12 @@
 
 import { create } from 'zustand';
 import type { Attachment, ChatMessage, ChatSession, ServerMessage, ToolInfo } from '../../common/types';
+import type { SessionEntry, SessionRunMessage } from '../services/api';
+import {
+  deleteSession as deleteSessionApi,
+  fetchSessionRuns,
+  updateSessionMetadata,
+} from '../services/api';
 
 let nextMsgId = 1;
 const genId = () => `msg-${nextMsgId++}-${Date.now()}`;
@@ -12,11 +18,21 @@ interface ChatState {
   sessions: ChatSession[];
   activeSessionId: string | null;
   voiceSessionId: string | null;
+  /** True after the first successful fetch from /api/sessions. */
+  sessionsHydrated: boolean;
 
   createSession: () => string;
   setActiveSession: (id: string) => void;
   removeSession: (id: string) => void;
+  /** Rename a session locally and on the server. */
+  renameSession: (id: string, title: string) => void;
+  /** Populate local sessions from the server's persisted list. */
+  hydrateFromServer: (entries: SessionEntry[]) => void;
+  /** Mark hydration as done even when the server returned no sessions. */
+  markHydrated: () => void;
+  /** Returns the existing voice session id, or creates a new one. */
   getOrCreateVoiceSession: () => string;
+  /** Clear the voice session pointer (next visit makes a fresh one). */
   clearVoiceSession: () => void;
   addUserMessage: (sessionId: string, text: string, attachments?: Attachment[]) => void;
   handleServerMessage: (msg: ServerMessage) => void;
@@ -24,13 +40,18 @@ interface ChatState {
   loadSession: (id: string, title: string, history: { role: string; content: string; tool_result?: string; tool_error?: string; tool_name?: string; tool_args?: Record<string, any> }[]) => string;
 }
 
+function sessionId(): string {
+  return `session-${Date.now()}`;
+}
+
 export const useChat = create<ChatState>((set, get) => ({
   sessions: [],
   activeSessionId: null,
   voiceSessionId: null,
+  sessionsHydrated: false,
 
   createSession: () => {
-    const id = `session-${Date.now()}`;
+    const id = sessionId();
     const session: ChatSession = {
       id,
       title: 'New Chat',
@@ -44,16 +65,44 @@ export const useChat = create<ChatState>((set, get) => ({
     return id;
   },
 
-  setActiveSession: (id) => set({ activeSessionId: id }),
+  setActiveSession: (id) => {
+    const state = get();
+    set({ activeSessionId: id });
+    // Fetch run history from the server when switching to a hydrated
+    // session that hasn't loaded its messages yet (e.g. from a
+    // previous run that survived in agno_sessions).
+    if (state.sessionsHydrated) {
+      const ses = state.sessions.find((s) => s.id === id);
+      if (ses && ses.messages.length === 0) {
+        fetchSessionRuns(id)
+          .then((raw) => {
+            if (raw && raw.length > 0) {
+              const msgs: ChatMessage[] = raw.map((m: SessionRunMessage) => ({
+                id: m.id,
+                role: m.role,
+                text: m.text,
+                timestamp: m.timestamp,
+                toolInfo: m.toolInfo as ToolInfo | undefined,
+                attachments: m.attachments as Attachment[] | undefined,
+                model: m.model,
+              }));
+              set((s) => ({
+                sessions: s.sessions.map((se) =>
+                  se.id !== id ? se : { ...se, messages: msgs },
+                ),
+              }));
+            }
+          })
+          .catch(() => {});
+      }
+    }
+  },
 
   removeSession: (id) => set((s) => {
+    // Best-effort delete on the server (fire-and-forget).
+    deleteSessionApi(id).catch(() => {});
     const sessions = s.sessions.filter((ses) => ses.id !== id);
     const voiceSessionId = s.voiceSessionId === id ? null : s.voiceSessionId;
-    // When the deleted session was the active chat tab, fall back to
-    // the next CHAT session — not the voice session, even if voice is
-    // the only remaining row. The voice session lives in its own tab
-    // and the chat sidebar filters it out, so picking it here would
-    // leave the chat tab pointing at an invisible session.
     let activeSessionId = s.activeSessionId;
     if (s.activeSessionId === id) {
       const nextChat = sessions.find((ses) => ses.id !== voiceSessionId);
@@ -62,10 +111,69 @@ export const useChat = create<ChatState>((set, get) => ({
     return { sessions, activeSessionId, voiceSessionId };
   }),
 
+  renameSession: (id, title) => {
+    set((s) => ({
+      sessions: s.sessions.map((se) =>
+        se.id !== id ? se : { ...se, title },
+      ),
+    }));
+    updateSessionMetadata(id, { title }).catch(() => {});
+  },
+
+  hydrateFromServer: (entries) => {
+    if (!entries || entries.length === 0) return;
+    const existing = get().sessions;
+    const existingIds = new Set(existing.map((s) => s.id));
+    const imported: ChatSession[] = [];
+    for (const e of entries) {
+      const sid = e.session_id;
+      if (!sid || existingIds.has(sid)) continue;
+      imported.push({
+        id: sid,
+        title: e.title || 'New Chat',
+        messages: [],
+        isProcessing: false,
+      });
+    }
+    if (imported.length === 0) return;
+    const autoSelectId = get().activeSessionId ?? imported[0]?.id ?? null;
+    set((s) => ({
+      sessions: [...s.sessions, ...imported],
+      sessionsHydrated: true,
+      activeSessionId: autoSelectId,
+    }));
+    // Fetch run history for the auto-selected session so the chat
+    // screen shows prior messages immediately.
+    if (autoSelectId) {
+      fetchSessionRuns(autoSelectId)
+        .then((raw) => {
+          if (raw && raw.length > 0) {
+            const msgs: ChatMessage[] = raw.map((m: SessionRunMessage) => ({
+              id: m.id,
+              role: m.role,
+              text: m.text,
+              timestamp: m.timestamp,
+              toolInfo: m.toolInfo as ToolInfo | undefined,
+              attachments: m.attachments as Attachment[] | undefined,
+              model: m.model,
+            }));
+            set((s) => ({
+              sessions: s.sessions.map((se) =>
+                se.id !== autoSelectId ? se : { ...se, messages: msgs },
+              ),
+            }));
+          }
+        })
+        .catch(() => {});
+    }
+  },
+
+  markHydrated: () => set({ sessionsHydrated: true }),
+
   getOrCreateVoiceSession: () => {
     const existing = get().voiceSessionId;
     if (existing && get().sessions.some((s) => s.id === existing)) return existing;
-    const id = `session-${Date.now()}`;
+    const id = sessionId();
     const session: ChatSession = {
       id,
       title: 'Voice Chat',
@@ -81,25 +189,37 @@ export const useChat = create<ChatState>((set, get) => ({
 
   clearVoiceSession: () => set({ voiceSessionId: null }),
 
-  addUserMessage: (sessionId, text, attachments) => set((s) => ({
-    sessions: s.sessions.map((ses) =>
-      ses.id !== sessionId ? ses : {
-        ...ses,
-        isProcessing: true,
-        statusText: 'Thinking...',
-        messages: [...ses.messages, {
-          id: genId(),
-          role: 'user' as const,
-          text,
-          timestamp: Date.now(),
-          attachments: attachments && attachments.length ? attachments : undefined,
-        }],
-        title: ses.messages.length === 0
-          ? (text.slice(0, 40) || attachments?.[0]?.filename || 'New Chat')
-          : ses.title,
-      },
-    ),
-  })),
+  addUserMessage: (sessionId, text, attachments) => {
+    const state = get();
+    const ses = state.sessions.find((s) => s.id === sessionId);
+    const isFirstMessage = ses ? ses.messages.length === 0 : true;
+    const newTitle = isFirstMessage
+      ? (text.slice(0, 40) || attachments?.[0]?.filename || 'New Chat')
+      : undefined;
+
+    set((s) => ({
+      sessions: s.sessions.map((se) =>
+        se.id !== sessionId ? se : {
+          ...se,
+          isProcessing: true,
+          statusText: 'Thinking...',
+          messages: [...se.messages, {
+            id: genId(),
+            role: 'user' as const,
+            text,
+            timestamp: Date.now(),
+            attachments: attachments && attachments.length ? attachments : undefined,
+          }],
+          title: newTitle ?? se.title,
+        },
+      ),
+    }));
+
+    // Persist the title to the server so it shows up on reconnect.
+    if (newTitle) {
+      updateSessionMetadata(sessionId, { title: newTitle }).catch(() => {});
+    }
+  },
 
   handleServerMessage: (msg) => set((s) => {
     if (msg.type === 'status') {
@@ -260,7 +380,7 @@ export const useChat = create<ChatState>((set, get) => ({
     return {};
   }),
 
-  clearAll: () => set({ sessions: [], activeSessionId: null, voiceSessionId: null }),
+  clearAll: () => set({ sessions: [], activeSessionId: null, voiceSessionId: null, sessionsHydrated: false }),
 
   loadSession: (id, title, history) => {
     const buildToolInfo = (entry: typeof history[0]): ToolInfo | undefined => {

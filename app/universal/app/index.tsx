@@ -34,6 +34,8 @@ export default function LoginScreen() {
   } = useConnection();
   const createSession = useChat((s) => s.createSession);
   const getOrCreateVoiceSession = useChat((s) => s.getOrCreateVoiceSession);
+  const sessions = useChat((s) => s.sessions);
+  const sessionsHydrated = useChat((s) => s.sessionsHydrated);
   const confirm = useConfirm();
 
   // Default to the join form when no accounts exist; switch to sign-in
@@ -59,13 +61,18 @@ export default function LoginScreen() {
   // hadn't finished tearing down) — landing them on an empty chat.
   const attemptedRef = useRef(false);
   useEffect(() => {
-    if (attemptedRef.current && isConnected && agentName) {
+    if (attemptedRef.current && isConnected && agentName && sessionsHydrated) {
       attemptedRef.current = false;
-      createSession();
+      // Only create a fresh session when the server returned no
+      // persisted ones — otherwise the chat store is already
+      // hydrated and the user can pick up where they left off.
+      if (sessions.length === 0) {
+        createSession();
+      }
       getOrCreateVoiceSession();
       router.replace('/(tabs)/chat');
     }
-  }, [isConnected, agentName]);
+  }, [isConnected, agentName, sessions.length, sessionsHydrated]);
 
   // Auto-select the first account when sign-in mode opens with one in
   // the list — saves the user a click on the common case.

@@ -17,7 +17,7 @@
 import { create } from 'zustand';
 import type { ConnectionConfig, SavedAccount } from '../../common/types';
 import { OpenAgentWS } from '../services/ws';
-import { setBaseUrl } from '../services/api';
+import { setBaseUrl, fetchSessions } from '../services/api';
 import * as storage from '../services/storage';
 import { useChat } from './chat';
 
@@ -402,6 +402,19 @@ function _openWebsocket(
         });
         set({ accounts: updated });
         storage.setItem(STORAGE_KEY, JSON.stringify(updated));
+      }
+      // Hydrate the chat sidebar with every session the server
+      // already knows about for this device.
+      const chat = useChat.getState();
+      if (!chat.sessionsHydrated) {
+        fetchSessions()
+          .then((entries) => {
+            chat.hydrateFromServer(entries);
+            chat.markHydrated();
+          })
+          .catch(() => {
+            chat.markHydrated();
+          });
       }
     } else if (msg.type === 'auth_error') {
       finalize();

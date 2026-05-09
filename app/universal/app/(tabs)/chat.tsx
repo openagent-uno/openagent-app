@@ -9,6 +9,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import Feather from '@expo/vector-icons/Feather';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, Image,
+  Alert, TextInput,
 } from 'react-native';
 
 const logoIcon = require('../../assets/openagent-icon.png');
@@ -28,7 +29,7 @@ export default function ChatScreen() {
   const ws = useConnection((s) => s.ws);
   const {
     sessions, activeSessionId, voiceSessionId,
-    createSession, setActiveSession, removeSession,
+    createSession, setActiveSession, removeSession, renameSession,
     addUserMessage,
   } = useChat();
   // The voice session lives in its own tab — it has no place in the
@@ -40,6 +41,8 @@ export default function ChatScreen() {
 
   const [input, setInput] = useState('');
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editTitle, setEditTitle] = useState('');
   const isDesktop = typeof window !== 'undefined' && !!window.desktop?.isDesktop;
   const [recording, setRecording] = useState(false);
   const voiceLanguage = useVoiceConfig((s) => s.config.language);
@@ -276,27 +279,69 @@ export default function ChatScreen() {
         </TouchableOpacity>
       </View>
       <ScrollView style={styles.sessionList}>
-        {chatSessions.map((ses) => (
-          <TouchableOpacity
-            key={ses.id}
-            style={[styles.sessionItem, ses.id === activeSessionId && styles.sessionActive]}
-            onPress={() => setActiveSession(ses.id)}
-            onLongPress={() => removeSession(ses.id)}
-            activeOpacity={0.7}
-          >
-            {ses.id === activeSessionId && <View style={styles.sessionActiveBar} />}
-            <Text style={[styles.sessionTitle, ses.id === activeSessionId && styles.sessionTitleActive]} numberOfLines={1}>
-              {ses.title}
-            </Text>
-            {ses.isProcessing && (
-              <View
-                style={styles.processingDot}
-                // @ts-ignore web className
-                {...(Platform.OS === 'web' ? { className: 'oa-pulse' } : {})}
-              />
-            )}
-          </TouchableOpacity>
-        ))}
+        {chatSessions.map((ses) => {
+          const isEditing = editingSessionId === ses.id;
+          return (
+            <View key={ses.id} style={styles.sessionRow}>
+              <TouchableOpacity
+                style={[styles.sessionItem, ses.id === activeSessionId && styles.sessionActive]}
+                onPress={() => { setEditingSessionId(null); setActiveSession(ses.id); }}
+                onLongPress={() => {
+                  if (Platform.OS === 'web') {
+                    const name = window.prompt('Rename session:', ses.title);
+                    if (name && name.trim()) renameSession(ses.id, name.trim());
+                  } else {
+                    Alert.alert(
+                      ses.title,
+                      undefined,
+                      [
+                        { text: 'Rename', onPress: () => { setEditingSessionId(ses.id); setEditTitle(ses.title); } },
+                        { text: 'Delete', style: 'destructive', onPress: () => removeSession(ses.id) },
+                        { text: 'Cancel', style: 'cancel' },
+                      ],
+                    );
+                  }
+                }}
+                activeOpacity={0.7}
+              >
+                {ses.id === activeSessionId && <View style={styles.sessionActiveBar} />}
+                {isEditing ? (
+                  <TextInput
+                    style={styles.sessionEditInput}
+                    value={editTitle}
+                    onChangeText={setEditTitle}
+                    onSubmitEditing={() => {
+                      const t = editTitle.trim();
+                      if (t) renameSession(ses.id, t);
+                      setEditingSessionId(null);
+                    }}
+                    onBlur={() => {
+                      const t = editTitle.trim();
+                      if (t) renameSession(ses.id, t);
+                      setEditingSessionId(null);
+                    }}
+                    autoFocus
+                    selectTextOnFocus
+                  />
+                ) : (
+                  <Text style={[styles.sessionTitle, ses.id === activeSessionId && styles.sessionTitleActive]} numberOfLines={1}>
+                    {ses.title}
+                  </Text>
+                )}
+                {ses.isProcessing && (
+                  <View style={styles.processingDot} {...(Platform.OS === 'web' ? { className: 'oa-pulse' } : {})} />
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.sessionDeleteBtn}
+                onPress={() => removeSession(ses.id)}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Feather name="x" size={12} color={colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+          );
+        })}
         {chatSessions.length === 0 && (
           <Text style={styles.sidebarEmpty}>No sessions yet</Text>
         )}
@@ -397,6 +442,17 @@ const styles = StyleSheet.create({
   },
   sessionTitle: { color: colors.textSecondary, flex: 1, fontSize: 12.5, fontWeight: '400' },
   sessionTitleActive: { color: colors.text, fontWeight: '500' },
+  sessionRow: {
+    flexDirection: 'row', alignItems: 'center',
+  },
+  sessionDeleteBtn: {
+    padding: 4, marginLeft: 2, opacity: 0.5,
+  },
+  sessionEditInput: {
+    flex: 1, color: colors.text, fontSize: 12.5,
+    borderBottomWidth: 1, borderBottomColor: colors.primary,
+    paddingVertical: 2,
+  },
   processingDot: {
     width: 6, height: 6, borderRadius: 3,
     backgroundColor: colors.primary, marginLeft: 6,

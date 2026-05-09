@@ -684,6 +684,66 @@ export async function listAvailableModels(providerId: number): Promise<Available
   return data.models;
 }
 
+// ── Sessions API ──
+
+export interface SessionEntry {
+  session_id: string;
+  client_id: string;
+  title: string | null;
+  model: string | null;
+  framework: string | null;
+  created_at: number | null;
+  last_active_at: number | null;
+}
+
+export interface SessionListResponse {
+  sessions: SessionEntry[];
+}
+
+export async function fetchSessions(): Promise<SessionEntry[]> {
+  const data = await get<SessionListResponse>('/api/sessions');
+  return data.sessions;
+}
+
+export async function deleteSession(sessionId: string): Promise<void> {
+  await del(`/api/sessions/${encodeURIComponent(sessionId)}`);
+}
+
+export interface SessionRunMessage {
+  id: string;
+  role: 'user' | 'assistant' | 'tool';
+  text: string;
+  timestamp: number;
+  toolInfo?: {
+    tool: string;
+    params?: Record<string, any>;
+    status: 'running' | 'done' | 'error';
+    result?: string;
+    error?: string;
+  };
+  attachments?: { type: 'image' | 'file' | 'voice' | 'video'; path: string; filename: string }[];
+  model?: string;
+}
+
+export interface SessionRunsResponse {
+  session_id: string;
+  messages: SessionRunMessage[];
+}
+
+export async function fetchSessionRuns(sessionId: string, limit?: number): Promise<SessionRunMessage[]> {
+  const qs = limit ? `?limit=${limit}` : '';
+  const data = await get<SessionRunsResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/runs${qs}`);
+  return data.messages || [];
+}
+
+export async function updateSessionMetadata(
+  sessionId: string,
+  body: { title?: string; model?: string },
+): Promise<{ ok: boolean }> {
+  if (!body.title && !body.model) return { ok: true };
+  return patch(`/api/sessions/${encodeURIComponent(sessionId)}`, body);
+}
+
 // ── System telemetry ──
 
 export async function getSystemSnapshot(): Promise<SystemSnapshot> {
