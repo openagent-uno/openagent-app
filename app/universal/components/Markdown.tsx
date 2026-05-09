@@ -3,11 +3,12 @@ import { colors, font, radius } from '../theme';
  * Lightweight markdown renderer — editorial prose style matched to the
  * refined Geist typography and paper-soft code blocks.
  * Handles: **bold**, *italic*, `inline code`, ```code blocks```,
- * [links](url), # headers, - bullet lists, > blockquotes.
+ * [links](url), # headers, - bullet lists, > blockquotes,
+ * ![alt](url) images.
  */
 
 import type { ReactElement } from 'react';
-import { Text, View, StyleSheet, Linking, Platform } from 'react-native';
+import { Text, View, StyleSheet, Linking, Platform, Image } from 'react-native';
 
 interface Props {
   text: string;
@@ -149,7 +150,7 @@ function renderBlock(block: Block, key: number) {
 
 function renderInline(text: string): (string | ReactElement)[] {
   const parts: (string | ReactElement)[] = [];
-  const re = /(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`([^`]+)`)|(\[([^\]]+)\]\(([^)]+)\))/g;
+  const re = /(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`([^`]+)`)|(!\[([^\]]*)\]\(([^)]+)\))|(\[([^\]]+)\]\(([^)]+)\))/g;
   let last = 0;
   let match: RegExpExecArray | null;
   let idx = 0;
@@ -165,14 +166,28 @@ function renderInline(text: string): (string | ReactElement)[] {
       parts.push(<Text key={`i${idx++}`} style={styles.italic}>{match[4]}</Text>);
     } else if (match[6]) {
       parts.push(<Text key={`c${idx++}`} style={styles.inlineCode}>{match[6]}</Text>);
-    } else if (match[8] && match[9]) {
+    } else if (match[8] !== undefined && match[9]) {
+      const imgUrl = match[9];
+      if (/^https?:\/\//i.test(imgUrl)) {
+        parts.push(
+          <Image
+            key={`img${idx++}`}
+            source={{ uri: imgUrl }}
+            style={styles.inlineImage}
+            resizeMode="contain"
+          />
+        );
+      } else {
+        parts.push(match[0]);
+      }
+    } else if (match[10] && match[11]) {
       parts.push(
         <Text
           key={`l${idx++}`}
           style={styles.link}
-          onPress={() => Linking.openURL(match![9])}
+          onPress={() => Linking.openURL(match![11])}
         >
-          {match[8]}
+          {match[10]}
         </Text>
       );
     }
@@ -265,5 +280,15 @@ const styles = StyleSheet.create({
   listText: {
     flex: 1, fontSize: 14, lineHeight: 22, color: colors.text,
     fontFamily: font.sans,
+  },
+  inlineImage: {
+    width: '100%',
+    maxWidth: 480,
+    height: 280,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    marginVertical: 8,
+    backgroundColor: colors.codeBg,
   },
 });

@@ -11,12 +11,11 @@
  * tail-shows the last few turns); omit for the full transcript.
  */
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import Feather from '@expo/vector-icons/Feather';
-import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Platform, Image } from 'react-native';
 import type { Attachment, ChatMessage, ToolInfo } from '../../common/types';
-import { useConnection } from '../stores/connection';
-import { downloadFile } from '../services/api';
+import { downloadFile, fileUrl } from '../services/api';
 import Markdown from './Markdown';
 import { colors, font, radius } from '../theme';
 
@@ -62,6 +61,8 @@ export default function MessageList({
 // ── Atoms ────────────────────────────────────────────────────────────
 
 function UserMessage({ text, attachments }: { text: string; attachments?: Attachment[] }) {
+  const inlineImages = attachments?.filter((a) => a.type === 'image') ?? [];
+  const otherAttach = attachments?.filter((a) => a.type !== 'image') ?? [];
   return (
     <View
       style={styles.userBlock}
@@ -71,14 +72,17 @@ function UserMessage({ text, attachments }: { text: string; attachments?: Attach
       <View style={styles.userRule} />
       <View style={styles.userBody}>
         <Text style={styles.userLabel}>You</Text>
-        {attachments && attachments.length > 0 && (
+        {text ? <Text style={styles.userText}>{text}</Text> : null}
+        {inlineImages.map((att, i) => (
+          <InlineImage key={`img-${att.path}-${i}`} attachment={att} />
+        ))}
+        {otherAttach.length > 0 && (
           <View style={styles.attachmentsRow}>
-            {attachments.map((att, i) => (
+            {otherAttach.map((att, i) => (
               <AttachmentView key={`${att.path}-${i}`} attachment={att} />
             ))}
           </View>
         )}
-        {text ? <Text style={styles.userText}>{text}</Text> : null}
       </View>
     </View>
   );
@@ -91,6 +95,8 @@ function AssistantMessage({
   model?: string;
   attachments?: Attachment[];
 }) {
+  const inlineImages = attachments?.filter((a) => a.type === 'image') ?? [];
+  const otherAttach = attachments?.filter((a) => a.type !== 'image') ?? [];
   return (
     <View
       style={styles.assistantBlock}
@@ -104,15 +110,42 @@ function AssistantMessage({
       </View>
       <View style={styles.assistantBody}>
         <Markdown text={text} />
-        {attachments && attachments.length > 0 && (
+        {inlineImages.map((att, i) => (
+          <InlineImage key={`img-${att.path}-${i}`} attachment={att} downloadable />
+        ))}
+        {otherAttach.length > 0 && (
           <View style={styles.attachmentsRow}>
-            {attachments.map((att, i) => (
+            {otherAttach.map((att, i) => (
               <AttachmentView key={`${att.path}-${i}`} attachment={att} downloadable />
             ))}
           </View>
         )}
       </View>
     </View>
+  );
+}
+
+function InlineImage({
+  attachment, downloadable = false,
+}: { attachment: Attachment; downloadable?: boolean }) {
+  const src = fileUrl(attachment.path);
+  const image = (
+    <Image
+      source={{ uri: src }}
+      style={styles.inlineImage}
+      resizeMode="contain"
+    />
+  );
+  if (!downloadable) return <View style={styles.imageContainer}>{image}</View>;
+  return (
+    <TouchableOpacity
+      style={styles.imageContainer}
+      onPress={async () => {
+        try { await downloadFile(attachment.path, attachment.filename); } catch (e) { console.error('Download failed:', e); }
+      }}
+    >
+      {image}
+    </TouchableOpacity>
   );
 }
 
@@ -158,8 +191,18 @@ function ToolCard({
   toolInfo, fallbackText,
 }: { toolInfo?: ToolInfo; fallbackText: string }) {
   const [expanded, setExpanded] = useState(false);
+  const parsed = useMemo<ToolInfo | undefined>(() => {
+    if (toolInfo) return toolInfo;
+    try {
+      const j = JSON.parse(fallbackText);
+      if (j && j.tool) return j as ToolInfo;
+    } catch { /* not JSON */ }
+    return undefined;
+  }, [toolInfo, fallbackText]);
 
-  if (!toolInfo) {
+  const info = parsed;
+
+  if (!info) {
     return (
       <View style={styles.toolRow}>
         <View style={styles.toolIndicator} />
@@ -169,8 +212,8 @@ function ToolCard({
     );
   }
 
-  const isRunning = toolInfo.status === 'running';
-  const isError = toolInfo.status === 'error';
+  const isRunning = info.status === 'running';
+  const isError = info.status === 'error';
   const statusColor = isError ? colors.error : isRunning ? colors.warning : colors.success;
   const statusLabel = isRunning ? 'running' : isError ? 'error' : 'done';
 
@@ -185,18 +228,18 @@ function ToolCard({
       <View style={styles.toolCardHeader}>
         <View style={[styles.toolStatusDot, { backgroundColor: statusColor }]} />
         <Feather name="tool" size={11} color={colors.textMuted} />
-        <Text style={styles.toolCardName}>{toolInfo.tool}</Text>
+        <Text style={styles.toolCardName}>{info.tool}</Text>
         <Text style={[styles.toolStatusText, { color: statusColor }]}>{statusLabel}</Text>
         <Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={12} color={colors.textMuted} />
       </View>
 
       {expanded && (
         <View style={styles.toolCardBody}>
-          {toolInfo.params && Object.keys(toolInfo.params).length > 0 && (
+          {info.params && Object.keys(info.params).length > 0 && (
             <>
               <Text style={styles.toolSectionTitle}>Parameters</Text>
               <View style={styles.toolCodeBlock}>
-                {Object.entries(toolInfo.params).map(([k, v]) => (
+                {Object.entries(info.params).map(([k, v]) => (
                   <Text key={k} style={styles.toolCodeText}>
                     <Text style={{ color: colors.primary }}>{k}</Text>
                     <Text style={{ color: colors.textMuted }}>: </Text>
@@ -206,19 +249,19 @@ function ToolCard({
               </View>
             </>
           )}
-          {toolInfo.result && (
+          {info.result && (
             <>
               <Text style={styles.toolSectionTitle}>Result</Text>
               <View style={styles.toolCodeBlock}>
-                <Text style={styles.toolCodeText} numberOfLines={10}>{toolInfo.result}</Text>
+                <Text style={styles.toolCodeText} numberOfLines={10}>{info.result}</Text>
               </View>
             </>
           )}
-          {toolInfo.error && (
+          {info.error && (
             <>
               <Text style={[styles.toolSectionTitle, { color: colors.error }]}>Error</Text>
               <View style={[styles.toolCodeBlock, { borderColor: colors.errorBorder }]}>
-                <Text style={[styles.toolCodeText, { color: colors.error }]}>{toolInfo.error}</Text>
+                <Text style={[styles.toolCodeText, { color: colors.error }]}>{info.error}</Text>
               </View>
             </>
           )}
@@ -352,5 +395,17 @@ const styles = StyleSheet.create({
   attachmentText: {
     color: colors.textSecondary, fontSize: 11, fontWeight: '500',
     flexShrink: 1,
+  },
+
+  // Inline images
+  imageContainer: { marginTop: 8, marginBottom: 8 },
+  inlineImage: {
+    width: '100%',
+    maxWidth: 480,
+    height: 280,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.borderLight,
+    backgroundColor: colors.codeBg,
   },
 });

@@ -11,24 +11,17 @@ const genId = () => `msg-${nextMsgId++}-${Date.now()}`;
 interface ChatState {
   sessions: ChatSession[];
   activeSessionId: string | null;
-  // Tracked separately from ``activeSessionId`` so the Voice screen
-  // resumes its own session across tab switches without disturbing
-  // the Chat tab's selection. Lives only in memory — a fresh app
-  // launch always opens the Voice tab on a brand-new session.
   voiceSessionId: string | null;
 
   createSession: () => string;
   setActiveSession: (id: string) => void;
   removeSession: (id: string) => void;
-  /** Returns the existing voice session id, or creates a new one. */
   getOrCreateVoiceSession: () => string;
-  /** Clear the voice session pointer (next visit makes a fresh one).
-   * Does NOT delete the session row from ``sessions[]`` so the Chat
-   * tab's sidebar can still show the transcript. */
   clearVoiceSession: () => void;
   addUserMessage: (sessionId: string, text: string, attachments?: Attachment[]) => void;
   handleServerMessage: (msg: ServerMessage) => void;
   clearAll: () => void;
+  loadSession: (id: string, title: string, history: { role: string; content: string; tool_result?: string; tool_error?: string; tool_name?: string; tool_args?: Record<string, any> }[]) => string;
 }
 
 export const useChat = create<ChatState>((set, get) => ({
@@ -268,4 +261,55 @@ export const useChat = create<ChatState>((set, get) => ({
   }),
 
   clearAll: () => set({ sessions: [], activeSessionId: null, voiceSessionId: null }),
+
+  loadSession: (id, title, history) => {
+    const buildToolInfo = (entry: typeof history[0]): ToolInfo | undefined => {
+      const name = entry.tool_name;
+      if (!name) return undefined;
+      const isError = !!entry.tool_error;
+      const isDone = !isError && entry.tool_result !== undefined;
+      return {
+        tool: name,
+        params: entry.tool_args ?? {},
+        status: isError ? 'error' : isDone ? 'done' : 'running',
+        result: entry.tool_result,
+        error: entry.tool_error,
+      };
+    };
+    const messages: ChatMessage[] = history.map((entry, i) => {
+      const toolInfo = buildToolInfo(entry);
+      if (toolInfo) {
+        return {
+          id: `load-${id}-${i}-${Date.now()}`,
+          role: 'tool' as const,
+          text: JSON.stringify(toolInfo),
+          timestamp: Date.now() - (history.length - i) * 1000,
+          toolInfo,
+        };
+      }
+      if (entry.role === 'user') {
+        return {
+          id: `load-${id}-${i}-${Date.now()}`,
+          role: 'user' as const,
+          text: entry.content,
+          timestamp: Date.now() - (history.length - i) * 1000,
+        };
+      }
+      return {
+        id: `load-${id}-${i}-${Date.now()}`,
+        role: 'assistant' as const,
+        text: entry.content,
+        timestamp: Date.now() - (history.length - i) * 1000,
+      };
+    });
+    const session: ChatSession = { id, title, messages, isProcessing: false };
+    set((s) => {
+      const existing = s.sessions.some((ses) => ses.id === id);
+      const sessions = existing
+        ? s.sessions.map((ses) => (ses.id === id ? session : ses))
+        : [...s.sessions, session];
+      return { sessions, activeSessionId: id };
+    });
+    return id;
+  },
 }));
