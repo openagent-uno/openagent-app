@@ -237,10 +237,8 @@ export const useChat = create<ChatState>((set, get) => ({
           sessions: s.sessions.map((ses) => {
             if (ses.id !== msg.session_id) return ses;
             if (toolInfo!.status === 'running') {
-              // New tool → add message
               return {
                 ...ses,
-                statusText: `Using ${toolInfo!.tool}...`,
                 messages: [...ses.messages, {
                   id: genId(),
                   role: 'tool' as const,
@@ -250,13 +248,25 @@ export const useChat = create<ChatState>((set, get) => ({
                 }],
               };
             }
-            // done/error → update the existing running tool message
             const msgs = [...ses.messages];
+            let found = false;
             for (let i = msgs.length - 1; i >= 0; i--) {
               if (msgs[i].toolInfo?.tool === toolInfo!.tool && msgs[i].toolInfo?.status === 'running') {
                 msgs[i] = { ...msgs[i], toolInfo: toolInfo! };
+                found = true;
                 break;
               }
+            }
+            if (!found) {
+              msgs.push({
+                id: genId(),
+                role: 'tool' as const,
+                text: toolInfo!.status === 'error'
+                  ? `✗ ${toolInfo!.tool} failed`
+                  : `✓ ${toolInfo!.tool} done`,
+                timestamp: Date.now(),
+                toolInfo,
+              });
             }
             return { ...ses, messages: msgs };
           }),
