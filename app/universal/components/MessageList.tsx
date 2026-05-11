@@ -253,7 +253,9 @@ function ToolCard({
             <>
               <Text style={styles.toolSectionTitle}>Result</Text>
               <View style={styles.toolCodeBlock}>
-                <Text style={styles.toolCodeText} numberOfLines={10}>{info.result}</Text>
+                <Text style={styles.toolCodeText} numberOfLines={10}>
+                  {typeof info.result === 'string' ? info.result : JSON.stringify(info.result)}
+                </Text>
               </View>
             </>
           )}
@@ -261,7 +263,9 @@ function ToolCard({
             <>
               <Text style={[styles.toolSectionTitle, { color: colors.error }]}>Error</Text>
               <View style={[styles.toolCodeBlock, { borderColor: colors.errorBorder }]}>
-                <Text style={[styles.toolCodeText, { color: colors.error }]}>{info.error}</Text>
+                <Text style={[styles.toolCodeText, { color: colors.error }]}>
+                  {typeof info.error === 'string' ? info.error : JSON.stringify(info.error)}
+                </Text>
               </View>
             </>
           )}

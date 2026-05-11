@@ -4,7 +4,7 @@ import { colors, font, radius } from '../theme';
  * refined Geist typography and paper-soft code blocks.
  * Handles: **bold**, *italic*, `inline code`, ```code blocks```,
  * [links](url), # headers, - bullet lists, > blockquotes,
- * ![alt](url) images.
+ * ![alt](url) images, | tables |.
  */
 
 import type { ReactElement } from 'react';
@@ -28,7 +28,8 @@ type Block =
   | { type: 'code'; lang: string; text: string }
   | { type: 'heading'; level: number; text: string }
   | { type: 'quote'; text: string }
-  | { type: 'list'; items: string[] };
+  | { type: 'list'; items: string[] }
+  | { type: 'table'; headers: string[]; rows: string[][] };
 
 function parseBlocks(text: string): Block[] {
   const blocks: Block[] = [];
@@ -78,6 +79,18 @@ function parseBlocks(text: string): Block[] {
       continue;
     }
 
+    if (/^\|.+\|$/.test(line.trim()) && i + 1 < lines.length && /^\|([\s:-]+\|)+$/.test(lines[i + 1].trim())) {
+      const headers = parseTableRow(line);
+      i += 2;
+      const rows: string[][] = [];
+      while (i < lines.length && /^\|.+\|$/.test(lines[i].trim())) {
+        rows.push(parseTableRow(lines[i]));
+        i++;
+      }
+      blocks.push({ type: 'table', headers, rows });
+      continue;
+    }
+
     if (!line.trim()) {
       i++;
       continue;
@@ -96,6 +109,11 @@ function parseBlocks(text: string): Block[] {
   }
 
   return blocks;
+}
+
+function parseTableRow(line: string): string[] {
+  const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+  return trimmed.split('|').map(c => c.trim());
 }
 
 function renderBlock(block: Block, key: number) {
@@ -135,6 +153,27 @@ function renderBlock(block: Block, key: number) {
             <View key={j} style={styles.listItem}>
               <Text style={styles.bullet}>—</Text>
               <Text style={styles.listText}>{renderInline(item)}</Text>
+            </View>
+          ))}
+        </View>
+      );
+    case 'table':
+      return (
+        <View key={key} style={styles.table}>
+          <View style={styles.tableRow}>
+            {block.headers.map((h, j) => (
+              <View key={j} style={[styles.tableCell, styles.tableHeaderCell]}>
+                <Text style={styles.tableHeaderText}>{renderInline(h)}</Text>
+              </View>
+            ))}
+          </View>
+          {block.rows.map((row, r) => (
+            <View key={r} style={styles.tableRow}>
+              {row.map((cell, c) => (
+                <View key={c} style={styles.tableCell}>
+                  <Text style={styles.tableCellText}>{renderInline(cell)}</Text>
+                </View>
+              ))}
             </View>
           ))}
         </View>
@@ -290,5 +329,39 @@ const styles = StyleSheet.create({
     borderColor: colors.borderLight,
     marginVertical: 8,
     backgroundColor: colors.codeBg,
+  },
+  table: {
+    marginVertical: 8,
+    borderWidth: 1,
+    borderColor: colors.codeBorder,
+    borderRadius: radius.md,
+    overflow: 'hidden',
+  },
+  tableRow: {
+    flexDirection: 'row',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.codeBorder,
+  },
+  tableCell: {
+    flex: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  tableHeaderCell: {
+    backgroundColor: colors.codeBg,
+  },
+  tableHeaderText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.textSecondary,
+    fontFamily: font.mono,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  tableCellText: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: colors.text,
+    fontFamily: font.sans,
   },
 });
