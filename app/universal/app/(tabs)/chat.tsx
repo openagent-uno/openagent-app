@@ -429,11 +429,17 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase', letterSpacing: 0.8,
   },
   sessionList: { flex: 1 },
+  sessionRow: {
+    flexDirection: 'row', alignItems: 'center',
+    marginVertical: 1, marginHorizontal: 2,
+  },
   sessionItem: {
+    flex: 1,
     position: 'relative',
     paddingVertical: 7, paddingHorizontal: 10,
-    borderRadius: radius.sm, marginVertical: 1,
+    borderRadius: radius.sm,
     flexDirection: 'row', alignItems: 'center',
+    minWidth: 0,
   },
   sessionActive: { backgroundColor: colors.hover },
   sessionActiveBar: {
@@ -446,7 +452,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
   },
   sessionDeleteBtn: {
-    padding: 4, marginLeft: 2, opacity: 0.5,
+    padding: 6, marginLeft: 4,
+    width: 24, height: 24,
+    alignItems: 'center', justifyContent: 'center',
   },
   sessionEditInput: {
     flex: 1, color: colors.text, fontSize: 12.5,
