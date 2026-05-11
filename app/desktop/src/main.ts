@@ -189,12 +189,8 @@ function startStaticServer(): Promise<number> {
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
-    fullscreen: true,
-    kiosk: true,
-    resizable: false,
-    minimizable: false,
-    maximizable: false,
     title: 'OpenAgent',
+    frame: false,
     show: true,
     backgroundColor: '#F5F6F8',  // match theme bg, avoids white flash
     webPreferences: {
@@ -202,15 +198,6 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
     },
-  });
-
-  // Defensive re-entry: kiosk should make this unreachable, but if any path
-  // (unusual Linux WM, future Electron change) drops out of fullscreen, snap
-  // straight back in.
-  mainWindow.on('leave-full-screen', () => {
-    if (!mainWindow) return;
-    mainWindow.setKiosk(true);
-    mainWindow.setFullScreen(true);
   });
 
   if (isDev) {
@@ -263,8 +250,7 @@ app.whenReady().then(async () => {
   registerDialogHandlers();
   registerLoopbackHandlers();
 
-  // Renderer-initiated quit. The window is locked in kiosk fullscreen with no
-  // traffic-lights, so we expose an IPC the in-app close button can call.
+  // Renderer-initiated quit: exposes an IPC the in-app close button can call.
   ipcMain.handle('app:quit', () => {
     app.quit();
   });

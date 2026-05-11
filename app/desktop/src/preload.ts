@@ -35,9 +35,7 @@ contextBridge.exposeInMainWorld('desktop', {
   readFile: (filePath: string): Promise<Uint8Array> =>
     ipcRenderer.invoke('dialog:readFile', filePath),
 
-  // Quit the app from the renderer. The Electron window is locked in kiosk
-  // fullscreen with no traffic-lights, so the in-app close button uses this
-  // to exit. (Cmd+Q / Alt+F4 still work too.)
+  // Quit the app from the renderer. (Cmd+Q / Alt+F4 still work too.)
   quit: (): Promise<void> => ipcRenderer.invoke('app:quit'),
 
   // ── Network loopback (Iroh transport bridge) ──
