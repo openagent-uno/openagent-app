@@ -107,6 +107,11 @@ export default function JarvisDock(props: BottomTabBarProps) {
                 | undefined;
 
               const onPress = () => {
+                if (typeof window !== 'undefined' && window.desktop?.isDesktop) {
+                  window.desktop.openWindow(route.name);
+                  return;
+                }
+
                 const event = navigation.emit({
                   type: 'tabPress',
                   target: route.key,

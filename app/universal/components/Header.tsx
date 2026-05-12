@@ -5,28 +5,44 @@ import { colors, font, radius } from '../theme';
  */
 
 import Feather from '@expo/vector-icons/Feather';
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { View, Text, TouchableOpacity, Pressable, StyleSheet, Platform } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useSegments } from 'expo-router';
 import { useConnection } from '../stores/connection';
 import { useIsWideScreen } from '../hooks/useLayout';
 import { useDrawer } from '../stores/drawer';
 import { useConfirm } from './ConfirmDialog';
 
-function getDesktopPlatform(): 'darwin' | 'win32' | 'linux' | null {
-  if (Platform.OS !== 'web') return null;
-  const p = (window as any).desktop?.platform;
-  if (p === 'darwin' || p === 'win32' || p === 'linux') return p;
-  return null;
-}
-
 export default function Header() {
   const router = useRouter();
-  const platform = getDesktopPlatform();
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const isWide = useIsWideScreen();
   const requestToggle = useDrawer((s) => s.requestToggle);
   const confirm = useConfirm();
+
+  const isMacFullScreen = useMemo(() => {
+    if (Platform.OS !== 'web') return false;
+    return (window as any).desktop?.platform === 'darwin';
+  }, []);
+
+  const isDesktopChildWin = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    if (!(window as any).desktop?.isDesktop) return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('child') === '1';
+  }, []);
+
+  const segments = useSegments();
+  const screenTitle = useMemo(() => {
+    const name = segments.filter((s) => !s.startsWith('(')).pop();
+    if (!name) return '';
+    const titles: Record<string, string> = {
+      chat: 'Chat', voice: 'Voice', memory: 'Memory',
+      mcps: 'MCPs', workflows: 'Workflows', tasks: 'Scheduled',
+      model: 'Model', system: 'System', settings: 'Settings',
+    };
+    return titles[name] ?? name.charAt(0).toUpperCase() + name.slice(1);
+  }, [segments]);
 
   const {
     accounts, activeAccountId, isConnected, agentName,
@@ -83,10 +99,10 @@ export default function Header() {
       styles.header,
       // @ts-ignore web CSS
       { WebkitAppRegion: 'drag' },
+      isMacFullScreen && { paddingLeft: 78 },
+      isDesktopChildWin && styles.sub,
     ]}>
-      {platform === 'darwin' && <View style={styles.macPadding} />}
-
-      {!isWide && (
+      {!isWide && !isDesktopChildWin && (
         <TouchableOpacity
           onPress={requestToggle}
           style={[
@@ -100,48 +116,25 @@ export default function Header() {
       )}
 
       <View style={styles.center}>
-        <TouchableOpacity
-          onPress={() => setDropdownOpen(!dropdownOpen)}
-          style={[
-            styles.switcherBtn,
-            // @ts-ignore
-            { WebkitAppRegion: 'no-drag' },
-          ]}
-        >
-          <View style={[styles.statusDot, isConnected ? styles.dotGreen : styles.dotGray]} />
-          <Text style={styles.accountName} numberOfLines={1}>{displayName}</Text>
-          <Feather name="chevron-down" size={12} color={colors.textMuted} style={styles.chevron} />
-        </TouchableOpacity>
+        {isDesktopChildWin ? (
+          <Text style={styles.subTitle} numberOfLines={1}>{screenTitle.toUpperCase()}</Text>
+        ) : (
+          <TouchableOpacity
+            onPress={() => setDropdownOpen(!dropdownOpen)}
+            style={[
+              styles.switcherBtn,
+              // @ts-ignore
+              { WebkitAppRegion: 'no-drag' },
+            ]}
+          >
+            <View style={[styles.statusDot, isConnected ? styles.dotGreen : styles.dotGray]} />
+            <Text style={styles.accountName} numberOfLines={1}>{displayName}</Text>
+            <Feather name="chevron-down" size={12} color={colors.textMuted} style={styles.chevron} />
+          </TouchableOpacity>
+        )}
       </View>
 
-      <TouchableOpacity
-        onPress={handleAdd}
-        style={[
-          styles.addBtn,
-          // @ts-ignore
-          { WebkitAppRegion: 'no-drag' },
-        ]}
-      >
-        <Feather name="plus" size={14} color={colors.textSecondary} />
-      </TouchableOpacity>
-
-      {platform && (
-        <TouchableOpacity
-          onPress={() => { void (window as any).desktop?.quit?.(); }}
-          style={[
-            styles.closeBtn,
-            // @ts-ignore
-            { WebkitAppRegion: 'no-drag' },
-          ]}
-          accessibilityLabel="Quit OpenAgent"
-        >
-          <Feather name="x" size={14} color={colors.textSecondary} />
-        </TouchableOpacity>
-      )}
-
-      {(platform === 'win32' || platform === 'linux') && <View style={styles.winPadding} />}
-
-      {dropdownOpen && (
+      {!isDesktopChildWin && dropdownOpen && (
         <>
           <Pressable
             style={styles.backdrop}
@@ -199,6 +192,15 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.borderLight,
     position: 'relative',
     zIndex: 200,
+  },
+  sub: {
+    borderBottomColor: colors.border,
+  },
+  subTitle: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.textSecondary,
+    letterSpacing: 2,
   },
   macPadding: { width: 78 },
   winPadding: { width: 140 },

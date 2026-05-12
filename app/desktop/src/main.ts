@@ -96,6 +96,8 @@ if (!gotLock) {
 }
 
 let mainWindow: BrowserWindow | null = null;
+const childWindows = new Set<BrowserWindow>();
+let primaryWindowId: number | null = null;
 let staticServer: http.Server | null = null;
 let staticPort = 0;
 
@@ -187,10 +189,13 @@ function startStaticServer(): Promise<number> {
 
 // ── Window ──
 
-function createWindow(): void {
-  mainWindow = new BrowserWindow({
+function createWindow(route?: string): BrowserWindow {
+  const isMac = process.platform === 'darwin';
+  const win = new BrowserWindow({
     title: 'OpenAgent',
-    frame: false,
+    ...(isMac
+      ? { titleBarStyle: 'hiddenInset' as const }
+      : { frame: false }),
     show: true,
     backgroundColor: '#F5F6F8',  // match theme bg, avoids white flash
     webPreferences: {
@@ -200,20 +205,36 @@ function createWindow(): void {
     },
   });
 
-  if (isDev) {
-    mainWindow.loadURL('http://localhost:8081');
-  } else {
-    mainWindow.loadURL(`http://127.0.0.1:${staticPort}`);
-  }
+  const baseUrl = isDev ? 'http://localhost:8081' : `http://127.0.0.1:${staticPort}`;
+  const url = route ? `${baseUrl}/${route}?child=1` : baseUrl;
+  win.loadURL(url);
 
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+  win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
   });
 
-  mainWindow.on('closed', () => {
-    mainWindow = null;
+  win.on('closed', () => {
+    childWindows.delete(win);
+    if (win.webContents.id === primaryWindowId) {
+      primaryWindowId = null;
+    }
   });
+
+  childWindows.add(win);
+
+  if (!mainWindow) {
+    mainWindow = win;
+    mainWindow.on('closed', () => {
+      mainWindow = null;
+    });
+  }
+
+  if (!primaryWindowId) {
+    primaryWindowId = win.webContents.id;
+  }
+
+  return win;
 }
 
 // ── Auto-updater ──
@@ -253,6 +274,34 @@ app.whenReady().then(async () => {
   // Renderer-initiated quit: exposes an IPC the in-app close button can call.
   ipcMain.handle('app:quit', () => {
     app.quit();
+  });
+
+  // Renderer asks the main process to open a new window for a tab route.
+  ipcMain.handle('window:open', (_event, route: string) => {
+    if (typeof route !== 'string' || !route) {
+      throw new Error('window:open requires a non-empty route string');
+    }
+    createWindow(route);
+  });
+
+  // Multi-window WS relay — the primary window's WS is shared.
+  ipcMain.on('ws:relay-out', (event, payload: string) => {
+    if (event.sender.id === primaryWindowId) return;
+    const primary = primaryWindowId
+      ? BrowserWindow.fromId(primaryWindowId)
+      : null;
+    if (primary && !primary.isDestroyed()) {
+      primary.webContents.send('ws:relay-from-child', payload);
+    }
+  });
+
+  ipcMain.on('ws:relay-broadcast', (event, payload: string) => {
+    if (event.sender.id !== primaryWindowId) return;
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.webContents.id !== primaryWindowId && !win.isDestroyed()) {
+        win.webContents.send('ws:relay-to-child', payload);
+      }
+    }
   });
 
   // In production, start a local HTTP server for the web build

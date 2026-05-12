@@ -1,12 +1,20 @@
+import { useMemo } from 'react';
 import { colors, font } from '../../theme';
 import Feather from '@expo/vector-icons/Feather';
 import { Tabs } from 'expo-router';
 import { JarvisDock } from '../../components/jarvis';
 
 export default function TabsLayout() {
+  const isDesktopChild = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    if (!window.desktop?.isDesktop) return false;
+    const params = new URLSearchParams(window.location.search);
+    return params.get('child') === '1';
+  }, []);
+
   return (
     <Tabs
-      tabBar={(props) => <JarvisDock {...props} />}
+      tabBar={isDesktopChild ? () => null : (props) => <JarvisDock {...props} />}
       screenOptions={{
         headerShown: false,
         sceneStyle: { backgroundColor: 'transparent' },

@@ -32,40 +32,30 @@ export class OpenAgentWS {
   private errorHandlers: Set<ErrorHandler> = new Set();
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private shouldReconnect = true;
-  // Sessions we've already ``session_open``'d on the current WS. The
-  // gateway tears down server-side StreamSessions on WS drop, so we
-  // wipe this set on every (re)connect — the next ``sendMessage`` call
-  // for a given session_id will lazily re-open it.
   private openedSessions: Set<string> = new Set();
-  // Outbound buffer for messages produced while the socket isn't OPEN
-  // (CONNECTING / CLOSING / closed during the 3-second reconnect
-  // window). Without this, ``send()`` was a silent no-op and messages
-  // typed during a reconnect blink were lost — the chat UI showed
-  // "Thinking..." forever because the user message never reached the
-  // gateway. Drained on auth_ok (server confirmed we're authenticated)
-  // so frames aren't sent before the auth gate accepts them. Capped to
-  // protect against pathological reconnect loops.
   private pendingOut: string[] = [];
   private static MAX_PENDING = 200;
-  /** Per-WS-lifetime: cleared on every reconnect. */
   private authed = false;
-  /** Sticky across reconnects: true once any WS instance authed. Used to
-   *  decide whether a close should auto-reconnect (yes if we've ever
-   *  authed) or be reported as a connect-failed error (no — give up on
-   *  the first connect attempt's loop). */
   private everAuthed = false;
   private reconnectAttempts = 0;
   private static MAX_RECONNECT = 3;
+  private _transport: any = null; // IpcWebSocket in Electron child windows
 
   constructor(url: string, token?: string) {
     this.url = url;
-    // Auth is enforced by the loopback sidecar transport; the legacy
-    // token field is preserved so the AUTH frame still parses on the
-    // server side, but it can be omitted (default empty string).
     this.token = token ?? '';
   }
 
+  setTransport(transport: any): void {
+    this._transport = transport;
+  }
+
   connect(): void {
+    if (this._transport) {
+      this.connectViaTransport();
+      return;
+    }
+
     if (this.ws?.readyState === WebSocket.OPEN) return;
 
     this.ws = new WebSocket(this.url);
@@ -147,6 +137,62 @@ export class OpenAgentWS {
       this.notifyError({ detail });
       this.ws?.close();
     };
+  }
+
+  /** IPC transport path — Electron child windows relay through the primary window's WS. */
+  private connectViaTransport(): void {
+    const t = this._transport as any;
+
+    t.onopen = () => {
+      this.openedSessions.clear();
+      this.authed = true;
+      this.everAuthed = true;
+      this.reconnectAttempts = 0;
+      this.flushPending();
+      queueMicrotask(() => {
+        this.handlers.forEach((h) => h({ type: 'auth_ok' as const } as any));
+      });
+    };
+
+    t.onmessage = (event: { data: string }) => {
+      try {
+        const msg: ServerMessage = JSON.parse(event.data);
+        if ((msg as { type?: string }).type === 'auth_ok' && !this.authed) {
+          this.authed = true;
+          this.everAuthed = true;
+          this.reconnectAttempts = 0;
+          this.flushPending();
+        }
+        this.handlers.forEach((h) => h(msg));
+      } catch { /* ignore */ }
+    };
+
+    t.onclose = (info: { code: number; reason: string }) => {
+      this.openedSessions.clear();
+      this.authed = false;
+      this.notifyClose({
+        reason: this.everAuthed ? 'post_auth' : 'pre_auth',
+        code: info.code,
+        detail: info.reason,
+      });
+    };
+
+    (this as any).ws = t;
+    t.init();
+  }
+
+  /** Send a raw payload through the underlying transport (used by the
+   *  primary window to relay child messages to its real WebSocket). */
+  sendRaw(payload: string): void {
+    const rawWs = this.ws ?? this._transport;
+    if (rawWs && (rawWs as any).readyState === 1 && this.authed) {
+      (rawWs as any).send(payload);
+      return;
+    }
+    if (this.pendingOut.length >= OpenAgentWS.MAX_PENDING) {
+      this.pendingOut.shift();
+    }
+    this.pendingOut.push(payload);
   }
 
   /** Subscribe to close events (pre-auth, post-auth, retries-exhausted). */

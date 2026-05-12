@@ -22,6 +22,7 @@ import * as storage from '../services/storage';
 import { useChat } from './chat';
 
 const STORAGE_KEY = 'openagent:accounts';
+const ACTIVE_CONNECTION_KEY = 'openagent:activeConnection';
 
 function genId(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
@@ -106,15 +107,13 @@ interface DesktopAPI {
   startLoopback: (args: {
     accountId: string;
     password: string;
-    // Ticket-based first-time join (carries network name, ID,
-    // coordinator NodeId, invite code in one string):
     ticket?: string;
-    // Re-login for an already-saved account:
     handle?: string;
     network?: string;
     agent?: string;
   }) => Promise<number>;
   stopLoopback: (args: { accountId: string }) => Promise<void>;
+  getLoopbackPort: (accountId: string) => Promise<number | null>;
 }
 
 function desktop(): DesktopAPI | null {
@@ -164,6 +163,7 @@ interface ConnectionState {
   joinNetwork: (args: JoinNetworkArgs) => Promise<void>;
   connectAccount: (accountId: string, password: string) => Promise<void>;
   disconnect: () => Promise<void>;
+  resumeConnection: () => Promise<void>;
 }
 
 export const useConnection = create<ConnectionState>((set, get) => ({
@@ -185,7 +185,13 @@ export const useConnection = create<ConnectionState>((set, get) => ({
     try {
       const raw = await storage.getItem(STORAGE_KEY);
       const accounts: SavedAccount[] = raw ? JSON.parse(raw) : [];
-      set({ accounts, isLoading: false });
+      const connRaw = await storage.getItem(ACTIVE_CONNECTION_KEY);
+      const ac = connRaw ? JSON.parse(connRaw) : null;
+      set({
+        accounts,
+        activeAccountId: ac?.accountId ?? null,
+        isLoading: false,
+      });
     } catch {
       set({ accounts: [], isLoading: false });
     }
@@ -318,11 +324,30 @@ export const useConnection = create<ConnectionState>((set, get) => ({
       agentVersion: null,
       activeAccountId: null,
     });
+    // Clear persisted connection so sub-windows don't try to resume it.
+    await storage.removeItem(ACTIVE_CONNECTION_KEY);
     // Best-effort sidecar cleanup. Even if this fails we're already
     // disconnected from the renderer's perspective.
     if (activeAccountId) {
       try { await desktop()?.stopLoopback({ accountId: activeAccountId }); } catch { /* ignore */ }
     }
+  },
+
+  resumeConnection: async () => {
+    const d = desktop();
+    if (!d) return;
+    const { activeAccountId, ws: currentWs } = get();
+    if (!activeAccountId || currentWs) return;
+    const connRaw = await storage.getItem(ACTIVE_CONNECTION_KEY);
+    if (!connRaw) return;
+    let connInfo: { accountId: string; sidecarPort: number };
+    try { connInfo = JSON.parse(connRaw); } catch { return; }
+    if (connInfo.accountId !== activeAccountId) return;
+    const port = await d.getLoopbackPort(activeAccountId);
+    if (!port) return;
+    const account = get().accounts.find((a) => a.id === activeAccountId);
+    if (!account) return;
+    _openWebsocket(get, set, { ...account, sidecarPort: port }, activeAccountId);
   },
 }));
 
@@ -342,10 +367,23 @@ function _openWebsocket(
   config: ConnectionConfig & { sidecarPort: number },
   accountId: string,
 ) {
+  let isChild = false;
+  try {
+    isChild = typeof window !== 'undefined' &&
+      !!(window as any).desktop?.isChild;
+  } catch { /* web / RN */ }
+
   const host = '127.0.0.1';
   const port = config.sidecarPort;
   const url = `ws://${host}:${port}/ws`;
   const ws = new OpenAgentWS(url, undefined);
+
+  if (isChild) {
+    try {
+      const { IpcWebSocket } = require('../services/ipc-ws');
+      ws.setTransport(new IpcWebSocket());
+    } catch { /* fall back to direct WS */ }
+  }
 
   // Single-shot finalizer: any of {auth_ok, auth_error, pre-auth close,
   // retries-exhausted, timeout, disconnect} marks the attempt done so
@@ -370,13 +408,17 @@ function _openWebsocket(
     if (msg.type === 'auth_ok') {
       finalize();
       if (!isCurrent()) return;
+      const st = get();
+      const acct = st.accounts.find((a) => a.id === accountId);
       set({
         isConnected: true,
         isConnecting: false,
-        // @ts-ignore — server sends both old shape (agent_name/version) and new (handle/network)
-        agentName: msg.agent_name,
+        // Fall back to persisted agent info or account name for child
+        // windows where the synthesized auth_ok has no agent metadata.
         // @ts-ignore
-        agentVersion: msg.version,
+        agentName: msg.agent_name || st.agentName || acct?.name,
+        // @ts-ignore
+        agentVersion: msg.version || st.agentVersion,
         error: null,
       });
       // Patch the saved account from the gateway's auth_ok frame —
@@ -403,6 +445,12 @@ function _openWebsocket(
         set({ accounts: updated });
         storage.setItem(STORAGE_KEY, JSON.stringify(updated));
       }
+      // Persist the active connection so sub-windows can resume
+      // without re-entering credentials.
+      storage.setItem(ACTIVE_CONNECTION_KEY, JSON.stringify({
+        accountId,
+        sidecarPort: config.sidecarPort,
+      }));
       // Hydrate the chat sidebar with every session the server
       // already knows about for this device.
       const chat = useChat.getState();

@@ -137,4 +137,12 @@ export function registerLoopbackHandlers(): void {
     }
     await stopLoopback(args.accountId);
   });
+
+  ipcMain.handle('loopback:getPort', async (_event, accountId: string) => {
+    if (typeof accountId !== 'string' || !accountId) {
+      throw new Error('loopback:getPort: accountId required');
+    }
+    const h = handles.get(accountId);
+    return h ? h.loopback.port : null;
+  });
 }
