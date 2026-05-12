@@ -197,7 +197,7 @@ function createWindow(route?: string): BrowserWindow {
       ? { titleBarStyle: 'hiddenInset' as const }
       : { frame: false }),
     show: true,
-    backgroundColor: '#F5F6F8',  // match theme bg, avoids white flash
+    backgroundColor: '#050810',  // match JARVIS dark theme bg
     webPreferences: {
       preload: path.resolve(__dirname, 'preload.js'),
       contextIsolation: true,

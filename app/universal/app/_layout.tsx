@@ -1,6 +1,6 @@
 import { Stack } from 'expo-router';
-import { useEffect } from 'react';
-import { View, StyleSheet, Platform } from 'react-native';
+import { useEffect, useRef } from 'react';
+import { Animated, View, StyleSheet, Platform } from 'react-native';
 import { useConnection } from '../stores/connection';
 import { useChat } from '../stores/chat';
 import { ConfirmProvider } from '../components/ConfirmDialog';
@@ -20,6 +20,17 @@ export default function RootLayout() {
   const resumeConnection = useConnection((s) => s.resumeConnection);
   const isDesktop = desktop()?.isDesktop === true;
   const isChild = desktop()?.isChild === true;
+
+  const fadeAnim = useRef(new Animated.Value(isChild ? 0 : 1)).current;
+
+  useEffect(() => {
+    if (!isChild) return;
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 360,
+      useNativeDriver: false,
+    }).start();
+  }, [isChild]);
 
   useEffect(() => {
     loadAccounts().then(() => {
@@ -69,7 +80,7 @@ export default function RootLayout() {
     <ConfirmProvider>
       <JarvisCanvas style={styles.root}>
         {Platform.OS === 'web' && <Header />}
-        <View style={styles.content}>
+        <Animated.View style={[styles.content, { opacity: fadeAnim }]}>
           <Stack
             screenOptions={{
               headerShown: false,
@@ -79,7 +90,7 @@ export default function RootLayout() {
             <Stack.Screen name="index" />
             <Stack.Screen name="(tabs)" />
           </Stack>
-        </View>
+        </Animated.View>
       </JarvisCanvas>
     </ConfirmProvider>
   );
