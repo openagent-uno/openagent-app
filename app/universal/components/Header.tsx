@@ -55,11 +55,7 @@ export default function Header() {
   const handleSwitch = async (id: string) => {
     setDropdownOpen(false);
     if (id !== activeAccountId) {
-      // Switching networks requires re-prompting for the password
-      // (the cert may need refresh) — bounce through the login screen
-      // so the user enters credentials cleanly. The login screen
-      // remembers the selected account. Await the disconnect so the
-      // login screen mounts with ``isConnected: false``.
+      (window as any).desktop?.closeAllChildren?.();
       await disconnect();
       router.replace('/');
     }
@@ -75,8 +71,7 @@ export default function Header() {
 
     setDropdownOpen(false);
     if (id === activeAccountId) {
-      // Same reason as handleSwitch: await before navigating so the
-      // login screen never sees a stale ``isConnected: true``.
+      (window as any).desktop?.closeAllChildren?.();
       await removeAccount(id);
       router.replace('/');
     } else {
@@ -86,10 +81,7 @@ export default function Header() {
 
   const handleAdd = async () => {
     setDropdownOpen(false);
-    // Await the disconnect so the login screen mounts AFTER
-    // ``isConnected`` has flipped to false. Otherwise its
-    // auto-redirect effect can re-fire and bounce the user back to
-    // the chat tab, landing on an empty session.
+    (window as any).desktop?.closeAllChildren?.();
     await useConnection.getState().disconnect();
     router.replace('/');
   };

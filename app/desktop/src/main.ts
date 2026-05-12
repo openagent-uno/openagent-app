@@ -216,9 +216,6 @@ function createWindow(route?: string): BrowserWindow {
 
   win.on('closed', () => {
     childWindows.delete(win);
-    if (win.webContents.id === primaryWindowId) {
-      primaryWindowId = null;
-    }
   });
 
   childWindows.add(win);
@@ -227,6 +224,8 @@ function createWindow(route?: string): BrowserWindow {
     mainWindow = win;
     mainWindow.on('closed', () => {
       mainWindow = null;
+      primaryWindowId = null;
+      closeAllChildWindows();
     });
   }
 
@@ -235,6 +234,14 @@ function createWindow(route?: string): BrowserWindow {
   }
 
   return win;
+}
+
+function closeAllChildWindows(): void {
+  for (const win of [...childWindows]) {
+    if (!win.isDestroyed() && win.webContents.id !== primaryWindowId) {
+      win.close();
+    }
+  }
 }
 
 // ── Auto-updater ──
@@ -282,6 +289,11 @@ app.whenReady().then(async () => {
       throw new Error('window:open requires a non-empty route string');
     }
     createWindow(route);
+  });
+
+  // Renderer asks the main process to close all sub-windows.
+  ipcMain.handle('window:closeAllChildren', () => {
+    closeAllChildWindows();
   });
 
   // Multi-window WS relay — the primary window's WS is shared.

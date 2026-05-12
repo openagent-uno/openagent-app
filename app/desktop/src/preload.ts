@@ -37,6 +37,9 @@ contextBridge.exposeInMainWorld('desktop', {
   // Open a new window for a tab route (desktop-only multi-window).
   openWindow: (route: string): Promise<void> => ipcRenderer.invoke('window:open', route),
 
+  // Close all sub-windows (called on agent switch or main window close).
+  closeAllChildren: (): Promise<void> => ipcRenderer.invoke('window:closeAllChildren'),
+
   // Retrieve an already-running loopback's port without a password.
   getLoopbackPort: (accountId: string): Promise<number | null> =>
     ipcRenderer.invoke('loopback:getPort', accountId),
