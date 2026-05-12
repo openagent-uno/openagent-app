@@ -553,7 +553,7 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase', letterSpacing: 1, fontWeight: '600',
   },
 
-  container: { flex: 1, backgroundColor: colors.bg },
+  container: { flex: 1 },
   content: { padding: 24, maxWidth: 720, width: '100%', alignSelf: 'center' },
 
   title: {

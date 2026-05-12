@@ -313,7 +313,6 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: {
     flexGrow: 1,
-    backgroundColor: colors.bg,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,

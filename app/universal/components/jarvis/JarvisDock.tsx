@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { View, Text, Pressable, StyleSheet, Platform, ScrollView } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import Animated, {
@@ -10,6 +10,7 @@ import Animated, {
 import { colors, font, radius } from '../../theme';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import TickFrame from './TickFrame';
+import BlurView from '../BlurView';
 
 /**
  * Custom tab bar that replaces the default Expo bottom tabs with a
@@ -21,10 +22,17 @@ import TickFrame from './TickFrame';
 export default function JarvisDock(props: BottomTabBarProps) {
   const { state, descriptors, navigation } = props;
 
+  const isElectron = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    return (window as any).desktop?.isDesktop === true;
+  }, []);
+
   // Build the visible-tab list once. Routes are hidden from the dock
   // when expo-router marks them with `href: null` (legacy redirects).
   // expo-router signals this several ways depending on version, so we
   // check all of them.
+  // On Electron the Chat tab opens in the main window — hide it from
+  // sub-window dock bars so the user opens it via the window menu.
   const visible = state.routes
     .map((route, index) => {
       const desc = descriptors[route.key];
@@ -36,7 +44,9 @@ export default function JarvisDock(props: BottomTabBarProps) {
         // expo-router sets this on hidden routes in some versions:
         opt.tabBarStyle?.display === 'none' ||
         // Final safety net for known legacy routes:
-        route.name === 'automations';
+        route.name === 'automations' ||
+        // Electron: hide Chat from sub-window dock bars
+        (isElectron && route.name === 'chat');
       return hidden ? null : { route, index, desc };
     })
     .filter(Boolean) as { route: typeof state.routes[number]; index: number; desc: any }[];
@@ -53,6 +63,7 @@ export default function JarvisDock(props: BottomTabBarProps) {
   const activeVisibleIndex = visible.findIndex((v) => v.index === state.index);
 
   useEffect(() => {
+    if (isElectron) return;
     if (activeVisibleIndex < 0) return;
     const x = itemX[activeVisibleIndex];
     const w = itemWidths[activeVisibleIndex];
@@ -60,7 +71,7 @@ export default function JarvisDock(props: BottomTabBarProps) {
     indicatorX.value = withSpring(x, { damping: 22, stiffness: 220 });
     indicatorW.value = withSpring(w, { damping: 22, stiffness: 220 });
     indicatorOpacity.value = withTiming(1, { duration: 200 });
-  }, [activeVisibleIndex, itemX, itemWidths]);
+  }, [isElectron, activeVisibleIndex, itemX, itemWidths]);
 
   const indicatorStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: indicatorX.value }],
@@ -68,108 +79,118 @@ export default function JarvisDock(props: BottomTabBarProps) {
     opacity: indicatorOpacity.value,
   }));
 
+  const dockStyle: any[] = [
+    styles.dock,
+    Platform.OS === 'web' && { backdropFilter: 'blur(16px) saturate(140%)', WebkitBackdropFilter: 'blur(16px) saturate(140%)' },
+    // @ts-ignore boxShadow web-only
+    Platform.OS === 'web' && { boxShadow: `0 0 24px ${colors.accentGlow}, 0 12px 28px rgba(0,0,0,0.4)` },
+  ].filter(Boolean);
+
+  const dockInner = (
+    <>
+      {/* Top cyan rail — hidden in Electron (no active tab). */}
+      {!isElectron && (
+        <View
+          style={[
+            styles.rail,
+            // @ts-ignore boxShadow web-only
+            Platform.OS === 'web' && { boxShadow: `0 0 6px ${colors.accentGlow}` },
+          ]}
+        />
+      )}
+
+      {/* Sliding indicator under the active tab — hidden in Electron. */}
+      {!isElectron && (
+        <Animated.View style={[styles.indicator, indicatorStyle]} pointerEvents="none" />
+      )}
+
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.row}
+      >
+        {visible.map(({ route, index, desc }, vIdx) => {
+          const isFocused = !isElectron && state.index === index;
+          const label =
+            typeof desc.options.tabBarLabel === 'string'
+              ? desc.options.tabBarLabel
+              : (desc.options.title ?? route.name);
+          const iconName = (desc.options.tabBarIcon as any)?.({})?.props?.name as
+            | keyof typeof Feather.glyphMap
+            | undefined;
+
+          const onPress = () => {
+            if (isElectron) {
+              (window as any).desktop.openWindow(route.name);
+              return;
+            }
+
+            const event = navigation.emit({
+              type: 'tabPress',
+              target: route.key,
+              canPreventDefault: true,
+            });
+            if (!isFocused && !event.defaultPrevented) {
+              (navigation as any).navigate(route.name, route.params);
+            }
+          };
+
+          return (
+            <Pressable
+              key={route.key}
+              onPress={onPress}
+              onLayout={(e) => {
+                if (isElectron) return;
+                const { width, x } = e.nativeEvent.layout;
+                setItemWidths((m) => (m[vIdx] === width ? m : { ...m, [vIdx]: width }));
+                setItemX((m) => (m[vIdx] === x ? m : { ...m, [vIdx]: x }));
+              }}
+              style={styles.item}
+              accessibilityRole="button"
+              accessibilityState={isFocused ? { selected: true } : {}}
+            >
+              {iconName && (
+                <Feather
+                  name={iconName as any}
+                  size={16}
+                  color={isFocused ? colors.accent : colors.textSecondary}
+                  style={
+                    Platform.OS === 'web' && isFocused
+                      ? ({ textShadow: `0 0 8px ${colors.accentGlow}` } as any)
+                      : undefined
+                  }
+                />
+              )}
+              <Text
+                style={[
+                  styles.label,
+                  { color: isFocused ? colors.accent : colors.textSecondary },
+                ]}
+              >
+                {String(label).toUpperCase()}
+              </Text>
+            </Pressable>
+          );
+        })}
+      </ScrollView>
+    </>
+  );
+
   return (
     <View style={styles.outer}>
       <TickFrame style={styles.frame} bracketLen={8}>
-        <View
-          style={[
-            styles.dock,
-            Platform.OS === 'web' && webGlassStyle(),
-            // @ts-ignore boxShadow web-only
-            Platform.OS === 'web' && { boxShadow: `0 0 24px ${colors.accentGlow}, 0 12px 28px rgba(0,0,0,0.4)` },
-          ]}
-        >
-          {/* Top cyan rail. */}
-          <View
-            style={[
-              styles.rail,
-              // @ts-ignore boxShadow web-only
-              Platform.OS === 'web' && { boxShadow: `0 0 6px ${colors.accentGlow}` },
-            ]}
-          />
-
-          {/* Sliding indicator under the active tab. */}
-          <Animated.View style={[styles.indicator, indicatorStyle]} pointerEvents="none" />
-
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.row}
-          >
-            {visible.map(({ route, index, desc }, vIdx) => {
-              const isFocused = state.index === index;
-              const label =
-                typeof desc.options.tabBarLabel === 'string'
-                  ? desc.options.tabBarLabel
-                  : (desc.options.title ?? route.name);
-              const iconName = (desc.options.tabBarIcon as any)?.({})?.props?.name as
-                | keyof typeof Feather.glyphMap
-                | undefined;
-
-              const onPress = () => {
-                if (typeof window !== 'undefined' && window.desktop?.isDesktop) {
-                  window.desktop.openWindow(route.name);
-                  return;
-                }
-
-                const event = navigation.emit({
-                  type: 'tabPress',
-                  target: route.key,
-                  canPreventDefault: true,
-                });
-                if (!isFocused && !event.defaultPrevented) {
-                  (navigation as any).navigate(route.name, route.params);
-                }
-              };
-
-              return (
-                <Pressable
-                  key={route.key}
-                  onPress={onPress}
-                  onLayout={(e) => {
-                    const { width, x } = e.nativeEvent.layout;
-                    setItemWidths((m) => (m[vIdx] === width ? m : { ...m, [vIdx]: width }));
-                    setItemX((m) => (m[vIdx] === x ? m : { ...m, [vIdx]: x }));
-                  }}
-                  style={styles.item}
-                  accessibilityRole="button"
-                  accessibilityState={isFocused ? { selected: true } : {}}
-                >
-                  {iconName && (
-                    <Feather
-                      name={iconName as any}
-                      size={16}
-                      color={isFocused ? colors.accent : colors.textSecondary}
-                      style={
-                        Platform.OS === 'web' && isFocused
-                          ? ({ textShadow: `0 0 8px ${colors.accentGlow}` } as any)
-                          : undefined
-                      }
-                    />
-                  )}
-                  <Text
-                    style={[
-                      styles.label,
-                      { color: isFocused ? colors.accent : colors.textSecondary },
-                    ]}
-                  >
-                    {String(label).toUpperCase()}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
-        </View>
+        {Platform.OS !== 'web' ? (
+          <BlurView intensity={16} style={dockStyle as any}>
+            {dockInner}
+          </BlurView>
+        ) : (
+          <View style={dockStyle}>
+            {dockInner}
+          </View>
+        )}
       </TickFrame>
     </View>
   );
-}
-
-function webGlassStyle(): any {
-  return {
-    backdropFilter: 'blur(16px) saturate(140%)',
-    WebkitBackdropFilter: 'blur(16px) saturate(140%)',
-  };
 }
 
 const styles = StyleSheet.create({
@@ -177,10 +198,6 @@ const styles = StyleSheet.create({
     paddingBottom: 14,
     paddingTop: 6,
     alignItems: 'center',
-    // Paint the canvas color behind the dock so any safe-area inset
-    // or default tab-bar wrapper background that leaks through merges
-    // visually with the rest of the page (no white strip below).
-    backgroundColor: colors.bg,
   },
   frame: {
     paddingHorizontal: 4,

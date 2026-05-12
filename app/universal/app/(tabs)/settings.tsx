@@ -628,7 +628,7 @@ function Row({ label, value, mono }: { label: string; value: string; mono?: bool
 
 const styles = StyleSheet.create({
   // Main content
-  container: { flex: 1, backgroundColor: colors.bg },
+  container: { flex: 1 },
   content: { padding: 24, maxWidth: 560, width: '100%', alignSelf: 'center' },
   sectionTitle: {
     fontSize: 18, fontWeight: '500', color: colors.text,

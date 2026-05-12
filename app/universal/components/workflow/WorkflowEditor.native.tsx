@@ -400,7 +400,7 @@ function defaultConfigFor(type: BlockType): Record<string, unknown> {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bg },
+  container: { flex: 1 },
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',

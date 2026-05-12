@@ -85,7 +85,6 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.bg,
     gap: 10,
   },
   statusText: { fontSize: 12, color: colors.textMuted, fontFamily: font.sans },

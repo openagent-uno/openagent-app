@@ -94,7 +94,7 @@ export default function Header() {
       isMacFullScreen && { paddingLeft: 78 },
       isDesktopChildWin && styles.sub,
     ]}>
-      {!isWide && !isDesktopChildWin && (
+      {!isWide && (
         <TouchableOpacity
           onPress={requestToggle}
           style={[
@@ -179,15 +179,10 @@ const styles = StyleSheet.create({
     height: 40,
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.sidebar,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
     position: 'relative',
     zIndex: 200,
   },
-  sub: {
-    borderBottomColor: colors.border,
-  },
+  sub: {},
   subTitle: {
     fontSize: 11,
     fontWeight: '600',

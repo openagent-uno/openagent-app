@@ -34,6 +34,7 @@ import {
   createDbModel, listAvailableModels,
   setClassifierModel, unsetClassifierModel,
   getUsage, getDailyUsage,
+  getClaudeStatus, installClaude, launchClaudeAuthLogin,
 } from '../../services/api';
 import Button from '../../components/Button';
 import Card from '../../components/Card';
@@ -99,22 +100,73 @@ export default function ModelScreen() {
 
   const [error, setError] = useState<string | null>(null);
 
+  // Claude CLI status
+  const [claudeStatus, setClaudeStatus] = useState<{
+    binary_ok: boolean; binary_path?: string;
+    auth_ok: boolean; auth_email?: string; auth_type?: string;
+  } | null>(null);
+  const [claudeInstalling, setClaudeInstalling] = useState(false);
+  const [claudeLoginLaunching, setClaudeLoginLaunching] = useState(false);
+
+  const fetchClaudeStatus = useCallback(async () => {
+    if (!connConfig) return;
+    try {
+      const s = await getClaudeStatus();
+      setClaudeStatus(s);
+    } catch {
+      // server may not have the endpoint yet — ignore
+    }
+  }, [connConfig]);
+
+  const handleInstallClaude = async () => {
+    setClaudeInstalling(true);
+    setError(null);
+    try {
+      const r = await installClaude();
+      if (!r.binary_ok) {
+        setError(r.error || 'Install failed');
+      }
+      setClaudeStatus({ binary_ok: r.binary_ok, binary_path: r.binary_path, auth_ok: r.auth_ok, auth_email: r.auth_email, auth_type: r.auth_type });
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setClaudeInstalling(false);
+    }
+  };
+
+  const handleLaunchClaudeLogin = async () => {
+    setClaudeLoginLaunching(true);
+    setError(null);
+    try {
+      const r = await launchClaudeAuthLogin();
+      if (!r.ok) {
+        setError(r.error || 'Failed to launch login');
+      }
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setClaudeLoginLaunching(false);
+    }
+  };
+
   const reload = useCallback(async () => {
     if (!connConfig) return;
     // Four independent fetches — fire in parallel so the screen doesn't
     // serialise network latency. ``allSettled`` keeps a slow /api/usage
     // from blocking the providers/models panels on first render.
-    const [provs, dbModels, usageRes, dailyRes] = await Promise.allSettled([
+    const [provs, dbModels, usageRes, dailyRes, claudeRes] = await Promise.allSettled([
       getProviders(),
       listDbModels(),
       getUsage(),
       getDailyUsage(costDays),
+      getClaudeStatus(),
     ]);
     if (provs.status === 'fulfilled') setProviders(provs.value || []);
     if (dbModels.status === 'fulfilled') setModels(dbModels.value);
     else setError(dbModels.reason?.message || String(dbModels.reason));
     if (usageRes.status === 'fulfilled') setUsage(usageRes.value);
     if (dailyRes.status === 'fulfilled') setDailyUsage(dailyRes.value);
+    if (claudeRes.status === 'fulfilled') setClaudeStatus(claudeRes.value);
   }, [connConfig, costDays]);
 
   useEffect(() => {
@@ -302,6 +354,48 @@ export default function ModelScreen() {
           Each row is a (vendor, framework) pair — the same vendor can be added twice:
           once with an API key (Agno dispatch) and once without (claude-cli subscription).
         </Text>
+
+        {/* Claude CLI binary + auth status */}
+        {claudeStatus && (
+          <View style={[styles.card, { marginBottom: 14 }]}>
+            <Text style={styles.providerName}>Claude Code CLI</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, gap: 8 }}>
+              <View style={[styles.statusDot, { backgroundColor: claudeStatus.binary_ok ? '#34C759' : '#FF3B30' }]} />
+              <Text style={styles.statusText}>
+                {claudeStatus.binary_ok
+                  ? `Binary: ${claudeStatus.binary_path || 'found'}`
+                  : 'Binary not found'}
+              </Text>
+            </View>
+            {claudeStatus.binary_ok && (
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 8 }}>
+                <View style={[styles.statusDot, { backgroundColor: claudeStatus.auth_ok ? '#34C759' : '#FF9500' }]} />
+                <Text style={styles.statusText}>
+                  {claudeStatus.auth_ok
+                    ? `Logged in: ${claudeStatus.auth_email || claudeStatus.auth_type || 'yes'}`
+                    : 'Not authenticated'}
+                </Text>
+              </View>
+            )}
+            <View style={{ flexDirection: 'row', marginTop: 8, gap: 8 }}>
+              {!claudeStatus.binary_ok ? (
+                <Button
+                  variant="primary" size="sm"
+                  label={claudeInstalling ? 'Installing…' : 'Install Claude CLI'}
+                  onPress={handleInstallClaude}
+                  disabled={claudeInstalling}
+                />
+              ) : !claudeStatus.auth_ok ? (
+                <Button
+                  variant="primary" size="sm"
+                  label={claudeLoginLaunching ? 'Opening browser…' : 'Log in with Anthropic'}
+                  onPress={handleLaunchClaudeLogin}
+                  disabled={claudeLoginLaunching}
+                />
+              ) : null}
+            </View>
+          </View>
+        )}
 
         {providers.map((p) => (
           <View key={p.id} style={styles.card}>
@@ -726,7 +820,7 @@ const styles = StyleSheet.create({
     fontSize: 12, color: colors.text, fontWeight: '600', marginTop: 2, fontFamily: font.mono,
   },
 
-  container: { flex: 1, backgroundColor: colors.bg },
+  container: { flex: 1 },
   content: { padding: 24, maxWidth: 640, width: '100%', alignSelf: 'center' },
 
   title: {
@@ -857,4 +951,7 @@ const styles = StyleSheet.create({
   costRow: { flexDirection: 'row', paddingVertical: 5 },
   costCell: { fontSize: 11, color: colors.text, fontFamily: font.mono },
   costHeaderText: { color: colors.textMuted, fontWeight: '600', fontSize: 10, textTransform: 'uppercase' },
+
+  statusDot: { width: 8, height: 8, borderRadius: 4 },
+  statusText: { fontSize: 12, color: colors.textSecondary },
 });

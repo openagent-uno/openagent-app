@@ -526,7 +526,7 @@ function ErrorInline({ message }: { message: string }) {
 // ─────────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
+  root: { flex: 1 },
 
   topBar: {
     flexDirection: 'row', alignItems: 'center',

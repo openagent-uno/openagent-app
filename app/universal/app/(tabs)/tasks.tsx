@@ -204,7 +204,7 @@ export default function TasksScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bg },
+  container: { flex: 1 },
   content: { padding: 24, maxWidth: 640, width: "100%", alignSelf: "center" },
   title: {
     fontSize: 18, fontWeight: '500', color: colors.text, marginBottom: 4,

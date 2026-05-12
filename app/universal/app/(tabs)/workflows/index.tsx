@@ -384,7 +384,7 @@ export default function WorkflowsScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.bg },
+  container: { flex: 1 },
   content: {
     padding: 24,
     maxWidth: 720,

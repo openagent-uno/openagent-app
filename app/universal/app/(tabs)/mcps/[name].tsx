@@ -210,7 +210,7 @@ function ErrorBlock({ message, onRetry }: { message: string; onRetry: () => void
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
+  root: { flex: 1 },
 
   topBar: {
     flexDirection: 'row', alignItems: 'center',

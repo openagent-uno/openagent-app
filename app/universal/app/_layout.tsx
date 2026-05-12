@@ -1,12 +1,25 @@
 import { Stack } from 'expo-router';
 import { useEffect, useRef } from 'react';
 import { Animated, View, StyleSheet, Platform } from 'react-native';
+import { ThemeProvider, type Theme } from '@react-navigation/native';
 import { useConnection } from '../stores/connection';
 import { useChat } from '../stores/chat';
 import { ConfirmProvider } from '../components/ConfirmDialog';
 import Header from '../components/Header';
 import { JarvisCanvas } from '../components/jarvis';
-import { colors } from '../theme';
+
+const navDarkTheme: Theme = {
+  dark: true,
+  colors: {
+    primary: '#3FC8FF',
+    background: 'transparent',
+    card: 'transparent',
+    text: '#EEF4FB',
+    border: 'rgba(63, 200, 255, 0.20)',
+    notification: '#FF6B7A',
+  },
+  fonts: { regular: { fontFamily: 'system', fontWeight: '400' }, medium: { fontFamily: 'system', fontWeight: '500' }, bold: { fontFamily: 'system', fontWeight: '700' }, heavy: { fontFamily: 'system', fontWeight: '900' } },
+};
 
 function desktop(): any {
   if (typeof window === 'undefined') return undefined;
@@ -81,15 +94,18 @@ export default function RootLayout() {
       <JarvisCanvas style={styles.root}>
         {Platform.OS === 'web' && <Header />}
         <Animated.View style={[styles.content, { opacity: fadeAnim }]}>
-          <Stack
-            screenOptions={{
-              headerShown: false,
-              contentStyle: { backgroundColor: 'transparent' },
-            }}
-          >
-            <Stack.Screen name="index" />
-            <Stack.Screen name="(tabs)" />
-          </Stack>
+          <ThemeProvider value={navDarkTheme}>
+            <Stack
+              screenOptions={{
+                headerShown: false,
+                contentStyle: { backgroundColor: 'transparent' },
+                cardStyle: { backgroundColor: 'transparent' },
+              } as any}
+            >
+              <Stack.Screen name="index" />
+              <Stack.Screen name="(tabs)" />
+            </Stack>
+          </ThemeProvider>
         </Animated.View>
       </JarvisCanvas>
     </ConfirmProvider>
@@ -97,6 +113,6 @@ export default function RootLayout() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
+  root: { flex: 1 },
   content: { flex: 1 },
 });

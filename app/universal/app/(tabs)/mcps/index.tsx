@@ -650,7 +650,7 @@ function EmptyState({
 const CONTENT_MAX_WIDTH = 1120; // same centering as settings.tsx (560) × 2
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg },
+  root: { flex: 1 },
 
   // Fixed header: outer band spans the window so the bottom border runs
   // edge-to-edge; the ``headerInner`` carries the same max-width column
@@ -658,7 +658,6 @@ const styles = StyleSheet.create({
   fixedHeader: {
     borderBottomWidth: 1,
     borderBottomColor: colors.borderLight,
-    backgroundColor: colors.bg,
   },
   headerInner: {
     maxWidth: CONTENT_MAX_WIDTH,

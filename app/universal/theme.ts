@@ -138,8 +138,8 @@ export const jarvisColors: Palette = {
   accentSoft: 'rgba(63, 200, 255, 0.22)',
   accentGlow: 'rgba(63, 200, 255, 0.50)',
   accentDim: 'rgba(63, 200, 255, 0.32)',
-  gridLine: 'rgba(102, 180, 255, 0.07)',
-  gridDot: 'rgba(102, 180, 255, 0.16)',
+  gridLine: 'rgba(102, 180, 255, 0.04)',
+  gridDot: 'rgba(102, 180, 255, 0.10)',
   tickDim: 'rgba(180, 210, 240, 0.36)',
   tickActive: '#3FC8FF',
   panelBg: 'rgba(8, 14, 26, 0.60)',
@@ -192,7 +192,7 @@ function ensureGlobalCss(): void {
     document.head.appendChild(el);
   }
   el.textContent = `
-    html, body, #root { background: var(--oa-bg) !important; color: var(--oa-text); margin: 0; min-height: 100vh; }
+    html, body, #root { background: #050810 !important; color: var(--oa-text); margin: 0; min-height: 100vh; }
     body { font-family: 'Rajdhani', 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
       letter-spacing: 0.005em; }

@@ -205,7 +205,6 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.borderLight,
     marginBottom: 5,
-    backgroundColor: colors.bg,
   },
   iconWrap: {
     width: 26,

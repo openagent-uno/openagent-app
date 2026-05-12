@@ -68,7 +68,7 @@ export default function MemoryGraphScreen() {
 }
 
 const styles = StyleSheet.create({
-  mainArea: { flex: 1, backgroundColor: colors.bg },
+  mainArea: { flex: 1 },
   graphEmpty: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   emptyText: { color: colors.textMuted, fontSize: 12, padding: 14 },
 });

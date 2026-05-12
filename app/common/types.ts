@@ -228,6 +228,30 @@ export interface SystemSnapshot {
   processes: SystemProcess[];
 }
 
+export interface ClaudeStatus {
+  binary_ok: boolean;
+  binary_path: string | null;
+  auth_ok: boolean;
+  auth_email: string | null;
+  auth_type: string | null;
+}
+
+export interface ClaudeInstallResult {
+  binary_ok: boolean;
+  binary_path?: string;
+  auth_ok: boolean;
+  auth_email?: string;
+  auth_type?: string;
+  error?: string;
+}
+
+export interface ClaudeAuthLoginResult {
+  ok: boolean;
+  pid?: number;
+  detail?: string;
+  error?: string;
+}
+
 export interface SystemHost {
   hostname: string;
   platform: string;          // 'Darwin' | 'Linux' | 'Windows'

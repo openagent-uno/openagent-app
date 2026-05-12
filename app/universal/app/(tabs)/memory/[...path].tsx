@@ -28,6 +28,7 @@ import VaultSidebar from '../../../components/memory/VaultSidebar';
 import { useConnection } from '../../../stores/connection';
 import { useVault } from '../../../stores/vault';
 import { setBaseUrl } from '../../../services/api';
+import { useIsWideScreen } from '../../../hooks/useLayout';
 import { colors, font, radius } from '../../../theme';
 
 export default function MemoryNoteScreen() {
@@ -47,6 +48,7 @@ export default function MemoryNoteScreen() {
   } = useVault();
 
   const [rawMode, setRawMode] = useState(false);
+  const isWide = useIsWideScreen();
 
   // Initial data — same set the graph screen loads, in case the user
   // deep-linked straight to a note.
@@ -109,7 +111,7 @@ export default function MemoryNoteScreen() {
 
   return (
     <ResponsiveSidebar sidebar={<VaultSidebar selectedPath={notePath} onSelectNote={openNote} />}>
-      <View style={styles.editorContainer}>
+      <View style={[styles.editorContainer, isWide && { paddingLeft: 248 }]}>
         <View style={styles.editorHeader}>
           <TouchableOpacity onPress={backToGraph} style={styles.backBtn}>
             <View style={styles.backBtnContent}>
@@ -176,7 +178,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     paddingHorizontal: 14, paddingVertical: 8,
     borderBottomWidth: 1, borderBottomColor: colors.borderLight,
-    backgroundColor: colors.bg,
   },
   backBtn: { paddingVertical: 4, paddingHorizontal: 6, marginRight: 10 },
   backBtnContent: { flexDirection: 'row', alignItems: 'center' },

@@ -11,6 +11,7 @@ import type { ReactNode } from 'react';
 import type { StyleProp, ViewStyle } from 'react-native';
 import { View, StyleSheet, Platform } from 'react-native';
 import { colors, radius } from '../theme';
+import BlurView from './BlurView';
 
 interface CardProps {
   children: ReactNode;
@@ -27,15 +28,15 @@ export default function Card({
   rail = true,
   style,
 }: CardProps) {
-  return (
-    <View
-      style={[
-        styles.card,
-        padded && (tight ? styles.tight : styles.padded),
-        Platform.OS === 'web' && webGlassStyle(),
-        style,
-      ]}
-    >
+  const cardStyle: any[] = [
+    styles.card,
+    padded && (tight ? styles.tight : styles.padded),
+    Platform.OS === 'web' && { backdropFilter: 'blur(12px) saturate(140%)', WebkitBackdropFilter: 'blur(12px) saturate(140%)' },
+    style,
+  ].filter(Boolean);
+
+  const inner = (
+    <>
       {rail && (
         <View
           style={[
@@ -46,15 +47,14 @@ export default function Card({
         />
       )}
       {children}
-    </View>
+    </>
   );
-}
 
-function webGlassStyle(): any {
-  return {
-    backdropFilter: 'blur(12px) saturate(140%)',
-    WebkitBackdropFilter: 'blur(12px) saturate(140%)',
-  };
+  if (Platform.OS !== 'web') {
+    return <BlurView intensity={12} style={cardStyle as any}>{inner}</BlurView>;
+  }
+
+  return <View style={cardStyle}>{inner}</View>;
 }
 
 const styles = StyleSheet.create({

@@ -182,7 +182,6 @@ export default function MessageComposer({
 const styles = StyleSheet.create({
   composerWrap: {
     paddingHorizontal: 20, paddingBottom: 12, paddingTop: 4,
-    backgroundColor: colors.bg,
   },
   composer: {
     maxWidth: 760, width: '100%', alignSelf: 'center',

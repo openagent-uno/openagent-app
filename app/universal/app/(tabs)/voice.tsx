@@ -364,7 +364,7 @@ export default function VoiceScreen() {
 }
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: colors.bg },
+  screen: { flex: 1 },
 
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',

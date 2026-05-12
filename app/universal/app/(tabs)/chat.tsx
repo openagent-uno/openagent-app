@@ -471,7 +471,7 @@ const styles = StyleSheet.create({
   },
 
   // Chat area
-  chatArea: { flex: 1, flexDirection: 'column', backgroundColor: colors.bg },
+  chatArea: { flex: 1, flexDirection: 'column' },
   messages: { flex: 1 },
   messagesContent: { paddingVertical: 12, paddingBottom: 12 },
   messagesInner: { maxWidth: 760, width: '100%', alignSelf: 'center', paddingHorizontal: 20 },

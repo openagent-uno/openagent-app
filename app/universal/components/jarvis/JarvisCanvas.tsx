@@ -1,6 +1,8 @@
 import React from 'react';
 import { View, StyleSheet, Platform, ViewStyle } from 'react-native';
-import { colors } from '../../theme';
+import { colors, getRawColors } from '../../theme';
+
+const raw = getRawColors();
 
 interface Props {
   children: React.ReactNode;
@@ -42,15 +44,14 @@ export default function JarvisCanvas({
 }
 
 function webBgStyle(): any {
-  // 32 px squares with sub-grid every 8 px.
   return {
-    backgroundColor: colors.bg,
+    backgroundColor: raw.bg,
     backgroundImage: [
-      `linear-gradient(${colors.gridLine} 1px, transparent 1px)`,
-      `linear-gradient(90deg, ${colors.gridLine} 1px, transparent 1px)`,
-      `radial-gradient(circle at 8px 8px, ${colors.gridDot} 1px, transparent 1px)`,
+      `linear-gradient(${raw.gridLine} 1px, transparent 1px)`,
+      `linear-gradient(90deg, ${raw.gridLine} 1px, transparent 1px)`,
+      `radial-gradient(circle at 16px 16px, ${raw.gridDot} 1px, transparent 1px)`,
     ].join(', '),
-    backgroundSize: '32px 32px, 32px 32px, 32px 32px',
+    backgroundSize: '64px 64px, 64px 64px, 64px 64px',
     backgroundPosition: '0 0, 0 0, 0 0',
   };
 }
@@ -108,8 +109,8 @@ function CornerBrackets() {
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: colors.bg, position: 'relative', overflow: 'hidden' },
+  root: { flex: 1, backgroundColor: raw.bg, position: 'relative', overflow: 'hidden' },
   bg: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
-  nativeBg: { backgroundColor: colors.bg },
+  nativeBg: { backgroundColor: raw.bg },
   content: { flex: 1, position: 'relative', zIndex: 1 },
 });

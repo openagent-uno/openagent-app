@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, StyleSheet, Platform, ViewStyle, StyleProp } from 'react-native';
 import { colors, radius as r, spacing as s } from '../../theme';
+import BlurView from '../BlurView';
 
 interface Props {
   children: React.ReactNode;
@@ -25,10 +26,8 @@ interface Props {
  * into a rail" detail you see on the music + chat widgets in the
  * reference video).
  *
- * Web uses backdrop-filter blur for the glass effect. Native uses a
- * solid translucent color (BlurView is opt-in via `solid={false}` —
- * we keep this v1-simple and skip BlurView; it can be added in a
- * later pass when expo-blur is installed).
+ * Uses BlurView for cross-platform glass effect — CSS backdrop-filter
+ * on web, native expo-blur on iOS/Android.
  */
 export default function GlassPanel({
   children,
@@ -41,16 +40,17 @@ export default function GlassPanel({
   noHover = false,
 }: Props) {
   const pad = padding ?? (compact ? s.sm : s.lg);
-  return (
-    <View
-      style={[
-        styles.panel,
-        solid ? styles.solid : styles.glass,
-        { padding: pad },
-        Platform.OS === 'web' && webGlassStyle(solid),
-        style,
-      ]}
-    >
+
+  const panelStyle: any[] = [
+    styles.panel,
+    solid ? styles.solid : styles.glass,
+    { padding: pad },
+    style,
+    Platform.OS === 'web' && !solid && webGlassStyle(),
+  ].filter(Boolean);
+
+  const inner = (
+    <>
       {rail && (
         <View
           style={[
@@ -62,12 +62,21 @@ export default function GlassPanel({
         />
       )}
       {children}
-    </View>
+    </>
   );
+
+  if (!solid && Platform.OS !== 'web') {
+    return (
+      <BlurView intensity={14} style={panelStyle as any}>
+        {inner}
+      </BlurView>
+    );
+  }
+
+  return <View style={panelStyle}>{inner}</View>;
 }
 
-function webGlassStyle(solid: boolean): any {
-  if (solid) return null;
+function webGlassStyle(): any {
   return {
     backdropFilter: 'blur(14px) saturate(140%)',
     WebkitBackdropFilter: 'blur(14px) saturate(140%)',
