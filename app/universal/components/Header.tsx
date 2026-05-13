@@ -9,7 +9,6 @@ import { useState, useMemo } from 'react';
 import { View, Text, TouchableOpacity, Pressable, StyleSheet, Platform } from 'react-native';
 import { useRouter, useSegments } from 'expo-router';
 import { useConnection } from '../stores/connection';
-import { useIsWideScreen } from '../hooks/useLayout';
 import { useDrawer } from '../stores/drawer';
 import { useConfirm } from './ConfirmDialog';
 import WindowControls from './WindowControls';
@@ -17,7 +16,6 @@ import WindowControls from './WindowControls';
 export default function Header() {
   const router = useRouter();
   const [dropdownOpen, setDropdownOpen] = useState(false);
-  const isWide = useIsWideScreen();
   const requestToggle = useDrawer((s) => s.requestToggle);
   const confirm = useConfirm();
 
@@ -96,18 +94,16 @@ export default function Header() {
       isDesktopChildWin && styles.sub,
     ]}>
       {isDesktop && <WindowControls />}
-      {!isWide && (
-        <TouchableOpacity
-          onPress={requestToggle}
-          style={[
-            styles.hamburgerBtn,
-            // @ts-ignore
-            { WebkitAppRegion: 'no-drag' },
-          ]}
-        >
-          <Feather name="menu" size={16} color={colors.textSecondary} />
-        </TouchableOpacity>
-      )}
+      <TouchableOpacity
+        onPress={requestToggle}
+        style={[
+          styles.hamburgerBtn,
+          // @ts-ignore
+          { WebkitAppRegion: 'no-drag' },
+        ]}
+      >
+        <Feather name="menu" size={16} color={colors.textSecondary} />
+      </TouchableOpacity>
 
       <View style={styles.center}>
         {isDesktopChildWin ? (

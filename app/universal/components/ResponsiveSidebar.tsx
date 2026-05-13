@@ -1,9 +1,7 @@
 /**
- * Responsive sidebar.
- *
- * Wide (>= 768px): sidebar overlays content with absolute positioning
- * and blur; content extends full-width underneath.
- * Narrow (< 768px): slide-in drawer with gesture support.
+ * Sidebar with animated slide-in drawer.
+ * Uses the drawer navigator on all screen sizes so the toggle
+ * animation is consistent everywhere.
  */
 
 import { createContext, useContext, useRef, useEffect } from 'react';
@@ -13,13 +11,12 @@ import {
   DrawerContentComponentProps,
 } from '@react-navigation/drawer';
 import { NavigationIndependentTree, useNavigation } from '@react-navigation/native';
-import { useIsWideScreen } from '../hooks/useLayout';
 import { useDrawer } from '../stores/drawer';
 import { colors, radius, spacing } from '../theme';
 import BlurView from './BlurView';
 
 const SIDEBAR_WIDTH = 248;
-const SIDEBAR_MARGIN = spacing.sm; // 8px gap around the panel
+const SIDEBAR_MARGIN = spacing.sm;
 const Nav = createDrawerNavigator();
 
 const ContentCtx = createContext<{ sidebar: React.ReactNode; children: React.ReactNode }>({
@@ -27,7 +24,6 @@ const ContentCtx = createContext<{ sidebar: React.ReactNode; children: React.Rea
   children: null,
 });
 
-/** The blur panel reused for both the wide overlay and the narrow drawer. */
 function SidebarPanel({ children }: { children: React.ReactNode }) {
   return (
     <BlurView intensity={10} style={styles.sidebarPanel}>
@@ -35,8 +31,6 @@ function SidebarPanel({ children }: { children: React.ReactNode }) {
     </BlurView>
   );
 }
-
-// ── Narrow: drawer-based sidebar ──────────────────────────────
 
 function DrawerSidebarContent(_props: DrawerContentComponentProps) {
   const { sidebar } = useContext(ContentCtx);
@@ -59,31 +53,12 @@ function MainScreen() {
   return <View style={styles.fill}>{children}</View>;
 }
 
-// ── Wide: absolute-overlay sidebar ────────────────────────────
-
-function WideLayout({ sidebar, children }: { sidebar: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <View style={styles.wideRoot}>
-      <View style={styles.wideContent}>
-        {children}
-      </View>
-      <View style={styles.wideSidebar}>
-        <SidebarPanel>{sidebar}</SidebarPanel>
-      </View>
-    </View>
-  );
-}
-
-// ── Main component ────────────────────────────────────────────
-
 interface Props {
   sidebar: React.ReactNode;
   children: React.ReactNode;
 }
 
 export default function ResponsiveSidebar({ sidebar, children }: Props) {
-  const isWide = useIsWideScreen();
-
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     const style = document.createElement('style');
@@ -92,10 +67,6 @@ export default function ResponsiveSidebar({ sidebar, children }: Props) {
     return () => { document.head.removeChild(style); };
   }, []);
 
-  if (isWide) {
-    return <WideLayout sidebar={sidebar}>{children}</WideLayout>;
-  }
-
   return (
     <ContentCtx.Provider value={{ sidebar, children }}>
       <NavigationIndependentTree>
@@ -103,6 +74,7 @@ export default function ResponsiveSidebar({ sidebar, children }: Props) {
           screenOptions={{
             headerShown: false,
             drawerType: 'front',
+            defaultStatus: 'open',
             drawerStyle: {
               width: SIDEBAR_WIDTH,
               backgroundColor: 'transparent',
@@ -134,17 +106,4 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   fill: { flex: 1 },
-
-  // ── Wide layout ──
-  wideRoot: { flex: 1 },
-  wideContent: {
-    flex: 1,
-  },
-  wideSidebar: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    width: SIDEBAR_WIDTH,
-  },
 });
