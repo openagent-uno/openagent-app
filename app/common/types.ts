@@ -353,6 +353,7 @@ export interface ConnectionConfig {
 export interface SavedAccount extends ConnectionConfig {
   id: string;          // unique identifier
   createdAt: number;   // epoch ms
+  inviteCode?: string; // oa1… ticket used when joining (stored for reference)
 }
 
 // Inputs the onboarding screen collects to add a new account. The

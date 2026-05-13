@@ -532,7 +532,7 @@ export default function SettingsScreen() {
       <Text style={styles.sectionTitle}>Connection</Text>
       <Card>
         <Row label="Network" value={activeAccount ? activeAccount.network : '—'} mono />
-        <Row label="Handle" value={activeAccount ? activeAccount.handle : '—'} mono />
+        <Row label="Handle" value={activeAccount ? `@${activeAccount.handle}` : '—'} mono />
         <Row label="Agent" value={agentName || '—'} />
         <Row label="Version" value={agentVersion || '—'} />
         <Row
@@ -540,6 +540,9 @@ export default function SettingsScreen() {
           value={connConfig?.sidecarPort ? String(connConfig.sidecarPort) : '—'}
           mono
         />
+        {activeAccount?.inviteCode && (
+          <Row label="Invite code" value={activeAccount.inviteCode} mono />
+        )}
       </Card>
 
       <Button

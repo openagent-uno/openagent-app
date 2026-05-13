@@ -194,7 +194,7 @@ function createWindow(route?: string): BrowserWindow {
   const win = new BrowserWindow({
     title: 'OpenAgent',
     ...(isMac
-      ? { titleBarStyle: 'hiddenInset' as const }
+      ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: -80, y: 0 } }
       : { frame: false }),
     show: true,
     backgroundColor: '#050810',  // match JARVIS dark theme bg
@@ -281,6 +281,29 @@ app.whenReady().then(async () => {
   // Renderer-initiated quit: exposes an IPC the in-app close button can call.
   ipcMain.handle('app:quit', () => {
     app.quit();
+  });
+
+  // Custom window controls (cross-platform, Jarvis-themed).
+  ipcMain.handle('window:minimize', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win && !win.isDestroyed()) win.minimize();
+  });
+
+  ipcMain.handle('window:maximize', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win && !win.isDestroyed()) {
+      win.isMaximized() ? win.unmaximize() : win.maximize();
+    }
+  });
+
+  ipcMain.handle('window:close', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win && !win.isDestroyed()) win.close();
+  });
+
+  ipcMain.handle('window:isMaximized', (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    return win && !win.isDestroyed() ? win.isMaximized() : false;
   });
 
   // Renderer asks the main process to open a new window for a tab route.

@@ -257,6 +257,7 @@ export const useConnection = create<ConnectionState>((set, get) => ({
       handle: args.handle,
       isLocal: !!args.isLocal,
       createdAt: Date.now(),
+      inviteCode: args.ticket,
     };
     const accounts = [...get().accounts, newAccount];
     set({ accounts });

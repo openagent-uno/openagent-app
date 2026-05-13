@@ -26,6 +26,13 @@ import { JarvisOrb, JarvisClock } from '../components/jarvis';
 
 type Mode = 'signin' | 'join';
 
+function extractAgentName(acc: { name: string; handle: string }): string {
+  const parts = acc.name.split(' — ');
+  if (parts.length > 1) return parts[parts.length - 1];
+  if (acc.name === acc.handle) return acc.name;
+  return acc.name;
+}
+
 export default function LoginScreen() {
   const router = useRouter();
   const {
@@ -149,6 +156,7 @@ export default function LoginScreen() {
             <Card padded={false}>
               {accounts.map((acc, i) => {
                 const selected = mode === 'signin' && signinAccountId === acc.id;
+                const agentNameDisplay = extractAgentName(acc);
                 return (
                   <TouchableOpacity
                     key={acc.id}
@@ -163,8 +171,8 @@ export default function LoginScreen() {
                     ]}
                   >
                     <View style={styles.accountInfo}>
-                      <Text style={styles.accountName}>{acc.handle}@{acc.network || '…'}</Text>
-                      <Text style={styles.accountHost}>{acc.name}</Text>
+                      <Text style={styles.accountName}>{agentNameDisplay}</Text>
+                      <Text style={styles.accountHost}>@{acc.handle}</Text>
                     </View>
                     {selected && (
                       <Feather name="check" size={14} color={colors.accent} style={{ marginRight: 8 }} />
@@ -220,8 +228,10 @@ export default function LoginScreen() {
           <Card>
             <Text style={styles.formHint}>
               Selected: <Text style={styles.formHintMono}>
-                {accounts.find((a) => a.id === signinAccountId)?.handle}
-                @{accounts.find((a) => a.id === signinAccountId)?.network}
+                {(() => {
+                  const a = accounts.find((a) => a.id === signinAccountId);
+                  return a ? `@${a.handle}` : '—';
+                })()}
               </Text>
             </Text>
             <Input
@@ -359,17 +369,15 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   accountName: {
-    fontSize: 13,
-    fontWeight: '500',
+    fontSize: 14,
+    fontWeight: '600',
     color: colors.text,
-    letterSpacing: -0.1,
-    fontFamily: font.mono,
+    letterSpacing: -0.2,
   },
   accountHost: {
-    fontSize: 11,
-    color: colors.textMuted,
+    fontSize: 12,
+    color: colors.textSecondary,
     marginTop: 2,
-    fontFamily: font.mono,
   },
   deleteBtn: {
     padding: 8,

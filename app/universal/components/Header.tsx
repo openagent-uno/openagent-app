@@ -12,6 +12,7 @@ import { useConnection } from '../stores/connection';
 import { useIsWideScreen } from '../hooks/useLayout';
 import { useDrawer } from '../stores/drawer';
 import { useConfirm } from './ConfirmDialog';
+import WindowControls from './WindowControls';
 
 export default function Header() {
   const router = useRouter();
@@ -20,9 +21,9 @@ export default function Header() {
   const requestToggle = useDrawer((s) => s.requestToggle);
   const confirm = useConfirm();
 
-  const isMacFullScreen = useMemo(() => {
-    if (Platform.OS !== 'web') return false;
-    return (window as any).desktop?.platform === 'darwin';
+  const isDesktop = useMemo(() => {
+    if (typeof window === 'undefined') return false;
+    return (window as any).desktop?.isDesktop === true;
   }, []);
 
   const isDesktopChildWin = useMemo(() => {
@@ -91,9 +92,10 @@ export default function Header() {
       styles.header,
       // @ts-ignore web CSS
       { WebkitAppRegion: 'drag' },
-      isMacFullScreen && { paddingLeft: 78 },
+      isDesktop && { paddingLeft: 64 },
       isDesktopChildWin && styles.sub,
     ]}>
+      {isDesktop && <WindowControls />}
       {!isWide && (
         <TouchableOpacity
           onPress={requestToggle}
@@ -189,8 +191,6 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     letterSpacing: 2,
   },
-  macPadding: { width: 78 },
-  winPadding: { width: 140 },
   hamburgerBtn: {
     width: 28, height: 28,
     alignItems: 'center', justifyContent: 'center',

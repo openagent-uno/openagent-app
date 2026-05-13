@@ -34,6 +34,12 @@ contextBridge.exposeInMainWorld('desktop', {
   // Quit the app from the renderer.
   quit: (): Promise<void> => ipcRenderer.invoke('app:quit'),
 
+  // Custom window controls (cross-platform Jarvis-themed).
+  minimize: (): Promise<void> => ipcRenderer.invoke('window:minimize'),
+  maximize: (): Promise<void> => ipcRenderer.invoke('window:maximize'),
+  close: (): Promise<void> => ipcRenderer.invoke('window:close'),
+  isMaximized: (): Promise<boolean> => ipcRenderer.invoke('window:isMaximized'),
+
   // Open a new window for a tab route (desktop-only multi-window).
   openWindow: (route: string): Promise<void> => ipcRenderer.invoke('window:open', route),
 
