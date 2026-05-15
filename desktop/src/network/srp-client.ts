@@ -53,7 +53,7 @@ const GENERATOR_5 = '5';
 
 // k = SHA-256(N_padded || g_padded) for the 3072 group with g=5.
 // Computed from the Python side (srptools internal ``_mult``); see
-// the README in ``app/desktop/src/network/__tests__/`` for derivation.
+// the README in ``desktop/src/network/__tests__/`` for derivation.
 const K_3072_G5 = '081f4874fa543a371b49a670402fda59ecfab53a1b850fc42e1c357cc846111e';
 
 const VERIFIER_LEN = 384;

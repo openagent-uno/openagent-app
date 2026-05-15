@@ -5,7 +5,7 @@
  * exported for different deploy targets without changing any code:
  *
  *   - Electron desktop build: no env → no baseUrl (root-relative paths,
- *     post-processed by app/build.sh sed step and served by the local
+ *     post-processed by build.sh sed step and served by the local
  *     HTTP server at 127.0.0.1:PORT/).
  *   - GitHub Pages under openagent.uno/app/: EXPO_BASE_URL=/app
  *   - Custom subdomain (e.g. app.openagent.uno): EXPO_BASE_URL unset.
