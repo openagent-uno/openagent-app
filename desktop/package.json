@@ -62,8 +62,8 @@
     ],
     "publish": {
       "provider": "github",
-      "owner": "geroale",
-      "repo": "OpenAgent"
+      "owner": "openagent-uno",
+      "repo": "openagent-app"
     },
     "mac": {
       "artifactName": "openagent-app-${version}-macos-${arch}.${ext}",
