@@ -88,4 +88,16 @@ contextBridge.exposeInMainWorld('desktop', {
 
   stopLoopback: (args: { accountId: string }): Promise<void> =>
     ipcRenderer.invoke('loopback:stop', args),
+
+  // ── Ticket introspection ──
+  // Decode an oa1… ticket so the join form can auto-fill the handle
+  // when the ticket is bound (role=device). Returns ``null`` on any
+  // parse error — the form falls back to manual entry. The renderer
+  // doesn't ship the base32/CBOR libs, so we delegate to the same
+  // ``decodeTicket`` the loopback bridge already uses.
+  decodeTicket: (ticket: string): Promise<{
+    role: 'user' | 'device' | 'agent';
+    bindTo: string;
+    networkName: string;
+  } | null> => ipcRenderer.invoke('network:decode-ticket', ticket),
 });

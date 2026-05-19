@@ -12,6 +12,7 @@ import * as fs from 'fs';
 import * as http from 'http';
 import { registerStorageHandlers } from './services/storage';
 import { registerLoopbackHandlers, stopAllLoopbacks } from './services/loopback';
+import { decodeTicket } from './network/ticket';
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.heic', '.tiff']);
 
@@ -336,6 +337,25 @@ app.whenReady().then(async () => {
       if (win.webContents.id !== primaryWindowId && !win.isDestroyed()) {
         win.webContents.send('ws:relay-to-child', payload);
       }
+    }
+  });
+
+  // Decode an invite ticket for the join form so it can auto-fill
+  // the bound handle (and show the user what they're joining). On
+  // any decode error, return null so the renderer falls back to
+  // manual entry — the loopback step will surface a clearer error
+  // if the ticket really is malformed.
+  ipcMain.handle('network:decode-ticket', (_event, ticket: unknown) => {
+    if (typeof ticket !== 'string' || ticket.length < 8) return null;
+    try {
+      const t = decodeTicket(ticket);
+      return {
+        role: t.role,
+        bindTo: t.bindTo,
+        networkName: t.networkName,
+      };
+    } catch {
+      return null;
     }
   });
 
