@@ -3,9 +3,14 @@
  * Inspired by Claude Code / Codex: messages read like a document, with
  * user prompts as left-rule quotes and assistant replies as full-width
  * prose. Tool invocations inline as compact rows.
+ *
+ * Voice mode: when always-listening is toggled on, the screen shows a
+ * compact voice bar (SoundWaves + caption + webcam/screen toggles) above
+ * the transcript and streams the mic through the active chat session.
  */
 
 import { useState, useRef, useEffect, useCallback } from 'react';
+import { useFocusEffect } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, Image,
@@ -20,24 +25,26 @@ import ResponsiveSidebar from '../../components/ResponsiveSidebar';
 import MessageComposer, { type PendingFile } from '../../components/MessageComposer';
 import MessageList from '../../components/MessageList';
 import { JarvisOrb } from '../../components/jarvis';
-import { uploadFile } from '../../services/api';
+import { uploadFile, listDbModels } from '../../services/api';
 import { useVoiceConfig } from '../../stores/voice';
-import { useStreamingMic, useAudioPlayback } from '../../services/voice';
+import {
+  startWebcamCapture, startScreenCapture, useStreamingMic, useAudioPlayback,
+  type VideoStreamHandle,
+} from '../../services/voice';
+import SoundWaves, { type SoundWavesState } from '../../components/SoundWaves';
 import { colors, font, radius } from '../../theme';
+
+const log = (event: string, data?: Record<string, unknown>) => {
+  console.log(`[chat:voice] ${event}`, data ?? {});
+};
 
 export default function ChatScreen() {
   const ws = useConnection((s) => s.ws);
   const {
-    sessions, activeSessionId, voiceSessionId,
+    sessions, activeSessionId,
     createSession, setActiveSession, removeSession, renameSession,
     addUserMessage,
   } = useChat();
-  // The voice session lives in its own tab — it has no place in the
-  // text-chat sidebar. Filtering here (rather than removing it from
-  // ``sessions[]`` entirely) keeps the voice tab's transcript intact
-  // and lets ``handleServerMessage`` route DELTA / RESPONSE frames to
-  // either session by id without special-casing.
-  const chatSessions = sessions.filter((s) => s.id !== voiceSessionId);
 
   const [input, setInput] = useState('');
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
@@ -53,46 +60,95 @@ export default function ChatScreen() {
   const scrollRef = useRef<ScrollView>(null);
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
+  // Voice mode state
+  const [hasTts, setHasTts] = useState<boolean | null>(null);
+  const [webcamOn, setWebcamOn] = useState(false);
+  const [screenOn, setScreenOn] = useState(false);
+  const webcamHandleRef = useRef<VideoStreamHandle | null>(null);
+  const screenHandleRef = useRef<VideoStreamHandle | null>(null);
+  const activeSessionIdRef = useRef<string | null>(activeSessionId ?? null);
+  activeSessionIdRef.current = activeSessionId ?? null;
+
+  const browserAvailable =
+    Platform.OS === 'web' &&
+    typeof navigator !== 'undefined' &&
+    !!navigator.mediaDevices?.getUserMedia &&
+    typeof MediaRecorder !== 'undefined';
+
+  const voiceOn = voiceConfig.chatAlwaysListen && browserAvailable;
+  const langHint = voiceConfig.language && voiceConfig.language !== 'auto'
+    ? voiceConfig.language : undefined;
+
   const toggleAlwaysListen = useCallback(() => {
     setVoiceConfig({ chatAlwaysListen: !voiceConfig.chatAlwaysListen });
   }, [setVoiceConfig, voiceConfig.chatAlwaysListen]);
 
   const handleStreamTranscript = useCallback((text: string) => {
-    if (activeSessionId) addUserMessage(activeSessionId, text);
+    if (activeSessionId) {
+      log('stt.committed', { chars: text.length });
+      addUserMessage(activeSessionId, text);
+    }
   }, [activeSessionId, addUserMessage]);
 
-  // Continuous-mic mode for the chat tab. When the user toggles
-  // ``chatAlwaysListen`` on, this hook mounts the same VoiceLoop +
-  // AudioQueuePlayer pipeline the Voice tab uses and routes
-  // recognised utterances into the active chat thread as
-  // ``text_final(source='stt')`` — server-side mirror-modality re-
-  // enables TTS replies even though chat-tab sessions opened with
-  // ``speak: false``.
-  useStreamingMic({
+  const { vadState, audioState, energy, micError } = useStreamingMic({
     ws,
     sessionId: activeSessionId ?? null,
     enabled: voiceConfig.chatAlwaysListen,
     voiceConfig,
-    sessionOpen: { profile: 'batched', clientKind: 'webapp-chat', speak: false },
+    sessionOpen: { profile: 'realtime', clientKind: 'webapp', language: langHint },
     onTranscript: handleStreamTranscript,
+    onLog: log,
   });
 
-  // Standalone audio playback for the OFF-mic case. When the user
-  // records a voice note via the composer's mic button (or the server
-  // mirror-modality rule otherwise speaks a reply), we still need a
-  // client-side player even if continuous-listen is off — without
-  // this hook the gateway streams audio_chunk frames into the void.
-  // No-op once ``chatAlwaysListen`` is on because ``useStreamingMic``
-  // already mounts its own player for that session.
   useAudioPlayback({
     ws,
     sessionId: activeSessionId ?? null,
     enabled: !voiceConfig.chatAlwaysListen,
   });
 
+  // TTS-availability check on focus
+  useFocusEffect(
+    useCallback(() => {
+      if (!ws || !activeSessionId) return;
+      void (async () => {
+        try {
+          const all = await listDbModels({ enabledOnly: true });
+          setHasTts(all.some((m) => m.kind === 'tts'));
+        } catch (e) {
+          log('tts.check_error', { error: String(e) });
+          setHasTts(true);
+        }
+      })();
+      return () => {
+        if (webcamHandleRef.current) {
+          webcamHandleRef.current.stop();
+          webcamHandleRef.current = null;
+        }
+        if (screenHandleRef.current) {
+          screenHandleRef.current.stop();
+          screenHandleRef.current = null;
+        }
+        setWebcamOn(false);
+        setScreenOn(false);
+      };
+    }, [ws, activeSessionId]),
+  );
+
   useEffect(() => {
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
   }, [activeSession?.messages.length, activeSession?.statusText]);
+
+  const swState: SoundWavesState =
+    audioState === 'playing' ? 'speaking'
+    : activeSession?.isProcessing ? 'processing'
+    : vadState === 'listening' ? 'listening'
+    : 'idle';
+
+  const caption = micError ? `Mic ${micError}`
+    : swState === 'speaking' ? 'Speaking…'
+    : swState === 'processing' ? 'Thinking…'
+    : swState === 'listening' ? 'Listening…'
+    : 'Speak any time';
 
   const handleSend = () => {
     if (!ws || !activeSessionId) return;
@@ -228,20 +284,13 @@ export default function ChatScreen() {
         const file = new File([blob], 'voice.webm', { type: 'audio/webm' });
         if (!activeSessionId || !ws) return;
         try {
-          // Same language-hint resolution as the Voice tab: pass the
-          // ISO-639-1 code unless the user explicitly picked
-          // auto-detect ('auto' or empty).
-          const langHint = voiceLanguage && voiceLanguage !== 'auto' ? voiceLanguage : undefined;
-          const result = await uploadFile(file, undefined, { language: langHint });
+          const langHint2 = voiceLanguage && voiceLanguage !== 'auto' ? voiceLanguage : undefined;
+          const result = await uploadFile(file, undefined, { language: langHint2 });
           const transcription = (result as any).transcription;
           const msg = transcription
             ? transcription
             : `The user sent a voice message:\n- audio: ${result.filename} — local path: ${result.path}\nUse Read to inspect it.`;
           addUserMessage(activeSessionId, 'Voice message');
-          // Tag as STT so the StreamSession (a) bypasses the typed
-          // coalescence window for instant barge-in and (b) speaks the
-          // reply back even though the chat-tab session was opened
-          // with speak=false (mirror-modality rule).
           ws.sendMessage(msg, activeSessionId, { source: 'stt' });
         } catch (e: any) {
           console.error('Voice upload failed:', e);
@@ -263,6 +312,66 @@ export default function ChatScreen() {
     }
   };
 
+  const toggleWebcam = useCallback(async () => {
+    if (!ws) return;
+    if (webcamHandleRef.current) {
+      webcamHandleRef.current.stop();
+      webcamHandleRef.current = null;
+      setWebcamOn(false);
+      log('webcam.stop');
+      return;
+    }
+    if (!activeSessionIdRef.current) return;
+    try {
+      const handle = await startWebcamCapture(
+        (b64, w, h) => {
+          const sid = activeSessionIdRef.current;
+          if (!sid) return;
+          ws.sendVideoFrame(sid, 'webcam', b64, { width: w, height: h });
+        },
+        { fps: 1 },
+      );
+      webcamHandleRef.current = handle;
+      setWebcamOn(true);
+      log('webcam.start');
+    } catch (e) {
+      log('webcam.error', { error: String(e) });
+    }
+  }, [ws]);
+
+  const toggleScreen = useCallback(async () => {
+    if (!ws) return;
+    if (screenHandleRef.current) {
+      screenHandleRef.current.stop();
+      screenHandleRef.current = null;
+      setScreenOn(false);
+      log('screen.stop');
+      return;
+    }
+    if (!activeSessionIdRef.current) return;
+    try {
+      const handle = await startScreenCapture(
+        (b64, w, h) => {
+          const sid = activeSessionIdRef.current;
+          if (!sid) return;
+          ws.sendVideoFrame(sid, 'screen', b64, { width: w, height: h });
+        },
+        { fps: 1 },
+      );
+      screenHandleRef.current = handle;
+      setScreenOn(true);
+      log('screen.start');
+    } catch (e) {
+      log('screen.error', { error: String(e) });
+    }
+  }, [ws]);
+
+  const videoSupported = browserAvailable
+    && typeof navigator !== 'undefined'
+    && !!navigator.mediaDevices?.getUserMedia;
+  const screenSupported = videoSupported
+    && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
+
   const sidebarContent = (
     <View style={styles.sidebarInner}>
       <View style={styles.sidebarHead}>
@@ -279,7 +388,7 @@ export default function ChatScreen() {
         </TouchableOpacity>
       </View>
       <ScrollView style={styles.sessionList}>
-        {chatSessions.map((ses) => {
+        {sessions.map((ses) => {
           const isEditing = editingSessionId === ses.id;
           return (
             <View key={ses.id} style={styles.sessionRow}>
@@ -342,7 +451,7 @@ export default function ChatScreen() {
             </View>
           );
         })}
-        {chatSessions.length === 0 && (
+        {sessions.length === 0 && (
           <Text style={styles.sidebarEmpty}>No sessions yet</Text>
         )}
       </ScrollView>
@@ -354,6 +463,61 @@ export default function ChatScreen() {
       <View style={styles.chatArea}>
         {activeSession ? (
           <>
+            {/* TTS banner */}
+            {voiceOn && hasTts === false && (
+              <View style={styles.banner} accessibilityRole="alert">
+                <Feather name="volume-x" size={13} color={colors.error} />
+                <Text style={styles.bannerText}>
+                  No TTS model configured — replies will be text-only. Add a{' '}
+                  <Text style={styles.bannerStrong}>kind=tts</Text> row in Models to hear spoken replies.
+                </Text>
+              </View>
+            )}
+
+            {/* Voice bar */}
+            {voiceOn && (
+              <View style={styles.voiceBar}>
+                <View style={styles.voiceBarLeft}>
+                  <SoundWaves level={energy} state={swState} bars={5} maxHeight={28} />
+                  <Text style={styles.voiceCaption}>{caption}</Text>
+                </View>
+                <View style={styles.voiceBarRight}>
+                  {videoSupported && (
+                    <TouchableOpacity
+                      style={[styles.voiceIconBtn, webcamOn && styles.voiceIconBtnActive]}
+                      onPress={toggleWebcam}
+                      accessibilityLabel={webcamOn ? 'Stop webcam' : 'Share webcam'}
+                    >
+                      <Feather
+                        name={webcamOn ? 'video' : 'video-off'}
+                        size={12}
+                        color={webcamOn ? colors.text : colors.textSecondary}
+                      />
+                    </TouchableOpacity>
+                  )}
+                  {screenSupported && (
+                    <TouchableOpacity
+                      style={[styles.voiceIconBtn, screenOn && styles.voiceIconBtnActive]}
+                      onPress={toggleScreen}
+                      accessibilityLabel={screenOn ? 'Stop screen share' : 'Share screen'}
+                    >
+                      <Feather
+                        name={screenOn ? 'monitor' : 'cast'}
+                        size={12}
+                        color={screenOn ? colors.text : colors.textSecondary}
+                      />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </View>
+            )}
+
+            {(webcamOn || screenOn) && voiceOn && (
+              <Text style={styles.shareBadge}>
+                Sharing: {[webcamOn && 'webcam', screenOn && 'screen'].filter(Boolean).join(' + ')}
+              </Text>
+            )}
+
             <ScrollView ref={scrollRef} style={styles.messages} contentContainerStyle={styles.messagesContent}>
               <View style={styles.messagesInner}>
                 {activeSession.messages.length === 0 && (
@@ -448,9 +612,6 @@ const styles = StyleSheet.create({
   },
   sessionTitle: { color: colors.textSecondary, flex: 1, fontSize: 12.5, fontWeight: '400' },
   sessionTitleActive: { color: colors.text, fontWeight: '500' },
-  sessionRow: {
-    flexDirection: 'row', alignItems: 'center',
-  },
   sessionDeleteBtn: {
     padding: 6, marginLeft: 4,
     width: 24, height: 24,
@@ -472,6 +633,53 @@ const styles = StyleSheet.create({
 
   // Chat area
   chatArea: { flex: 1, flexDirection: 'column' },
+
+  // TTS banner
+  banner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 16, paddingVertical: 9,
+    backgroundColor: colors.errorSoft,
+    borderBottomWidth: 1, borderBottomColor: colors.errorBorder,
+  },
+  bannerText: {
+    flex: 1, fontSize: 12, color: colors.error, lineHeight: 17,
+  },
+  bannerStrong: { fontFamily: font.mono, fontWeight: '600' },
+
+  // Voice bar
+  voiceBar: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: 20, paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: colors.borderLight,
+    minHeight: 44,
+  },
+  voiceBarLeft: {
+    flexDirection: 'row', alignItems: 'center', gap: 12,
+  },
+  voiceBarRight: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+  },
+  voiceCaption: {
+    fontSize: 11, color: colors.textMuted,
+    fontFamily: font.mono, letterSpacing: 0.6, textTransform: 'uppercase',
+  },
+  voiceIconBtn: {
+    width: 24, height: 24, alignItems: 'center', justifyContent: 'center',
+    borderRadius: radius.sm,
+    borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  voiceIconBtnActive: {
+    borderColor: colors.text,
+    backgroundColor: colors.borderLight,
+  },
+  shareBadge: {
+    fontSize: 10, color: colors.textSecondary,
+    fontFamily: font.mono, letterSpacing: 0.4,
+    textAlign: 'center', paddingVertical: 4,
+    borderBottomWidth: 1, borderBottomColor: colors.borderLight,
+  },
+
   messages: { flex: 1 },
   messagesContent: { paddingVertical: 12, paddingBottom: 12 },
   messagesInner: { maxWidth: 760, width: '100%', alignSelf: 'center', paddingHorizontal: 20 },

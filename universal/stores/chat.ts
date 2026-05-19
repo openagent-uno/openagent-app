@@ -17,7 +17,6 @@ const genId = () => `msg-${nextMsgId++}-${Date.now()}`;
 interface ChatState {
   sessions: ChatSession[];
   activeSessionId: string | null;
-  voiceSessionId: string | null;
   /** True after the first successful fetch from /api/sessions. */
   sessionsHydrated: boolean;
 
@@ -30,10 +29,6 @@ interface ChatState {
   hydrateFromServer: (entries: SessionEntry[]) => void;
   /** Mark hydration as done even when the server returned no sessions. */
   markHydrated: () => void;
-  /** Returns the existing voice session id, or creates a new one. */
-  getOrCreateVoiceSession: () => string;
-  /** Clear the voice session pointer (next visit makes a fresh one). */
-  clearVoiceSession: () => void;
   addUserMessage: (sessionId: string, text: string, attachments?: Attachment[]) => void;
   handleServerMessage: (msg: ServerMessage) => void;
   clearAll: () => void;
@@ -47,7 +42,6 @@ function sessionId(): string {
 export const useChat = create<ChatState>((set, get) => ({
   sessions: [],
   activeSessionId: null,
-  voiceSessionId: null,
   sessionsHydrated: false,
 
   createSession: () => {
@@ -102,13 +96,11 @@ export const useChat = create<ChatState>((set, get) => ({
     // Best-effort delete on the server (fire-and-forget).
     deleteSessionApi(id).catch(() => {});
     const sessions = s.sessions.filter((ses) => ses.id !== id);
-    const voiceSessionId = s.voiceSessionId === id ? null : s.voiceSessionId;
     let activeSessionId = s.activeSessionId;
     if (s.activeSessionId === id) {
-      const nextChat = sessions.find((ses) => ses.id !== voiceSessionId);
-      activeSessionId = nextChat?.id ?? null;
+      activeSessionId = sessions[0]?.id ?? null;
     }
-    return { sessions, activeSessionId, voiceSessionId };
+    return { sessions, activeSessionId };
   }),
 
   renameSession: (id, title) => {
@@ -169,25 +161,6 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   markHydrated: () => set({ sessionsHydrated: true }),
-
-  getOrCreateVoiceSession: () => {
-    const existing = get().voiceSessionId;
-    if (existing && get().sessions.some((s) => s.id === existing)) return existing;
-    const id = sessionId();
-    const session: ChatSession = {
-      id,
-      title: 'Voice Chat',
-      messages: [],
-      isProcessing: false,
-    };
-    set((s) => ({
-      sessions: [...s.sessions, session],
-      voiceSessionId: id,
-    }));
-    return id;
-  },
-
-  clearVoiceSession: () => set({ voiceSessionId: null }),
 
   addUserMessage: (sessionId, text, attachments) => {
     const state = get();
@@ -390,7 +363,7 @@ export const useChat = create<ChatState>((set, get) => ({
     return {};
   }),
 
-  clearAll: () => set({ sessions: [], activeSessionId: null, voiceSessionId: null, sessionsHydrated: false }),
+  clearAll: () => set({ sessions: [], activeSessionId: null, sessionsHydrated: false }),
 
   loadSession: (id, title, history) => {
     const buildToolInfo = (entry: typeof history[0]): ToolInfo | undefined => {
