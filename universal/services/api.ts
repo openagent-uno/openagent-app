@@ -836,13 +836,6 @@ export interface NetworkAgent {
   owner_handle: string;
   added_at: number;
   last_seen: number | null;
-  // True when this row's ``node_id`` matches the coordinator's own
-  // NodeId — i.e. the agent the client is currently talking to. The
-  // server refuses to DELETE it (409 with hint), so the UI uses this
-  // flag to hide the trash control instead of showing one that always
-  // errors. ``undefined`` on older servers (< v0.13.21) — treat as
-  // "unknown" and behave as before.
-  is_self?: boolean;
 }
 
 export interface NetworkInvitation {

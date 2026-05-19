@@ -389,21 +389,18 @@ function AgentsPanel({
       </Card>
 
       <Card>
-        <Text style={styles.cardTitle}>Agents ({agents.length})</Text>
+        <Text style={styles.cardTitle}>Federated agents ({agents.length})</Text>
         {agents.length === 0 ? (
-          <Text style={styles.fieldHint}>No agents registered.</Text>
+          <Text style={styles.fieldHint}>
+            No other agents on this network. The agent you're connected to
+            is the only one — federate another agent here with the invite
+            button above to make it appear in this list.
+          </Text>
         ) : (
           agents.map((a) => (
             <View key={a.handle + a.node_id} style={styles.listRow}>
               <View style={{ flex: 1 }}>
-                <View style={styles.handleRow}>
-                  <Text style={styles.listHandle}>{a.handle}</Text>
-                  {a.is_self && (
-                    <View style={styles.selfBadge}>
-                      <Text style={styles.selfBadgeText}>this agent</Text>
-                    </View>
-                  )}
-                </View>
+                <Text style={styles.listHandle}>{a.handle}</Text>
                 {editingHandle === a.handle ? (
                   <View style={styles.editRow}>
                     <TextInput
@@ -435,14 +432,12 @@ function AgentsPanel({
                   >
                     <Feather name="edit-2" size={16} color={colors.accent} />
                   </TouchableOpacity>
-                  {!a.is_self && (
-                    <TouchableOpacity
-                      onPress={() => handleDelete(a)} style={styles.actionBtn}
-                      accessibilityLabel="Remove agent"
-                    >
-                      <Feather name="trash-2" size={16} color={colors.error} />
-                    </TouchableOpacity>
-                  )}
+                  <TouchableOpacity
+                    onPress={() => handleDelete(a)} style={styles.actionBtn}
+                    accessibilityLabel="Remove agent"
+                  >
+                    <Feather name="trash-2" size={16} color={colors.error} />
+                  </TouchableOpacity>
                 </View>
               )}
             </View>
@@ -590,21 +585,8 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
     borderTopWidth: StyleSheet.hairlineWidth,
   },
-  handleRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-  },
   listHandle: {
     fontSize: 13, color: colors.text, fontFamily: font.mono, fontWeight: '600',
-  },
-  selfBadge: {
-    paddingHorizontal: 6, paddingVertical: 2,
-    backgroundColor: colors.surfaceElevated,
-    borderColor: colors.border, borderWidth: 1,
-    borderRadius: radius.sm,
-  },
-  selfBadgeText: {
-    fontSize: 10, color: colors.textSecondary, fontFamily: font.sans,
-    fontWeight: '600', letterSpacing: 0.4, textTransform: 'uppercase',
   },
   listMeta: {
     fontSize: 11, color: colors.textSecondary, fontFamily: font.sans, marginTop: 2,
