@@ -840,3 +840,37 @@ export async function revokeNetworkInvitation(code: string): Promise<{ revoked: 
   if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
   return res.json();
 }
+
+export async function patchNetworkUser(
+  handle: string, body: { status?: 'active' | 'suspended' },
+): Promise<{ updated: boolean }> {
+  return patch(`/api/network/users/${encodeURIComponent(handle)}`, body);
+}
+
+export async function deleteNetworkUser(handle: string): Promise<{ deleted: boolean }> {
+  const res = await fetch(`${baseUrl}/api/network/users/${encodeURIComponent(handle)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`API ${res.status}: ${body}`);
+  }
+  return res.json();
+}
+
+export async function patchNetworkAgent(
+  handle: string, body: { label?: string; owner_handle?: string },
+): Promise<{ updated: boolean }> {
+  return patch(`/api/network/agents/${encodeURIComponent(handle)}`, body);
+}
+
+export async function deleteNetworkAgent(handle: string): Promise<{ deleted: boolean }> {
+  const res = await fetch(`${baseUrl}/api/network/agents/${encodeURIComponent(handle)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`API ${res.status}: ${body}`);
+  }
+  return res.json();
+}
