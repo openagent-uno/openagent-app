@@ -218,6 +218,12 @@ function UsersPanel({
       setHandleInput('');
       void refresh();
     } catch (e: any) {
+      // Surface the failure in BOTH the in-page banner and the dev
+      // console — silent failures here read as "button does nothing"
+      // which is the worst UX. ``console.warn`` shows up in the
+      // Electron renderer's devtools without needing to add a debug
+      // build path.
+      console.warn('[Members] mint failed:', e);
       setError(String(e?.message || e));
     } finally {
       setMinting(false);
@@ -237,6 +243,7 @@ function UsersPanel({
       await patchNetworkUser(u.handle, { status: next });
       void refresh();
     } catch (e: any) {
+      console.warn('[Members] mutation failed:', e);
       setError(String(e?.message || e));
     }
   };
@@ -252,6 +259,7 @@ function UsersPanel({
       await deleteNetworkUser(u.handle);
       void refresh();
     } catch (e: any) {
+      console.warn('[Members] mutation failed:', e);
       setError(String(e?.message || e));
     }
   };
@@ -368,6 +376,12 @@ function AgentsPanel({
       const result = await mintNetworkInvitation({ role: 'agent' });
       setLatestMint(result);
     } catch (e: any) {
+      // Surface the failure in BOTH the in-page banner and the dev
+      // console — silent failures here read as "button does nothing"
+      // which is the worst UX. ``console.warn`` shows up in the
+      // Electron renderer's devtools without needing to add a debug
+      // build path.
+      console.warn('[Members] mint failed:', e);
       setError(String(e?.message || e));
     } finally {
       setMinting(false);
@@ -397,6 +411,7 @@ function AgentsPanel({
       setEditingHandle(null);
       void refresh();
     } catch (e: any) {
+      console.warn('[Members] mutation failed:', e);
       setError(String(e?.message || e));
     }
   };
@@ -412,6 +427,7 @@ function AgentsPanel({
       await deleteNetworkAgent(a.handle);
       void refresh();
     } catch (e: any) {
+      console.warn('[Members] mutation failed:', e);
       setError(String(e?.message || e));
     }
   };
@@ -529,6 +545,7 @@ function InvitationsPanel({
       await revokeNetworkInvitation(inv.code);
       void refresh();
     } catch (e: any) {
+      console.warn('[Members] mutation failed:', e);
       setError(String(e?.message || e));
     }
   };

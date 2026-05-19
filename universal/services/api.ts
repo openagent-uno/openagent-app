@@ -18,45 +18,93 @@ export function setBaseUrl(host: string, port: number) {
   baseUrl = `http://${host}:${port}`;
 }
 
+// Hard ceiling so a hung loopback stream (Iroh stalls, server crashes
+// mid-response, etc.) can never lock a UI control "in flight" forever.
+// 30s is generous for normal calls — anything longer is a real failure
+// the user should see as an error rather than a permanently-disabled
+// button.
+const REQUEST_TIMEOUT_MS = 30_000;
+
+function withTimeout(init: RequestInit, label: string): RequestInit {
+  if (typeof AbortController === 'undefined') return init;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(`request timed out after ${REQUEST_TIMEOUT_MS}ms: ${label}`), REQUEST_TIMEOUT_MS);
+  // Clear when the promise settles. We attach this on the returned
+  // init via a sentinel field the caller picks up — simpler than
+  // wrapping every helper in a try/finally.
+  (init as any).__timer = timer;
+  return { ...init, signal: ctrl.signal };
+}
+
+function clearTimer(init: RequestInit): void {
+  const t = (init as any).__timer;
+  if (t) clearTimeout(t);
+}
+
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${baseUrl}${path}`);
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
-  return res.json();
+  const init = withTimeout({}, `GET ${path}`);
+  try {
+    const res = await fetch(`${baseUrl}${path}`, init);
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    return res.json();
+  } finally {
+    clearTimer(init);
+  }
 }
 
 async function put<T>(path: string, body: object): Promise<T> {
-  const res = await fetch(`${baseUrl}${path}`, {
+  const init = withTimeout({
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
-  return res.json();
+  }, `PUT ${path}`);
+  try {
+    const res = await fetch(`${baseUrl}${path}`, init);
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    return res.json();
+  } finally {
+    clearTimer(init);
+  }
 }
 
 async function post<T>(path: string, body: object = {}): Promise<T> {
-  const res = await fetch(`${baseUrl}${path}`, {
+  const init = withTimeout({
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
-  return res.json();
+  }, `POST ${path}`);
+  try {
+    const res = await fetch(`${baseUrl}${path}`, init);
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    return res.json();
+  } finally {
+    clearTimer(init);
+  }
 }
 
 async function del(path: string): Promise<void> {
-  const res = await fetch(`${baseUrl}${path}`, { method: 'DELETE' });
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  const init = withTimeout({ method: 'DELETE' }, `DELETE ${path}`);
+  try {
+    const res = await fetch(`${baseUrl}${path}`, init);
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  } finally {
+    clearTimer(init);
+  }
 }
 
 async function patch<T>(path: string, body: object): Promise<T> {
-  const res = await fetch(`${baseUrl}${path}`, {
+  const init = withTimeout({
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
-  return res.json();
+  }, `PATCH ${path}`);
+  try {
+    const res = await fetch(`${baseUrl}${path}`, init);
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    return res.json();
+  } finally {
+    clearTimer(init);
+  }
 }
 
 // ── Vault API ──
@@ -833,12 +881,19 @@ export async function mintNetworkInvitation(body: {
   return post<MintInvitationResult>('/api/network/invitations', body);
 }
 
+async function delJson<T>(path: string): Promise<T> {
+  const init = withTimeout({ method: 'DELETE' }, `DELETE ${path}`);
+  try {
+    const res = await fetch(`${baseUrl}${path}`, init);
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    return res.json();
+  } finally {
+    clearTimer(init);
+  }
+}
+
 export async function revokeNetworkInvitation(code: string): Promise<{ revoked: boolean }> {
-  const res = await fetch(`${baseUrl}/api/network/invitations/${encodeURIComponent(code)}`, {
-    method: 'DELETE',
-  });
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
-  return res.json();
+  return delJson(`/api/network/invitations/${encodeURIComponent(code)}`);
 }
 
 export async function patchNetworkUser(
@@ -848,14 +903,7 @@ export async function patchNetworkUser(
 }
 
 export async function deleteNetworkUser(handle: string): Promise<{ deleted: boolean }> {
-  const res = await fetch(`${baseUrl}/api/network/users/${encodeURIComponent(handle)}`, {
-    method: 'DELETE',
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`API ${res.status}: ${body}`);
-  }
-  return res.json();
+  return delJson(`/api/network/users/${encodeURIComponent(handle)}`);
 }
 
 export async function patchNetworkAgent(
@@ -865,12 +913,5 @@ export async function patchNetworkAgent(
 }
 
 export async function deleteNetworkAgent(handle: string): Promise<{ deleted: boolean }> {
-  const res = await fetch(`${baseUrl}/api/network/agents/${encodeURIComponent(handle)}`, {
-    method: 'DELETE',
-  });
-  if (!res.ok) {
-    const body = await res.text();
-    throw new Error(`API ${res.status}: ${body}`);
-  }
-  return res.json();
+  return delJson(`/api/network/agents/${encodeURIComponent(handle)}`);
 }
