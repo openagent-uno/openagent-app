@@ -105,17 +105,23 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="members"
-        options={{
-          title: 'Members',
-          tabBarIcon: ({ color }) => <Feather name="users" size={18} color={color} />,
-        }}
-      />
-      <Tabs.Screen
         name="settings"
         options={{
           title: 'Settings',
           tabBarIcon: ({ color }) => <Feather name="settings" size={18} color={color} />,
+        }}
+      />
+      {/*
+        Route stub for the old /members standalone tab. The Members
+        screen now lives inside Settings → Members; this entry keeps
+        any cached deep links from 404ing, and the inner redirect
+        sends the user to /settings.
+      */}
+      <Tabs.Screen
+        name="members"
+        options={{
+          href: null,
+          title: 'Members',
         }}
       />
     </Tabs>
