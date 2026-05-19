@@ -50,13 +50,6 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="voice"
-        options={{
-          title: 'Voice',
-          tabBarIcon: ({ color }) => <Feather name="mic" size={18} color={color} />,
-        }}
-      />
-      <Tabs.Screen
         name="memory"
         options={{
           title: 'Memory',
@@ -109,6 +102,13 @@ export default function TabsLayout() {
         options={{
           title: 'System',
           tabBarIcon: ({ color }) => <Feather name="activity" size={18} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="members"
+        options={{
+          title: 'Members',
+          tabBarIcon: ({ color }) => <Feather name="users" size={18} color={color} />,
         }}
       />
       <Tabs.Screen

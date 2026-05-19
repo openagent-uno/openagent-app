@@ -771,3 +771,72 @@ export async function launchClaudeAuthLogin(body?: {
 }): Promise<{ ok: boolean; pid?: number; detail?: string; error?: string }> {
   return post('/api/claude/auth/login', body || {});
 }
+
+// ── Network: users, agents, invitations ──
+
+export interface NetworkUser {
+  handle: string;
+  status: string;
+  pake_algo: string;
+  created_at: number;
+}
+
+export interface NetworkAgent {
+  handle: string;
+  node_id: string;
+  label: string | null;
+  owner_handle: string;
+  added_at: number;
+  last_seen: number | null;
+}
+
+export interface NetworkInvitation {
+  code: string;
+  role: 'user' | 'device' | 'agent';
+  bind_to: string;
+  uses_left: number;
+  created_at: number;
+  expires_at: number;
+  created_by: string;
+}
+
+export interface MintInvitationResult {
+  ticket: string;
+  code: string;
+  role: 'user' | 'device' | 'agent';
+  bind_to: string;
+  intent: string;
+  expires_at: number;
+  uses_left: number;
+}
+
+export async function listNetworkUsers(): Promise<NetworkUser[]> {
+  const d = await get<{ users: NetworkUser[] }>('/api/network/users');
+  return d.users || [];
+}
+
+export async function listNetworkAgents(): Promise<NetworkAgent[]> {
+  const d = await get<{ agents: NetworkAgent[] }>('/api/network/agents');
+  return d.agents || [];
+}
+
+export async function listNetworkInvitations(): Promise<NetworkInvitation[]> {
+  const d = await get<{ invitations: NetworkInvitation[] }>('/api/network/invitations');
+  return d.invitations || [];
+}
+
+export async function mintNetworkInvitation(body: {
+  handle?: string;
+  role?: 'user' | 'device' | 'agent';
+  ttl?: number;
+}): Promise<MintInvitationResult> {
+  return post<MintInvitationResult>('/api/network/invitations', body);
+}
+
+export async function revokeNetworkInvitation(code: string): Promise<{ revoked: boolean }> {
+  const res = await fetch(`${baseUrl}/api/network/invitations/${encodeURIComponent(code)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  return res.json();
+}
