@@ -41,10 +41,25 @@ function registerDialogHandlers(): void {
       : await dialog.showOpenDialog(opts);
     if (result.canceled || !result.filePaths.length) return [];
     for (const p of result.filePaths) pickedPaths.add(p);
-    return result.filePaths.map((p) => ({
-      path: p,
-      filename: path.basename(p),
-      kind: IMAGE_EXTS.has(path.extname(p).toLowerCase()) ? 'image' : 'file',
+    // Return size alongside the path so the renderer can reject files
+    // over MAX_READ_BYTES *before* it triggers the IPC readFile (which
+    // would otherwise fail with a generic "readFile: too big" string
+    // mid-upload). For files we can't stat (broken symlink, etc.) we
+    // fall back to size=-1 and let the readFile guard surface the real
+    // error.
+    return Promise.all(result.filePaths.map(async (p) => {
+      let size = -1;
+      try {
+        const st = await fs.promises.stat(p);
+        if (st.isFile()) size = st.size;
+      } catch { /* fall through with -1 */ }
+      return {
+        path: p,
+        filename: path.basename(p),
+        kind: IMAGE_EXTS.has(path.extname(p).toLowerCase()) ? 'image' : 'file',
+        size,
+        maxBytes: MAX_READ_BYTES,
+      };
     }));
   });
 
@@ -75,6 +90,27 @@ function registerDialogHandlers(): void {
     // Buffer crosses the IPC boundary as a Node Buffer which Electron
     // structured-clones into the renderer as a Uint8Array. No base64.
     return fs.promises.readFile(filePath);
+  });
+
+  // Deep-link the OS privacy pane so the user can grant mic access
+  // without hunting through System Settings. Each platform exposes a
+  // different URL scheme; falls back to ``no-op`` on platforms we
+  // don't have a target for (the renderer should still log + show
+  // instructions).
+  ipcMain.handle('app:openMicSettings', async () => {
+    try {
+      if (process.platform === 'darwin') {
+        await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone');
+        return true;
+      }
+      if (process.platform === 'win32') {
+        await shell.openExternal('ms-settings:privacy-microphone');
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
   });
 }
 

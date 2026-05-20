@@ -45,6 +45,16 @@ export class IpcWebSocket {
     const d = desktop();
     if (!d) return;
 
+    // Double-init guard. Defensive: if a caller wires this up twice
+    // (e.g. retry on reconnect that forgets the previous transport),
+    // the first ``cleanupMessage`` closure would be lost and the IPC
+    // listener it represents would leak — surfacing as duplicate
+    // server frames in the renderer. Drop the prior listener first.
+    if (this._cleanupMessage) {
+      try { this._cleanupMessage(); } catch { /* ignore */ }
+      this._cleanupMessage = null;
+    }
+
     this._cleanupMessage = d.onWsRelayToChild((data: string) => {
       if (this._closed) return;
       this.onmessage?.({ data });

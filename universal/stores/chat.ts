@@ -14,6 +14,33 @@ import {
 let nextMsgId = 1;
 const genId = () => `msg-${nextMsgId++}-${Date.now()}`;
 
+// Token-streaming throttle: coalesce all deltas that land within one
+// animation frame into a single store mutation. Without this, a model
+// streaming at 200 tok/s triggers ~200 set() calls per second — each
+// schedules a re-render of every subscriber. With it we cap mutations
+// at ~60/s which is plenty for visual feedback and stays well below
+// MessageList memo's effective re-render budget.
+const pendingDeltas = new Map<string, string>();
+let flushScheduled = false;
+function scheduleDeltaFlush(
+  apply: (next: Map<string, string>) => void,
+) {
+  if (flushScheduled) return;
+  flushScheduled = true;
+  const runFlush = () => {
+    flushScheduled = false;
+    if (pendingDeltas.size === 0) return;
+    const snapshot = new Map(pendingDeltas);
+    pendingDeltas.clear();
+    apply(snapshot);
+  };
+  if (typeof requestAnimationFrame !== 'undefined') {
+    requestAnimationFrame(runFlush);
+  } else {
+    setTimeout(runFlush, 16);
+  }
+}
+
 interface ChatState {
   sessions: ChatSession[];
   activeSessionId: string | null;
@@ -35,6 +62,22 @@ interface ChatState {
   /** Clear the voice session pointer (next visit makes a fresh one). */
   clearVoiceSession: () => void;
   addUserMessage: (sessionId: string, text: string, attachments?: Attachment[]) => void;
+  /** Replace a previous user message in place (Edit & retry).
+   *  Truncates everything after the edited message so the new turn
+   *  starts from a clean tail. Returns true when the id was found. */
+  editUserMessage: (sessionId: string, messageId: string, newText: string) => boolean;
+  /** Persist composer text per-session so switching sessions doesn't
+   *  lose work. */
+  setDraftInput: (sessionId: string, text: string) => void;
+  /** Toggle the sticky-pin flag (sidebar surfaces pinned sessions first). */
+  togglePinned: (sessionId: string) => void;
+  /** Per-session LLM override. Stored on the session row and applied
+   *  on the next ``session_open`` — chat.tsx is responsible for
+   *  forcing a reopen (close + clear opened-cache) when this changes. */
+  setLlmPin: (sessionId: string, model: string | undefined) => void;
+  /** Per-session system prompt. Same gating as setLlmPin — the next
+   *  outgoing turn is rebased on the new prompt. */
+  setSystemPrompt: (sessionId: string, prompt: string) => void;
   handleServerMessage: (msg: ServerMessage) => void;
   clearAll: () => void;
   loadSession: (id: string, title: string, history: { role: string; content: string; tool_result?: string; tool_error?: string; tool_name?: string; tool_args?: Record<string, any> }[]) => string;
@@ -67,7 +110,13 @@ export const useChat = create<ChatState>((set, get) => ({
 
   setActiveSession: (id) => {
     const state = get();
-    set({ activeSessionId: id });
+    set({
+      activeSessionId: id,
+      // Bringing a session to focus clears its unread indicator.
+      sessions: state.sessions.map((se) =>
+        se.id === id && se.hasUnread ? { ...se, hasUnread: false } : se,
+      ),
+    });
     // Fetch run history from the server when switching to a hydrated
     // session that hasn't loaded its messages yet (e.g. from a
     // previous run that survived in agno_sessions).
@@ -221,6 +270,60 @@ export const useChat = create<ChatState>((set, get) => ({
     }
   },
 
+  editUserMessage: (sessionId, messageId, newText) => {
+    let found = false;
+    set((s) => ({
+      sessions: s.sessions.map((se) => {
+        if (se.id !== sessionId) return se;
+        const idx = se.messages.findIndex((m) => m.id === messageId);
+        if (idx < 0) return se;
+        found = true;
+        const edited: ChatMessage = { ...se.messages[idx], text: newText };
+        return {
+          ...se,
+          // Truncate after the edited message — the next assistant turn
+          // gets a clean slate. Matches ChatGPT's edit-and-resend flow.
+          messages: [...se.messages.slice(0, idx), edited],
+          isProcessing: true,
+          statusText: 'Thinking...',
+        };
+      }),
+    }));
+    return found;
+  },
+
+  setDraftInput: (sessionId, text) => {
+    set((s) => ({
+      sessions: s.sessions.map((se) =>
+        se.id === sessionId ? { ...se, draftInput: text } : se,
+      ),
+    }));
+  },
+
+  togglePinned: (sessionId) => {
+    set((s) => ({
+      sessions: s.sessions.map((se) =>
+        se.id === sessionId ? { ...se, pinned: !se.pinned } : se,
+      ),
+    }));
+  },
+
+  setLlmPin: (sessionId, model) => {
+    set((s) => ({
+      sessions: s.sessions.map((se) =>
+        se.id === sessionId ? { ...se, llmPin: model } : se,
+      ),
+    }));
+  },
+
+  setSystemPrompt: (sessionId, prompt) => {
+    set((s) => ({
+      sessions: s.sessions.map((se) =>
+        se.id === sessionId ? { ...se, systemPrompt: prompt } : se,
+      ),
+    }));
+  },
+
   handleServerMessage: (msg) => set((s) => {
     if (msg.type === 'status') {
       const text = msg.text || '';
@@ -297,34 +400,47 @@ export const useChat = create<ChatState>((set, get) => ({
 
     if (msg.type === 'delta') {
       // Token-streaming chunk for the in-progress assistant bubble.
-      // First delta of a turn creates the bubble (so it shows up
-      // immediately in the transcript); subsequent deltas append to
-      // the same bubble. The ``response`` frame replaces the bubble's
-      // text with the canonical clean version + attaches metadata.
+      // Coalesced via the module-level buffer above so we collapse a
+      // burst of deltas into one set() per animation frame.
       const delta = msg.text || '';
       if (!delta) return {};
-      return {
-        sessions: s.sessions.map((ses) => {
-          if (ses.id !== msg.session_id) return ses;
-          const msgs = [...ses.messages];
-          const last = msgs[msgs.length - 1];
-          if (last && last.role === 'assistant' && last.streaming) {
-            msgs[msgs.length - 1] = { ...last, text: last.text + delta };
-          } else {
-            msgs.push({
-              id: genId(),
-              role: 'assistant' as const,
-              text: delta,
-              timestamp: Date.now(),
-              streaming: true,
-            });
-          }
-          return { ...ses, messages: msgs, statusText: undefined };
-        }),
-      };
+      const sid = msg.session_id;
+      pendingDeltas.set(sid, (pendingDeltas.get(sid) ?? '') + delta);
+      scheduleDeltaFlush((snapshot) => {
+        set((cur) => ({
+          sessions: cur.sessions.map((ses) => {
+            const buffered = snapshot.get(ses.id);
+            if (!buffered) return ses;
+            const msgs = [...ses.messages];
+            const last = msgs[msgs.length - 1];
+            if (last && last.role === 'assistant' && last.streaming) {
+              msgs[msgs.length - 1] = { ...last, text: last.text + buffered };
+            } else {
+              msgs.push({
+                id: genId(),
+                role: 'assistant' as const,
+                text: buffered,
+                timestamp: Date.now(),
+                streaming: true,
+              });
+            }
+            return {
+              ...ses,
+              messages: msgs,
+              statusText: undefined,
+              hasUnread: cur.activeSessionId === ses.id ? ses.hasUnread : true,
+            };
+          }),
+        }));
+      });
+      return {};
     }
 
     if (msg.type === 'response') {
+      // Drop any buffered deltas for this session — the response
+      // frame is canonical, applying them on top would duplicate
+      // content.
+      pendingDeltas.delete(msg.session_id);
       return {
         sessions: s.sessions.map((ses) => {
           if (ses.id !== msg.session_id) return ses;

@@ -234,6 +234,33 @@ function ensureGlobalCss(): void {
     .oa-pulse { animation: oa-pulse-soft 1.6s ease-in-out infinite; }
     .oa-hover-lift { transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.18s, border-color 0.18s; }
     .oa-hover-lift:hover { transform: translateY(-1px); }
+    /* Show on hover: any child with inline opacity:0 inside an
+       .oa-row-hover container becomes visible when the row is hovered.
+       Used by message actions (Copy / Edit / Regenerate / etc). */
+    .oa-row-hover:hover > div > div > div[style*="opacity: 0"],
+    .oa-row-hover:hover div[style*="opacity: 0"] { opacity: 1 !important; }
+    /* Blinking caret used to mark a streaming assistant bubble. */
+    @keyframes oa-caret-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+    .oa-caret { display: inline-block; width: 2px; height: 1em; background: currentColor;
+      vertical-align: text-bottom; margin-left: 2px; animation: oa-caret-blink 1.1s steps(1,end) infinite; }
+    /* Spin keyframe wrapper for loader icons. */
+    .oa-spin { animation: oa-spin 0.9s linear infinite; display: inline-block; }
+    /* Shiki-rendered code blocks — strip its default background and
+       apply our font stack so highlighted code matches the surface. */
+    .oa-shiki pre {
+      margin: 0 !important;
+      padding: 12px !important;
+      background: transparent !important;
+      font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace !important;
+      font-size: 12.5px !important;
+      line-height: 19px !important;
+      overflow-x: auto;
+    }
+    .oa-shiki code { font-family: inherit !important; font-size: inherit !important; }
+    /* KaTeX integration — restyle for our color palette. */
+    .oa-katex-block { display: block; margin: 12px 0; overflow-x: auto; color: var(--oa-text); }
+    .oa-katex-block .katex-display { margin: 0 !important; }
+    .oa-katex-inline { color: var(--oa-text); }
     input:focus, textarea:focus, button:focus { outline: none; }
     input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--oa-primarySoft), 0 0 16px var(--oa-accentGlow); border-color: var(--oa-primary) !important; }
     button { font-family: inherit; }

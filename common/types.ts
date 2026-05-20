@@ -207,6 +207,24 @@ export interface ChatSession {
   messages: ChatMessage[];
   isProcessing: boolean;
   statusText?: string;
+  /** Sticky session — sorted to the top of the sidebar regardless of recency. */
+  pinned?: boolean;
+  /** Per-session composer draft (text). Survives session switches but
+   *  not full app restarts. */
+  draftInput?: string;
+  /** Set to true by the delta/response reducer when a non-active
+   *  session receives a new assistant message. Cleared when the user
+   *  brings that session to focus. Drives the sidebar dot indicator. */
+  hasUnread?: boolean;
+  /** Optional LLM pin (e.g. "claude-opus-4-7"). When set, gets sent
+   *  with the next ``session_open`` — composer picker mutates this
+   *  + closes any open WS session so the next message lands on the
+   *  newly-pinned model. ``undefined`` = let the SmartRouter pick. */
+  llmPin?: string;
+  /** Optional system prompt for this session. Currently surfaced as
+   *  the first user-tagged frame after session open, since the
+   *  gateway has no first-class ``system_prompt`` field. */
+  systemPrompt?: string;
 }
 
 // ── System telemetry ──

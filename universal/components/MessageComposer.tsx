@@ -11,15 +11,47 @@
  * native RN falls back to a ``<TextInput multiline>``.
  */
 
-import { useCallback } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Feather from '@expo/vector-icons/Feather';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, Platform, Image } from 'react-native';
 import { colors, font, radius } from '../theme';
 
+export interface SlashCommand {
+  name: string;
+  description?: string;
+  /** When set, fires this and clears the composer instead of inserting text. */
+  action?: () => void;
+}
+
 export interface PendingFile {
+  /** Stable id so async upload completion can target the right chip. */
+  id: string;
   filename: string;
   remotePath: string;
   kind: 'image' | 'file';
+  /** True between picker dismissal and upload settle. */
+  uploading?: boolean;
+  /** Aborts the in-flight upload. Removed when uploading becomes false. */
+  abort?: () => void;
+  /**
+   * Present when the upload failed. The chip renders in an error state
+   * (red border, alert glyph) and ``handleSend`` filters these out so
+   * the user has to dismiss them explicitly. ``remotePath`` is empty
+   * for failed entries — keep that in mind if you start using it
+   * elsewhere.
+   */
+  error?: string;
+  /**
+   * Object URL for the local browser File (web/desktop only). Used to
+   * render a small thumbnail in the pending chip while the upload is
+   * still in flight (and after — saves a round-trip to the server).
+   * Caller is responsible for revoking it once the chip is dropped.
+   */
+  previewUrl?: string;
+  /** Closure that re-attempts the upload for a chip whose previous
+   *  attempt errored out. Owns its own AbortController; the composer
+   *  passes the idx back to chat.tsx which calls this. */
+  retry?: () => void;
 }
 
 export interface MessageComposerProps {
@@ -27,9 +59,34 @@ export interface MessageComposerProps {
   onInputChange: (v: string) => void;
   pendingFiles?: PendingFile[];
   onRemoveFile?: (idx: number) => void;
+  /** Re-attempt a previously failed upload. Optional — when omitted,
+   *  the retry glyph hides. */
+  onRetryFile?: (idx: number) => void;
   onPickFile?: () => void;             // omit → no paperclip button
   onSend: () => void;
   disabled?: boolean;                  // disables send (e.g. session.isProcessing)
+  /** When true (session is processing), the Send button morphs into a
+   *  Stop button that calls ``onStop`` instead. ``disabled`` should be
+   *  true alongside this — keeps the Enter handler from firing too. */
+  processing?: boolean;
+  onStop?: () => void;
+  /** Optional recall handlers — wired to Up Arrow on empty composer and
+   *  Down Arrow to walk back to the empty (current) draft. */
+  onRecallPrev?: () => void;
+  onRecallNext?: () => void;
+  /** Slash-command entries surfaced as an autocomplete dropdown when
+   *  the input matches ``^/`` (case-insensitive). The first entry whose
+   *  name starts with the typed query is highlighted; Enter inserts
+   *  its template (or fires its action, if any). */
+  slashCommands?: SlashCommand[];
+  /** LLM rows the composer offers in its model-picker dropdown. Omit
+   *  to hide the picker entirely. */
+  modelOptions?: { id: string; label: string; provider?: string }[];
+  /** Currently-active model id (matches ``modelOptions[i].id``).
+   *  ``undefined`` renders the picker as "Auto" — let the SmartRouter
+   *  pick a model per turn. */
+  activeModelId?: string;
+  onSelectModel?: (id: string | undefined) => void;
   recording?: boolean;                 // omit → no mic button
   onStartRecord?: () => void;
   onStopRecord?: () => void;
@@ -50,9 +107,18 @@ export default function MessageComposer({
   onInputChange,
   pendingFiles,
   onRemoveFile,
+  onRetryFile,
   onPickFile,
   onSend,
   disabled,
+  processing,
+  onStop,
+  onRecallPrev,
+  onRecallNext,
+  slashCommands,
+  modelOptions,
+  activeModelId,
+  onSelectModel,
   recording,
   onStartRecord,
   onStopRecord,
@@ -61,12 +127,110 @@ export default function MessageComposer({
   placeholder = 'Message OpenAgent...',
   showHint = true,
 }: MessageComposerProps) {
-  const handleKeyDown = useCallback((e: any) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      onSend();
+  // Slash autocomplete state. We surface the menu when the composer
+  // begins with ``/`` and the text contains no whitespace yet — once
+  // the user starts an argument or hits Enter, the menu yields.
+  const slashQuery = (() => {
+    if (!slashCommands?.length) return null;
+    if (Platform.OS !== 'web') return null;
+    if (!input.startsWith('/')) return null;
+    if (/\s/.test(input)) return null;
+    return input.slice(1).toLowerCase();
+  })();
+  const slashMatches = slashQuery !== null
+    ? slashCommands!.filter((c) => c.name.toLowerCase().startsWith(slashQuery))
+    : [];
+  const [slashActive, setSlashActive] = useState(0);
+  useEffect(() => {
+    // Keep the highlight in range as the candidate list shrinks/grows.
+    if (slashActive >= slashMatches.length) setSlashActive(0);
+  }, [slashMatches.length, slashActive]);
+  const acceptSlash = useCallback((cmd: SlashCommand) => {
+    if (cmd.action) {
+      cmd.action();
+      onInputChange('');
+      return;
     }
-  }, [onSend]);
+    // Insert the canonical "/name " into the composer so the user can
+    // keep typing the argument.
+    onInputChange(`/${cmd.name} `);
+  }, [onInputChange]);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const activeModel = modelOptions?.find((m) => m.id === activeModelId);
+  const files = pendingFiles ?? [];
+  // Failed and still-uploading entries stay in the list as visible
+  // chips but don't count toward "there's something to send". Without
+  // this check the user could fire a send before an upload settled and
+  // get a message with an empty ``remotePath`` attachment.
+  const sendableCount = files.reduce(
+    (n, f) => n + (f.error || f.uploading ? 0 : 1),
+    0,
+  );
+  const canSend = (input.trim().length > 0 || sendableCount > 0) && !disabled;
+
+  const handleKeyDown = useCallback((e: any) => {
+    // IME composition (e.g. accent picker, CJK) ends with an Enter
+    // keydown — don't intercept it as "send", that swallows the
+    // composed character and feels broken.
+    if (e.isComposing || e.nativeEvent?.isComposing || e.keyCode === 229) return;
+
+    // Slash menu has first dibs on Tab/Up/Down/Enter when it's open
+    // and has results to offer.
+    if (slashMatches.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setSlashActive((i) => Math.min(slashMatches.length - 1, i + 1));
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setSlashActive((i) => Math.max(0, i - 1));
+        return;
+      }
+      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+        e.preventDefault();
+        acceptSlash(slashMatches[slashActive]);
+        return;
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onInputChange('');
+        return;
+      }
+    }
+
+    // Up/Down on empty composer = recall previous/next user message
+    // (ChatGPT/Claude convention). Only walk when the textarea has no
+    // text or the caret is at the very start, so editing isn't broken.
+    if (onRecallPrev && e.key === 'ArrowUp' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+      const empty = input.length === 0;
+      const atStart = e.target?.selectionStart === 0 && e.target?.selectionEnd === 0;
+      if (empty || atStart) {
+        e.preventDefault();
+        onRecallPrev();
+        return;
+      }
+    }
+    if (onRecallNext && e.key === 'ArrowDown' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+      const empty = input.length === 0;
+      const atEnd = e.target?.selectionStart === input.length && e.target?.selectionEnd === input.length;
+      if (empty || atEnd) {
+        e.preventDefault();
+        onRecallNext();
+        return;
+      }
+    }
+
+    if (e.key !== 'Enter' || e.shiftKey) return;
+    e.preventDefault();
+    // While ``disabled`` (session is processing) or there is literally
+    // nothing to send, eat the Enter instead of firing onSend — the
+    // earlier behaviour would queue a no-op WS frame on every keystroke
+    // and re-mark the session as Thinking…, which read as a UI freeze
+    // when the user mashed Enter after attaching files.
+    if (!canSend) return;
+    onSend();
+  }, [onSend, canSend, onRecallPrev, onRecallNext, input, slashMatches, slashActive, acceptSlash, onInputChange]);
 
   // The two mic-style buttons are mutually exclusive — when
   // continuous listening is on, hide the manual record button so the
@@ -78,25 +242,83 @@ export default function MessageComposer({
     && Platform.OS === 'web'
     && !alwaysListening
   );
-  const files = pendingFiles ?? [];
-  const canSend = (input.trim().length > 0 || files.length > 0) && !disabled;
 
   return (
     <View style={styles.composerWrap}>
+      {slashMatches.length > 0 && (
+        <View style={styles.slashMenu}>
+          {slashMatches.map((c, i) => (
+            <TouchableOpacity
+              key={c.name}
+              style={[styles.slashRow, i === slashActive && styles.slashRowActive]}
+              onPress={() => acceptSlash(c)}
+              onMouseEnter={() => setSlashActive(i)}
+            >
+              <Text style={styles.slashName}>/{c.name}</Text>
+              {c.description && (
+                <Text style={styles.slashDesc} numberOfLines={1}>{c.description}</Text>
+              )}
+            </TouchableOpacity>
+          ))}
+        </View>
+      )}
       <View style={styles.composer}>
         {files.length > 0 && (
           <View style={styles.pendingList}>
-            {files.map((f, idx) => (
-              <View key={`${f.remotePath}-${idx}`} style={styles.pendingChip}>
-                <Feather name="paperclip" size={10} color={colors.textSecondary} />
-                <Text style={styles.pendingText} numberOfLines={1}>{f.filename}</Text>
-                {onRemoveFile && (
-                  <TouchableOpacity onPress={() => onRemoveFile(idx)}>
-                    <Feather name="x" size={11} color={colors.textMuted} />
-                  </TouchableOpacity>
-                )}
-              </View>
-            ))}
+            {files.map((f, idx) => {
+              const failed = !!f.error;
+              const uploading = !!f.uploading;
+              const isImage = f.kind === 'image';
+              const showThumbnail = isImage && !!f.previewUrl;
+              const glyph = failed ? 'alert-circle' : uploading ? 'loader' : 'paperclip';
+              const glyphColor = failed ? colors.error : colors.textSecondary;
+              return (
+                <View
+                  key={f.id}
+                  style={[
+                    styles.pendingChip,
+                    showThumbnail && styles.pendingChipWithThumb,
+                    failed && styles.pendingChipError,
+                    uploading && styles.pendingChipUploading,
+                  ]}
+                  // @ts-ignore — web-only pulse so the user sees the chip is mid-upload
+                  {...(Platform.OS === 'web' && uploading ? { className: 'oa-pulse' } : {})}
+                >
+                  {showThumbnail ? (
+                    <Image
+                      source={{ uri: f.previewUrl }}
+                      style={styles.pendingThumb}
+                      resizeMode="cover"
+                    />
+                  ) : (
+                    <Feather name={glyph as any} size={10} color={glyphColor} />
+                  )}
+                  <Text
+                    style={[styles.pendingText, failed && styles.pendingTextError]}
+                    numberOfLines={1}
+                  >
+                    {failed
+                      ? `${f.filename} — upload failed`
+                      : uploading
+                        ? `${f.filename} — uploading…`
+                        : f.filename}
+                  </Text>
+                  {failed && onRetryFile && (
+                    <TouchableOpacity
+                      onPress={() => onRetryFile(idx)}
+                      accessibilityLabel="Retry upload"
+                    >
+                      <Feather name="refresh-cw" size={10} color={colors.primary} />
+                    </TouchableOpacity>
+                  )}
+                  {onRemoveFile && (
+                    <TouchableOpacity onPress={() => onRemoveFile(idx)}>
+                      <Feather name="x" size={11} color={failed ? colors.error : colors.textMuted} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              );
+            })}
           </View>
         )}
 
@@ -133,6 +355,62 @@ export default function MessageComposer({
                 <Feather name="paperclip" size={13} color={colors.textSecondary} />
               </TouchableOpacity>
             )}
+            {modelOptions && modelOptions.length > 0 && onSelectModel && (
+              <View>
+                <TouchableOpacity
+                  style={styles.modelChip}
+                  onPress={() => setModelMenuOpen((v) => !v)}
+                  accessibilityLabel="Choose model"
+                >
+                  <Feather name="cpu" size={10} color={colors.textSecondary} />
+                  <Text style={styles.modelChipLabel} numberOfLines={1}>
+                    {activeModel ? activeModel.label : 'Auto'}
+                  </Text>
+                  <Feather
+                    name={modelMenuOpen ? 'chevron-up' : 'chevron-down'}
+                    size={10}
+                    color={colors.textMuted}
+                  />
+                </TouchableOpacity>
+                {modelMenuOpen && (
+                  <View style={styles.modelMenu}>
+                    <TouchableOpacity
+                      style={[styles.modelRow, !activeModelId && styles.modelRowActive]}
+                      onPress={() => { onSelectModel(undefined); setModelMenuOpen(false); }}
+                    >
+                      <Feather
+                        name="zap"
+                        size={11}
+                        color={!activeModelId ? colors.primary : colors.textMuted}
+                      />
+                      <View style={styles.modelRowText}>
+                        <Text style={styles.modelRowTitle}>Auto</Text>
+                        <Text style={styles.modelRowSub}>Let SmartRouter pick</Text>
+                      </View>
+                    </TouchableOpacity>
+                    {modelOptions.map((m) => (
+                      <TouchableOpacity
+                        key={m.id}
+                        style={[styles.modelRow, m.id === activeModelId && styles.modelRowActive]}
+                        onPress={() => { onSelectModel(m.id); setModelMenuOpen(false); }}
+                      >
+                        <Feather
+                          name="cpu"
+                          size={11}
+                          color={m.id === activeModelId ? colors.primary : colors.textMuted}
+                        />
+                        <View style={styles.modelRowText}>
+                          <Text style={styles.modelRowTitle} numberOfLines={1}>{m.label}</Text>
+                          {m.provider && (
+                            <Text style={styles.modelRowSub} numberOfLines={1}>{m.provider}</Text>
+                          )}
+                        </View>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+              </View>
+            )}
             {showMic && (
               <TouchableOpacity
                 style={[styles.iconBtn, recording && styles.iconBtnActive]}
@@ -161,19 +439,37 @@ export default function MessageComposer({
               </TouchableOpacity>
             )}
           </View>
-          <TouchableOpacity
-            style={[styles.sendBtn, !canSend && styles.sendBtnDisabled]}
-            onPress={onSend}
-            disabled={!canSend}
-          >
-            <Feather name="arrow-up" size={13} color={colors.textInverse} />
-          </TouchableOpacity>
+          {processing && onStop ? (
+            <TouchableOpacity
+              style={[styles.sendBtn, styles.stopBtn]}
+              onPress={onStop}
+              accessibilityLabel="Stop generating"
+            >
+              <Feather name="square" size={11} color={colors.textInverse} />
+            </TouchableOpacity>
+          ) : (
+            <TouchableOpacity
+              style={[styles.sendBtn, !canSend && styles.sendBtnDisabled]}
+              onPress={onSend}
+              disabled={!canSend}
+              accessibilityLabel="Send message"
+            >
+              <Feather name="arrow-up" size={13} color={colors.textInverse} />
+            </TouchableOpacity>
+          )}
         </View>
       </View>
       {showHint && (
-        <Text style={styles.composerHint}>
-          <Text style={styles.kbd}>Enter</Text> to send · <Text style={styles.kbd}>Shift+Enter</Text> for newline
-        </Text>
+        <View style={styles.composerHintRow}>
+          <Text style={styles.composerHint}>
+            <Text style={styles.kbd}>Enter</Text> to send · <Text style={styles.kbd}>Shift+Enter</Text> for newline
+          </Text>
+          {input.length > 800 && (
+            <Text style={[styles.composerHint, styles.charCount]}>
+              {input.length.toLocaleString()} chars
+            </Text>
+          )}
+        </View>
       )}
     </View>
   );
@@ -182,6 +478,31 @@ export default function MessageComposer({
 const styles = StyleSheet.create({
   composerWrap: {
     paddingHorizontal: 20, paddingBottom: 12, paddingTop: 4,
+  },
+  slashMenu: {
+    maxWidth: 760, width: '100%', alignSelf: 'center',
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.border,
+    marginBottom: 6, paddingVertical: 4,
+    shadowColor: colors.shadowColor,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 1, shadowRadius: 12,
+  },
+  slashRow: {
+    flexDirection: 'row', alignItems: 'baseline', gap: 10,
+    paddingHorizontal: 12, paddingVertical: 6,
+    marginHorizontal: 4, borderRadius: radius.sm,
+  },
+  slashRowActive: {
+    backgroundColor: colors.hover,
+  },
+  slashName: {
+    fontSize: 12, color: colors.text, fontWeight: '600',
+    fontFamily: font.mono,
+  },
+  slashDesc: {
+    flex: 1, fontSize: 11, color: colors.textMuted,
   },
   composer: {
     maxWidth: 760, width: '100%', alignSelf: 'center',
@@ -206,9 +527,28 @@ const styles = StyleSheet.create({
     borderWidth: 1, borderColor: colors.borderLight,
     maxWidth: 220,
   },
+  pendingChipError: {
+    borderColor: colors.error,
+    backgroundColor: colors.surface,
+  },
+  pendingChipUploading: {
+    borderColor: colors.borderLight,
+    opacity: 0.75,
+  },
+  pendingChipWithThumb: {
+    paddingLeft: 3, paddingVertical: 2,
+  },
+  pendingThumb: {
+    width: 22, height: 22,
+    borderRadius: radius.xs,
+    backgroundColor: colors.codeBg,
+  },
   pendingText: {
     fontSize: 11, color: colors.textSecondary, fontWeight: '500',
     flexShrink: 1,
+  },
+  pendingTextError: {
+    color: colors.error,
   },
   inputRow: {
     flexDirection: 'row', alignItems: 'flex-end',
@@ -223,7 +563,41 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     paddingTop: 4,
   },
-  composerLeft: { flexDirection: 'row', gap: 2 },
+  composerLeft: { flexDirection: 'row', gap: 4, alignItems: 'center' },
+  modelChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 7, paddingVertical: 3,
+    borderRadius: radius.sm,
+    borderWidth: 1, borderColor: colors.borderLight,
+    backgroundColor: colors.surface,
+    maxWidth: 170,
+  },
+  modelChipLabel: {
+    fontSize: 11, color: colors.textSecondary,
+    fontFamily: font.mono, fontWeight: '500',
+    flexShrink: 1,
+  },
+  modelMenu: {
+    position: 'absolute',
+    bottom: 32, left: 0, minWidth: 220, maxWidth: 320,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.border,
+    paddingVertical: 4,
+    shadowColor: colors.shadowColor,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 1, shadowRadius: 12,
+    zIndex: 50,
+  },
+  modelRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 10, paddingVertical: 6,
+    marginHorizontal: 4, borderRadius: radius.sm,
+  },
+  modelRowActive: { backgroundColor: colors.hover },
+  modelRowText: { flex: 1, minWidth: 0 },
+  modelRowTitle: { fontSize: 12, color: colors.text, fontWeight: '500' },
+  modelRowSub: { fontSize: 10, color: colors.textMuted, marginTop: 1 },
   iconBtn: {
     width: 28, height: 28, borderRadius: radius.sm,
     alignItems: 'center', justifyContent: 'center',
@@ -235,10 +609,20 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   sendBtnDisabled: { opacity: 0.25 },
+  stopBtn: {
+    backgroundColor: colors.error,
+  },
+  composerHintRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 16, marginTop: 6,
+  },
   composerHint: {
     fontSize: 10, color: colors.textMuted,
-    textAlign: 'center', marginTop: 6,
+    textAlign: 'center',
     fontFamily: font.mono,
+  },
+  charCount: {
+    color: colors.textSecondary,
   },
   kbd: {
     fontSize: 10, color: colors.textSecondary,

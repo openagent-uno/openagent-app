@@ -14,8 +14,15 @@ declare global {
       getItem: (key: string) => Promise<string | null>;
       setItem: (key: string, value: string) => Promise<void>;
       removeItem: (key: string) => Promise<void>;
-      pickFiles?: () => Promise<{ path: string; filename: string; kind: 'image' | 'file' }[]>;
+      pickFiles?: () => Promise<{
+        path: string;
+        filename: string;
+        kind: 'image' | 'file';
+        size: number;
+        maxBytes: number;
+      }[]>;
       readFile?: (filePath: string) => Promise<Uint8Array>;
+      openMicSettings?: () => Promise<boolean>;
     };
   }
 }

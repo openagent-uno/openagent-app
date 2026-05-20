@@ -11,7 +11,7 @@
  * tail-shows the last few turns); omit for the full transcript.
  */
 
-import { useState, useMemo } from 'react';
+import { memo, useState, useMemo } from 'react';
 import Feather from '@expo/vector-icons/Feather';
 import { View, Text, TouchableOpacity, StyleSheet, Platform, Image } from 'react-native';
 import type { Attachment, ChatMessage, ToolInfo } from '../../common/types';
@@ -25,22 +25,41 @@ export interface MessageListProps {
   statusText?: string;
   /** Slice the tail when set (Voice tab uses ~6). Omit for full history. */
   maxItems?: number;
+  /** Fired by the per-bubble Regenerate button on the last (non-streaming)
+   *  assistant message. Omit to hide the button entirely. */
+  onRegenerate?: () => void;
+  /** Fired by the per-bubble Edit button on a user message. Omit to hide. */
+  onEditUser?: (msgId: string, newText: string) => void;
 }
 
 export default function MessageList({
-  messages, isProcessing, statusText, maxItems,
+  messages, isProcessing, statusText, maxItems, onRegenerate, onEditUser,
 }: MessageListProps) {
   const visible = maxItems != null ? messages.slice(-maxItems) : messages;
+  // Identify the last assistant message — Regenerate only attaches to
+  // it, not to every assistant bubble in the transcript.
+  const lastAssistantId = (() => {
+    for (let i = visible.length - 1; i >= 0; i -= 1) {
+      const m = visible[i];
+      if (m.role === 'assistant' && !m.streaming) return m.id;
+    }
+    return null;
+  })();
   return (
     <>
       {visible.map((msg) => (
         msg.role === 'tool' ? (
           <ToolCard key={msg.id} toolInfo={msg.toolInfo} fallbackText={msg.text} />
         ) : msg.role === 'user' ? (
-          <UserMessage key={msg.id} text={msg.text} attachments={msg.attachments} />
+          <UserMessage
+            key={msg.id} id={msg.id} text={msg.text} attachments={msg.attachments}
+            onEdit={onEditUser}
+          />
         ) : (
           <AssistantMessage
             key={msg.id} text={msg.text} model={msg.model} attachments={msg.attachments}
+            streaming={msg.streaming}
+            onRegenerate={msg.id === lastAssistantId && !isProcessing ? onRegenerate : undefined}
           />
         )
       ))}
@@ -60,23 +79,94 @@ export default function MessageList({
 
 // ── Atoms ────────────────────────────────────────────────────────────
 
-function UserMessage({ text, attachments }: { text: string; attachments?: Attachment[] }) {
+const UserMessage = memo(function UserMessage({
+  id, text, attachments, onEdit,
+}: {
+  id: string;
+  text: string;
+  attachments?: Attachment[];
+  onEdit?: (id: string, newText: string) => void;
+}) {
   const inlineImages = attachments?.filter((a) => a.type === 'image') ?? [];
   const otherAttach = attachments?.filter((a) => a.type !== 'image') ?? [];
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(text);
   return (
     <View
       style={styles.userBlock}
       // @ts-ignore
-      {...(Platform.OS === 'web' ? { className: 'oa-fade-in' } : {})}
+      {...(Platform.OS === 'web' ? { className: 'oa-fade-in oa-row-hover' } : {})}
     >
       <View style={styles.userRule} />
       <View style={styles.userBody}>
-        <Text style={styles.userLabel}>You</Text>
-        {text ? <Text style={styles.userText}>{text}</Text> : null}
-        {inlineImages.map((att, i) => (
+        <View style={styles.userHead}>
+          <Text style={styles.userLabel}>You</Text>
+          {!editing && (
+            <View style={styles.msgActions}>
+              <CopyButton text={text} />
+              {onEdit && (
+                <TouchableOpacity
+                  style={styles.msgActionBtn}
+                  onPress={() => { setDraft(text); setEditing(true); }}
+                  accessibilityLabel="Edit message"
+                >
+                  <Feather name="edit-2" size={11} color={colors.textMuted} />
+                </TouchableOpacity>
+              )}
+            </View>
+          )}
+        </View>
+        {editing ? (
+          <>
+            <View style={styles.editBox}>
+              <Text
+                // @ts-ignore — pass-through to underlying div as a textarea wrapper
+                style={styles.editPlaceholder}
+              >
+                {Platform.OS === 'web' ? (
+                  // @ts-ignore — RNW lets us drop in a real textarea inline
+                  <textarea
+                    value={draft}
+                    onChange={(e: any) => setDraft(e.target.value)}
+                    rows={Math.max(2, draft.split('\n').length)}
+                    autoFocus
+                    style={{
+                      width: '100%', background: 'transparent', border: 'none',
+                      color: colors.text, fontSize: 14, lineHeight: 1.5,
+                      fontFamily: font.sans, padding: 0, resize: 'vertical',
+                      outline: 'none', minHeight: 60,
+                    } as any}
+                  />
+                ) : draft}
+              </Text>
+            </View>
+            <View style={styles.editActionsRow}>
+              <TouchableOpacity
+                style={styles.editCancelBtn}
+                onPress={() => { setEditing(false); setDraft(text); }}
+              >
+                <Text style={styles.editCancelText}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.editSendBtn}
+                onPress={() => {
+                  const trimmed = draft.trim();
+                  if (!trimmed) return;
+                  setEditing(false);
+                  onEdit?.(id, trimmed);
+                }}
+              >
+                <Text style={styles.editSendText}>Send</Text>
+              </TouchableOpacity>
+            </View>
+          </>
+        ) : (
+          text ? <Text style={styles.userText} selectable>{text}</Text> : null
+        )}
+        {!editing && inlineImages.map((att, i) => (
           <InlineImage key={`img-${att.path}-${i}`} attachment={att} />
         ))}
-        {otherAttach.length > 0 && (
+        {!editing && otherAttach.length > 0 && (
           <View style={styles.attachmentsRow}>
             {otherAttach.map((att, i) => (
               <AttachmentView key={`${att.path}-${i}`} attachment={att} />
@@ -86,14 +176,16 @@ function UserMessage({ text, attachments }: { text: string; attachments?: Attach
       </View>
     </View>
   );
-}
+});
 
-function AssistantMessage({
-  text, model, attachments,
+const AssistantMessage = memo(function AssistantMessage({
+  text, model, attachments, streaming, onRegenerate,
 }: {
   text: string;
   model?: string;
   attachments?: Attachment[];
+  streaming?: boolean;
+  onRegenerate?: () => void;
 }) {
   const inlineImages = attachments?.filter((a) => a.type === 'image') ?? [];
   const otherAttach = attachments?.filter((a) => a.type !== 'image') ?? [];
@@ -101,15 +193,29 @@ function AssistantMessage({
     <View
       style={styles.assistantBlock}
       // @ts-ignore
-      {...(Platform.OS === 'web' ? { className: 'oa-fade-in' } : {})}
+      {...(Platform.OS === 'web' ? { className: 'oa-fade-in oa-row-hover' } : {})}
     >
       <View style={styles.assistantHead}>
         <View style={styles.assistantDot} />
         <Text style={styles.assistantLabel}>OpenAgent</Text>
         {model && <Text style={styles.modelText}>· {model}</Text>}
+        {!streaming && (
+          <View style={styles.msgActions}>
+            <CopyButton text={text} />
+            {onRegenerate && (
+              <TouchableOpacity
+                style={styles.msgActionBtn}
+                onPress={onRegenerate}
+                accessibilityLabel="Regenerate response"
+              >
+                <Feather name="refresh-cw" size={11} color={colors.textMuted} />
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
       </View>
       <View style={styles.assistantBody}>
-        <Markdown text={text} />
+        <Markdown text={text} streaming={streaming} />
         {inlineImages.map((att, i) => (
           <InlineImage key={`img-${att.path}-${i}`} attachment={att} downloadable />
         ))}
@@ -122,6 +228,34 @@ function AssistantMessage({
         )}
       </View>
     </View>
+  );
+});
+
+// Generic copy-to-clipboard button used by both user + assistant headers.
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  const doCopy = async () => {
+    if (Platform.OS !== 'web' || typeof navigator === 'undefined') return;
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1400);
+    } catch (e) {
+      console.error('Copy failed:', e);
+    }
+  };
+  return (
+    <TouchableOpacity
+      style={styles.msgActionBtn}
+      onPress={doCopy}
+      accessibilityLabel={copied ? 'Copied' : 'Copy message'}
+    >
+      <Feather
+        name={copied ? 'check' : 'copy'}
+        size={11}
+        color={copied ? colors.success : colors.textMuted}
+      />
+    </TouchableOpacity>
   );
 }
 
@@ -187,7 +321,7 @@ function AttachmentView({
   );
 }
 
-function ToolCard({
+const ToolCard = memo(function ToolCard({
   toolInfo, fallbackText,
 }: { toolInfo?: ToolInfo; fallbackText: string }) {
   const [expanded, setExpanded] = useState(false);
@@ -273,7 +407,7 @@ function ToolCard({
       )}
     </TouchableOpacity>
   );
-}
+});
 
 const styles = StyleSheet.create({
   // User
@@ -287,19 +421,60 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   userBody: { flex: 1, paddingVertical: 2 },
+  userHead: {
+    flexDirection: 'row', alignItems: 'center', marginBottom: 4,
+  },
   userLabel: {
+    flex: 1,
     fontSize: 10, fontWeight: '600', color: colors.primary,
-    textTransform: 'uppercase', letterSpacing: 0.8, marginBottom: 4,
+    textTransform: 'uppercase', letterSpacing: 0.8,
   },
   userText: {
     fontSize: 14, lineHeight: 22, color: colors.text,
     fontWeight: '400',
   },
 
+  // Hover action buttons (Copy / Edit / Regenerate) — appear in the
+  // message header. Web-only hover-reveal is layered on via the
+  // ``.oa-row-hover`` global class (see theme.ts).
+  msgActions: {
+    flexDirection: 'row', gap: 2, marginLeft: 'auto',
+    // @ts-ignore — web-only opacity for hover-reveal; native always-shown
+    ...(Platform.OS === 'web' ? { opacity: 0, transition: 'opacity 0.16s' as any } : {}),
+  },
+  msgActionBtn: {
+    width: 22, height: 22, borderRadius: radius.xs,
+    alignItems: 'center', justifyContent: 'center',
+  },
+
+  // Inline-edit affordance on user messages.
+  editBox: {
+    borderWidth: 1, borderColor: colors.primary,
+    backgroundColor: colors.surface,
+    borderRadius: radius.sm, padding: 10,
+    marginBottom: 8,
+  },
+  editPlaceholder: { color: colors.text, fontSize: 14 },
+  editActionsRow: {
+    flexDirection: 'row', gap: 8, justifyContent: 'flex-end',
+    marginBottom: 6,
+  },
+  editCancelBtn: {
+    paddingHorizontal: 12, paddingVertical: 5,
+    borderRadius: radius.sm,
+  },
+  editCancelText: { fontSize: 12, color: colors.textMuted, fontWeight: '500' },
+  editSendBtn: {
+    paddingHorizontal: 14, paddingVertical: 5,
+    borderRadius: radius.sm,
+    backgroundColor: colors.text,
+  },
+  editSendText: { fontSize: 12, color: colors.textInverse, fontWeight: '600' },
+
   // Assistant
   assistantBlock: { paddingVertical: 10 },
   assistantHead: {
-    flexDirection: 'row', alignItems: 'center', marginBottom: 6,
+    flexDirection: 'row', alignItems: 'center', gap: 2, marginBottom: 6,
   },
   assistantDot: {
     width: 6, height: 6, borderRadius: 3,

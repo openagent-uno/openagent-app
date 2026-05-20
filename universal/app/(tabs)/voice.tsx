@@ -314,6 +314,25 @@ export default function VoiceScreen() {
           <>
             <SoundWaves level={energy} state={swState} />
             <Text style={styles.caption}>{caption}</Text>
+            {micError === 'permission' && (
+              <TouchableOpacity
+                style={styles.micRecoveryBtn}
+                onPress={async () => {
+                  // Desktop: deep-link the OS privacy pane. Web: best
+                  // we can do is point the user at the browser's
+                  // address-bar lock icon.
+                  const opened = await (window as any).desktop?.openMicSettings?.();
+                  if (!opened && typeof window !== 'undefined') {
+                    window.alert(
+                      'Microphone access is blocked. Open System Settings → Privacy & Security → Microphone (or the browser site permissions) and enable OpenAgent.',
+                    );
+                  }
+                }}
+              >
+                <Feather name="settings" size={11} color={colors.text} />
+                <Text style={styles.micRecoveryText}>Open mic settings</Text>
+              </TouchableOpacity>
+            )}
             {(webcamOn || screenOn) && (
               <Text style={styles.shareBadge}>
                 Sharing: {[webcamOn && 'webcam', screenOn && 'screen'].filter(Boolean).join(' + ')}
@@ -421,6 +440,16 @@ const styles = StyleSheet.create({
   shareBadge: {
     marginTop: 6, fontSize: 10, color: colors.textSecondary,
     fontFamily: font.mono, letterSpacing: 0.4,
+  },
+  micRecoveryBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    marginTop: 10, paddingHorizontal: 10, paddingVertical: 5,
+    borderRadius: radius.sm,
+    borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  micRecoveryText: {
+    fontSize: 11, fontWeight: '500', color: colors.text,
   },
 
   fallback: {

@@ -25,11 +25,22 @@ contextBridge.exposeInMainWorld('desktop', {
     ipcRenderer.invoke('storage:remove', key),
 
   // Native file picker
-  pickFiles: (): Promise<{ path: string; filename: string; kind: 'image' | 'file' }[]> =>
-    ipcRenderer.invoke('dialog:pickFiles'),
+  pickFiles: (): Promise<{
+    path: string;
+    filename: string;
+    kind: 'image' | 'file';
+    /** Bytes on disk, or -1 if stat failed. */
+    size: number;
+    /** Renderer-side cap mirror so the UI can pre-reject oversized files. */
+    maxBytes: number;
+  }[]> => ipcRenderer.invoke('dialog:pickFiles'),
 
   readFile: (filePath: string): Promise<Uint8Array> =>
     ipcRenderer.invoke('dialog:readFile', filePath),
+
+  /** Deep-link to the OS microphone privacy pane. Returns false when
+   *  the platform has no known URL (the UI should show instructions). */
+  openMicSettings: (): Promise<boolean> => ipcRenderer.invoke('app:openMicSettings'),
 
   // Quit the app from the renderer.
   quit: (): Promise<void> => ipcRenderer.invoke('app:quit'),

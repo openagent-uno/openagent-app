@@ -150,6 +150,11 @@ interface ConnectionState {
   ws: OpenAgentWS | null;
   isConnected: boolean;
   isConnecting: boolean;
+  /** True between a post-auth WS drop and the next ``auth_ok``. The
+   *  reconnect loop in OpenAgentWS still runs whether or not anyone
+   *  reads this — the flag just lets the UI surface a "Reconnecting…"
+   *  hint instead of letting the chat go silently dead. */
+  isReconnecting: boolean;
   agentName: string | null;
   agentVersion: string | null;
   error: string | null;
@@ -173,6 +178,7 @@ export const useConnection = create<ConnectionState>((set, get) => ({
   ws: null,
   isConnected: false,
   isConnecting: false,
+  isReconnecting: false,
   agentName: null,
   agentVersion: null,
   error: null,
@@ -320,6 +326,7 @@ export const useConnection = create<ConnectionState>((set, get) => ({
       ws: null,
       isConnected: false,
       isConnecting: false,
+      isReconnecting: false,
       config: null,
       agentName: null,
       agentVersion: null,
@@ -414,6 +421,7 @@ function _openWebsocket(
       set({
         isConnected: true,
         isConnecting: false,
+        isReconnecting: false,
         // Fall back to persisted agent info or account name for child
         // windows where the synthesized auth_ok has no agent metadata.
         // @ts-ignore
@@ -481,6 +489,14 @@ function _openWebsocket(
   // ``onclose`` only logged + scheduled a 3 s reconnect. Now the WS
   // surfaces them through onClose so we clear the loading state.
   ws.onClose((info) => {
+    if (info.reason === 'post_auth') {
+      // Mid-session drop — the WS auto-reconnect kicks in; surface a
+      // "Reconnecting…" hint so the user knows why their messages have
+      // stopped getting replies. Cleared on the next ``auth_ok``.
+      if (!isCurrent()) return;
+      set({ isReconnecting: true });
+      return;
+    }
     if (attemptDone) return;
     if (info.reason === 'pre_auth' || info.reason === 'retries_exhausted') {
       finalize();
@@ -489,12 +505,11 @@ function _openWebsocket(
       set({
         isConnected: false,
         isConnecting: false,
+        isReconnecting: false,
         error: humanizeLoginError(detail),
       });
       ws.disconnect();
     }
-    // post_auth drops are handled by the existing reconnect loop in
-    // OpenAgentWS — no UI mutation needed.
   });
 
   ws.onError(() => {

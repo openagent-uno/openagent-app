@@ -247,10 +247,32 @@ export async function describeCron(
 
 // ── File Upload ──
 
+/**
+ * Guess a Content-Type for a filename + binary-kind pair when the
+ * source File didn't carry one (the Electron picker hands back raw
+ * paths, not File objects). Centralised here so the desktop pick path,
+ * web fallback, and any future surface stay in lockstep on what the
+ * gateway sees.
+ */
+export function guessMimeType(filename: string, kind: 'image' | 'file'): string {
+  const ext = filename.toLowerCase().split('.').pop() || '';
+  const mimes: Record<string, string> = {
+    png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+    webp: 'image/webp', bmp: 'image/bmp', heic: 'image/heic', tiff: 'image/tiff',
+    pdf: 'application/pdf', txt: 'text/plain', md: 'text/markdown',
+    csv: 'text/csv', json: 'application/json', yaml: 'application/x-yaml',
+    yml: 'application/x-yaml', log: 'text/plain',
+    py: 'text/x-python', js: 'application/javascript', ts: 'application/typescript',
+    webm: 'audio/webm', ogg: 'audio/ogg', mp3: 'audio/mpeg',
+    wav: 'audio/wav', m4a: 'audio/mp4',
+  };
+  return mimes[ext] || (kind === 'image' ? 'application/octet-stream' : 'application/octet-stream');
+}
+
 export async function uploadFile(
   file: File | Blob,
   filename = 'upload',
-  opts?: { language?: string },
+  opts?: { language?: string; signal?: AbortSignal },
 ): Promise<{
   path: string;
   filename: string;
@@ -268,7 +290,11 @@ export async function uploadFile(
   }
   // ``lang`` (ISO-639-1) hints the STT backend; empty means auto-detect.
   const qs = opts?.language ? `?lang=${encodeURIComponent(opts.language)}` : '';
-  const res = await fetch(`${baseUrl}/api/upload${qs}`, { method: 'POST', body: form });
+  const res = await fetch(`${baseUrl}/api/upload${qs}`, {
+    method: 'POST',
+    body: form,
+    signal: opts?.signal,
+  });
   if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
   return res.json();
 }

@@ -25,6 +25,11 @@ export interface AudioPlayerOptions {
   /** Same edges as ``onPlayingChange`` but as a discriminated state —
    * the Voice screen reads this to switch SoundWaves into 'speaking'. */
   onStateChange?: (state: 'idle' | 'playing') => void;
+  /** Per-chunk decode/playback failure. Receives the seq of the bad
+   * chunk and the underlying MediaError code/message when available.
+   * The player still advances to the next chunk; this callback exists
+   * so the UI can flag degraded audio instead of confusing dead air. */
+  onChunkError?: (info: { seq: number; reason: string }) => void;
 }
 
 interface QueuedChunk {
@@ -37,6 +42,7 @@ export class AudioQueuePlayer {
   private startupBuffer: number;
   private onPlayingChange?: (playing: boolean) => void;
   private onStateChange?: (state: 'idle' | 'playing') => void;
+  private onChunkError?: (info: { seq: number; reason: string }) => void;
 
   // Pending chunks indexed by seq so out-of-order deliveries (rare on
   // a single TCP WS but cheap to handle) play in the right order.
@@ -55,6 +61,7 @@ export class AudioQueuePlayer {
     this.startupBuffer = Math.max(1, opts.startupBuffer ?? 2);
     this.onPlayingChange = opts.onPlayingChange;
     this.onStateChange = opts.onStateChange;
+    this.onChunkError = opts.onChunkError;
   }
 
   /** Mark the start of a new turn. Resets state. */
@@ -149,6 +156,7 @@ export class AudioQueuePlayer {
       return;
     }
 
+    const playingSeq = this.nextSeq;
     this.pending.delete(this.nextSeq);
     this.nextSeq += 1;
 
@@ -169,6 +177,12 @@ export class AudioQueuePlayer {
       void this.maybeAdvance();
     };
     audio.onerror = () => {
+      const mediaErr = audio.error;
+      const reason = mediaErr
+        ? `MediaError code=${mediaErr.code}${mediaErr.message ? `: ${mediaErr.message}` : ''}`
+        : 'audio element errored without a MediaError';
+      console.warn(`[audio] chunk seq=${playingSeq} failed — ${reason}; skipping`);
+      this.onChunkError?.({ seq: playingSeq, reason });
       try { URL.revokeObjectURL(url); } catch { /* ignore */ }
       this.current = null;
       this.currentUrl = null;

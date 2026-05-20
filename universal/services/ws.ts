@@ -274,7 +274,11 @@ export class OpenAgentWS {
   sendMessage(
     text: string,
     sessionId: string,
-    options?: { source?: 'user_typed' | 'stt' | 'system' },
+    options?: {
+      source?: 'user_typed' | 'stt' | 'system';
+      llmPin?: string;
+      systemPrompt?: string;
+    },
   ): void {
     if (!this.openedSessions.has(sessionId)) {
       this.sendSessionOpen(sessionId, {
@@ -284,7 +288,19 @@ export class OpenAgentWS {
         // notes (source="stt") still get spoken replies via the
         // mirror-modality rule on the server side.
         speak: false,
+        llmPin: options?.llmPin,
       });
+      // Push the system prompt as the first user-tagged frame so the
+      // gateway lands it in the session prelude. The gateway has no
+      // first-class ``system_prompt`` field today; this is the
+      // simplest hand-off that survives reconnect.
+      if (options?.systemPrompt) {
+        this.sendTextFinal(
+          sessionId,
+          `[system] ${options.systemPrompt}`,
+          { source: 'system' },
+        );
+      }
     }
     this.sendTextFinal(sessionId, text, { source: options?.source ?? 'user_typed' });
   }
