@@ -13,6 +13,13 @@ import { useDrawer } from '../stores/drawer';
 import { useConfirm } from './ConfirmDialog';
 import WindowControls from './WindowControls';
 
+function extractAgentName(acc: { name: string; handle: string }): string {
+  const parts = acc.name.split(' — ');
+  if (parts.length > 1) return parts[parts.length - 1];
+  if (acc.name === acc.handle) return acc.name;
+  return acc.name;
+}
+
 export default function Header() {
   const router = useRouter();
   const [dropdownOpen, setDropdownOpen] = useState(false);
@@ -49,7 +56,7 @@ export default function Header() {
   } = useConnection();
 
   const activeAccount = accounts.find((a) => a.id === activeAccountId);
-  const displayName = activeAccount?.name || agentName || 'Not Connected';
+  const displayName = activeAccount ? extractAgentName(activeAccount) : (agentName || 'Not Connected');
 
   const handleSwitch = async (id: string) => {
     setDropdownOpen(false);
@@ -134,7 +141,9 @@ export default function Header() {
             {accounts.length === 0 && (
               <Text style={styles.emptyDropdown}>No saved accounts</Text>
             )}
-            {accounts.map((acc) => (
+            {accounts.map((acc) => {
+              const agentNameDisplay = extractAgentName(acc);
+              return (
               <View key={acc.id} style={styles.dropdownRow}>
                 <TouchableOpacity
                   style={styles.dropdownItem}
@@ -147,8 +156,8 @@ export default function Header() {
                     style={styles.radioBtn}
                   />
                   <View style={styles.dropdownInfo}>
-                    <Text style={styles.dropdownName} numberOfLines={1}>{acc.name}</Text>
-                    <Text style={styles.dropdownHost}>{acc.handle}@{acc.network}</Text>
+                    <Text style={styles.dropdownName} numberOfLines={1}>{agentNameDisplay}</Text>
+                    <Text style={styles.dropdownHost}>@{acc.handle}</Text>
                   </View>
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -158,7 +167,8 @@ export default function Header() {
                   <Feather name="x" size={13} color={colors.textMuted} />
                 </TouchableOpacity>
               </View>
-            ))}
+              );
+            })}
             <TouchableOpacity style={styles.dropdownAdd} onPress={handleAdd}>
               <View style={styles.dropdownAddContent}>
                 <Feather name="plus" size={13} color={colors.primary} />

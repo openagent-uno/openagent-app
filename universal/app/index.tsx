@@ -40,7 +40,6 @@ export default function LoginScreen() {
     joinNetwork, connectAccount, removeAccount,
   } = useConnection();
   const createSession = useChat((s) => s.createSession);
-  const getOrCreateVoiceSession = useChat((s) => s.getOrCreateVoiceSession);
   const sessions = useChat((s) => s.sessions);
   const sessionsHydrated = useChat((s) => s.sessionsHydrated);
   const confirm = useConfirm();
@@ -59,6 +58,16 @@ export default function LoginScreen() {
   const [joinTicket, setJoinTicket] = useState('');
   const [joinHandle, setJoinHandle] = useState('');
   const [joinPassword, setJoinPassword] = useState('');
+  // Decoded ticket info, populated when the user pastes a valid
+  // ticket. ``role=device`` tickets carry the handle they bind to
+  // and we auto-fill + lock the handle field; ``role=user`` tickets
+  // let the user pick. ``null`` = no ticket yet OR ticket couldn't
+  // be decoded (manual entry path, same as before).
+  const [ticketIntent, setTicketIntent] = useState<{
+    role: 'user' | 'device' | 'agent';
+    bindTo: string;
+    networkName: string;
+  } | null>(null);
 
   // Only redirect when the user actually pressed "Sign in" / "Join" on
   // this screen and the connection then succeeded. The previous
@@ -76,7 +85,6 @@ export default function LoginScreen() {
       if (sessions.length === 0) {
         createSession();
       }
-      getOrCreateVoiceSession();
       router.replace('/(tabs)/chat');
     }
   }, [isConnected, agentName, sessions.length, sessionsHydrated]);
@@ -88,6 +96,46 @@ export default function LoginScreen() {
       setSigninAccountId(accounts[0].id);
     }
   }, [mode, accounts.length]);
+
+  // Decode the ticket whenever it changes so the form can auto-fill
+  // the handle for ``role=device`` tickets (the user only has to type
+  // their password) and clearly show what they're joining. On web,
+  // ``window.desktop`` is undefined → no decode, falls back to the
+  // manual-entry path (same as before).
+  useEffect(() => {
+    const ticket = joinTicket.trim();
+    if (!ticket.startsWith('oa1')) {
+      setTicketIntent(null);
+      return;
+    }
+    // @ts-ignore — runtime-injected by Electron preload
+    const d = (typeof window !== 'undefined') ? (window as any).desktop : null;
+    if (!d || typeof d.decodeTicket !== 'function') {
+      setTicketIntent(null);
+      return;
+    }
+    let cancelled = false;
+    void d.decodeTicket(ticket).then((info: any) => {
+      if (cancelled) return;
+      if (info && typeof info === 'object') {
+        setTicketIntent({
+          role: info.role,
+          bindTo: info.bindTo ?? '',
+          networkName: info.networkName ?? '',
+        });
+        // For device-bound tickets, auto-fill the handle. The user
+        // can't pick a different one anyway — the coordinator
+        // rejects the SRP login if the handle doesn't match
+        // ``bind_to``.
+        if (info.role === 'device' && info.bindTo) {
+          setJoinHandle(info.bindTo);
+        }
+      } else {
+        setTicketIntent(null);
+      }
+    });
+    return () => { cancelled = true; };
+  }, [joinTicket]);
 
   const hasSaved = accounts.length > 0;
 
@@ -262,17 +310,23 @@ export default function LoginScreen() {
               label="Invite ticket"
               value={joinTicket}
               onChangeText={setJoinTicket}
-              placeholder="oa1abcdef… (paste from `openagent network invite`)"
+              placeholder="oa1abcdef… (paste from `openagent invite`)"
               autoCapitalize="none"
               autoCorrect={false}
               mono
               containerStyle={{ marginTop: 0 }}
             />
-            <Text style={styles.fieldHint}>
-              The ticket carries the network name, coordinator address, and invite code in
-              one string. Ask the network owner to run [openagent network invite] and send
-              you the [oa1…] line.
-            </Text>
+            {ticketIntent ? (
+              <Text style={styles.fieldHint}>
+                {ticketIntent.role === 'device' && ticketIntent.bindTo
+                  ? `Joining ${ticketIntent.networkName || 'this network'} as ${ticketIntent.bindTo} — paired device for an existing account.`
+                  : `Joining ${ticketIntent.networkName || 'this network'} — pick a handle below.`}
+              </Text>
+            ) : (
+              <Text style={styles.fieldHint}>
+                Paste the [oa1…] string from [openagent invite].
+              </Text>
+            )}
 
             <Input
               label="Handle"
@@ -283,11 +337,13 @@ export default function LoginScreen() {
               autoCorrect={false}
               mono
               containerStyle={{ marginTop: 12 }}
+              editable={ticketIntent?.role !== 'device'}
             />
-            <Text style={styles.fieldHint}>
-              Choose the handle you want in this network. Ignored for device-pairing
-              tickets (those are bound to an existing handle).
-            </Text>
+            {ticketIntent?.role !== 'device' && (
+              <Text style={styles.fieldHint}>
+                Choose the handle you want in this network.
+              </Text>
+            )}
 
             <Input
               label="Password"

@@ -18,45 +18,93 @@ export function setBaseUrl(host: string, port: number) {
   baseUrl = `http://${host}:${port}`;
 }
 
+// Hard ceiling so a hung loopback stream (Iroh stalls, server crashes
+// mid-response, etc.) can never lock a UI control "in flight" forever.
+// 30s is generous for normal calls — anything longer is a real failure
+// the user should see as an error rather than a permanently-disabled
+// button.
+const REQUEST_TIMEOUT_MS = 30_000;
+
+function withTimeout(init: RequestInit, label: string): RequestInit {
+  if (typeof AbortController === 'undefined') return init;
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(`request timed out after ${REQUEST_TIMEOUT_MS}ms: ${label}`), REQUEST_TIMEOUT_MS);
+  // Clear when the promise settles. We attach this on the returned
+  // init via a sentinel field the caller picks up — simpler than
+  // wrapping every helper in a try/finally.
+  (init as any).__timer = timer;
+  return { ...init, signal: ctrl.signal };
+}
+
+function clearTimer(init: RequestInit): void {
+  const t = (init as any).__timer;
+  if (t) clearTimeout(t);
+}
+
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${baseUrl}${path}`);
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
-  return res.json();
+  const init = withTimeout({}, `GET ${path}`);
+  try {
+    const res = await fetch(`${baseUrl}${path}`, init);
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    return res.json();
+  } finally {
+    clearTimer(init);
+  }
 }
 
 async function put<T>(path: string, body: object): Promise<T> {
-  const res = await fetch(`${baseUrl}${path}`, {
+  const init = withTimeout({
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
-  return res.json();
+  }, `PUT ${path}`);
+  try {
+    const res = await fetch(`${baseUrl}${path}`, init);
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    return res.json();
+  } finally {
+    clearTimer(init);
+  }
 }
 
 async function post<T>(path: string, body: object = {}): Promise<T> {
-  const res = await fetch(`${baseUrl}${path}`, {
+  const init = withTimeout({
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
-  return res.json();
+  }, `POST ${path}`);
+  try {
+    const res = await fetch(`${baseUrl}${path}`, init);
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    return res.json();
+  } finally {
+    clearTimer(init);
+  }
 }
 
 async function del(path: string): Promise<void> {
-  const res = await fetch(`${baseUrl}${path}`, { method: 'DELETE' });
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  const init = withTimeout({ method: 'DELETE' }, `DELETE ${path}`);
+  try {
+    const res = await fetch(`${baseUrl}${path}`, init);
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  } finally {
+    clearTimer(init);
+  }
 }
 
 async function patch<T>(path: string, body: object): Promise<T> {
-  const res = await fetch(`${baseUrl}${path}`, {
+  const init = withTimeout({
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
-  });
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
-  return res.json();
+  }, `PATCH ${path}`);
+  try {
+    const res = await fetch(`${baseUrl}${path}`, init);
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    return res.json();
+  } finally {
+    clearTimer(init);
+  }
 }
 
 // ── Vault API ──
@@ -796,4 +844,100 @@ export async function launchClaudeAuthLogin(body?: {
   email?: string; sso?: boolean; console?: boolean;
 }): Promise<{ ok: boolean; pid?: number; detail?: string; error?: string }> {
   return post('/api/claude/auth/login', body || {});
+}
+
+// ── Network: users, agents, invitations ──
+
+export interface NetworkUser {
+  handle: string;
+  status: string;
+  pake_algo: string;
+  created_at: number;
+}
+
+export interface NetworkAgent {
+  handle: string;
+  node_id: string;
+  label: string | null;
+  owner_handle: string;
+  added_at: number;
+  last_seen: number | null;
+}
+
+export interface NetworkInvitation {
+  code: string;
+  role: 'user' | 'device' | 'agent';
+  bind_to: string;
+  uses_left: number;
+  created_at: number;
+  expires_at: number;
+  created_by: string;
+}
+
+export interface MintInvitationResult {
+  ticket: string;
+  code: string;
+  role: 'user' | 'device' | 'agent';
+  bind_to: string;
+  intent: string;
+  expires_at: number;
+  uses_left: number;
+}
+
+export async function listNetworkUsers(): Promise<NetworkUser[]> {
+  const d = await get<{ users: NetworkUser[] }>('/api/network/users');
+  return d.users || [];
+}
+
+export async function listNetworkAgents(): Promise<NetworkAgent[]> {
+  const d = await get<{ agents: NetworkAgent[] }>('/api/network/agents');
+  return d.agents || [];
+}
+
+export async function listNetworkInvitations(): Promise<NetworkInvitation[]> {
+  const d = await get<{ invitations: NetworkInvitation[] }>('/api/network/invitations');
+  return d.invitations || [];
+}
+
+export async function mintNetworkInvitation(body: {
+  handle?: string;
+  role?: 'user' | 'device' | 'agent';
+  ttl?: number;
+}): Promise<MintInvitationResult> {
+  return post<MintInvitationResult>('/api/network/invitations', body);
+}
+
+async function delJson<T>(path: string): Promise<T> {
+  const init = withTimeout({ method: 'DELETE' }, `DELETE ${path}`);
+  try {
+    const res = await fetch(`${baseUrl}${path}`, init);
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    return res.json();
+  } finally {
+    clearTimer(init);
+  }
+}
+
+export async function revokeNetworkInvitation(code: string): Promise<{ revoked: boolean }> {
+  return delJson(`/api/network/invitations/${encodeURIComponent(code)}`);
+}
+
+export async function patchNetworkUser(
+  handle: string, body: { status?: 'active' | 'suspended' },
+): Promise<{ updated: boolean }> {
+  return patch(`/api/network/users/${encodeURIComponent(handle)}`, body);
+}
+
+export async function deleteNetworkUser(handle: string): Promise<{ deleted: boolean }> {
+  return delJson(`/api/network/users/${encodeURIComponent(handle)}`);
+}
+
+export async function patchNetworkAgent(
+  handle: string, body: { label?: string; owner_handle?: string },
+): Promise<{ updated: boolean }> {
+  return patch(`/api/network/agents/${encodeURIComponent(handle)}`, body);
+}
+
+export async function deleteNetworkAgent(handle: string): Promise<{ deleted: boolean }> {
+  return delJson(`/api/network/agents/${encodeURIComponent(handle)}`);
 }

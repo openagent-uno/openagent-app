@@ -1,7 +1,7 @@
 {
   "name": "openagent-desktop",
   "description": "Persistent AI agent framework with MCP tools, long-term memory, and multi-channel support.",
-  "version": "0.13.8",
+  "version": "0.13.11",
   "private": true,
   "productName": "OpenAgent",
   "homepage": "https://openagent.uno/",
@@ -62,8 +62,8 @@
     ],
     "publish": {
       "provider": "github",
-      "owner": "geroale",
-      "repo": "OpenAgent"
+      "owner": "openagent-uno",
+      "repo": "openagent-app"
     },
     "mac": {
       "artifactName": "openagent-app-${version}-macos-${arch}.${ext}",

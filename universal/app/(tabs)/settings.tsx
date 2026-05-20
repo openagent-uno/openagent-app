@@ -20,12 +20,14 @@ import Button from '../../components/Button';
 import Card from '../../components/Card';
 import CategorySidebar from '../../components/CategorySidebar';
 import CronPicker from '../../components/CronPicker';
+import MembersPanel from '../../components/MembersPanel';
 import TabStrip from '../../components/TabStrip';
 import ResponsiveSidebar from '../../components/ResponsiveSidebar';
 import ThemedSwitch from '../../components/ThemedSwitch';
 
 type CategoryId =
   | 'identity'
+  | 'members'
   | 'voice'
   | 'channels'
   | 'dream'
@@ -43,6 +45,7 @@ interface Category {
 
 const CATEGORIES: Category[] = [
   { id: 'identity', label: 'Agent Identity', icon: 'user', description: 'Name and system prompt' },
+  { id: 'members', label: 'Members', icon: 'users', description: 'Users, agents, invitations' },
   { id: 'voice', label: 'Voice', icon: 'mic', description: 'VAD sensitivity for the Voice tab' },
   { id: 'channels', label: 'Channels', icon: 'message-square', description: 'Gateway, Telegram, Discord, WhatsApp' },
   { id: 'dream', label: 'Dream Mode', icon: 'moon', description: 'Nightly reflection' },
@@ -564,9 +567,14 @@ export default function SettingsScreen() {
     </>
   );
 
+  const renderMembers = () => (
+    <MembersPanel />
+  );
+
   const renderCategory = () => {
     switch (activeCategory) {
       case 'identity': return renderIdentity();
+      case 'members': return renderMembers();
       case 'voice': return renderVoice();
       case 'channels': return renderChannels();
       case 'dream': return renderDream();

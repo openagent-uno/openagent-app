@@ -50,13 +50,6 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="voice"
-        options={{
-          title: 'Voice',
-          tabBarIcon: ({ color }) => <Feather name="mic" size={18} color={color} />,
-        }}
-      />
-      <Tabs.Screen
         name="memory"
         options={{
           title: 'Memory',
@@ -116,6 +109,19 @@ export default function TabsLayout() {
         options={{
           title: 'Settings',
           tabBarIcon: ({ color }) => <Feather name="settings" size={18} color={color} />,
+        }}
+      />
+      {/*
+        Route stub for the old /members standalone tab. The Members
+        screen now lives inside Settings → Members; this entry keeps
+        any cached deep links from 404ing, and the inner redirect
+        sends the user to /settings.
+      */}
+      <Tabs.Screen
+        name="members"
+        options={{
+          href: null,
+          title: 'Members',
         }}
       />
     </Tabs>
