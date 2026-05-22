@@ -90,7 +90,7 @@ function buildSim(data: GraphData): { nodes: SimNode[]; edges: SimEdge[]; maxDeg
       y: Math.sin(angle) * r,
       vx: 0,
       vy: 0,
-      radius: 6 + Math.min(degree * 1.5, 12),
+      radius: 3 + Math.min(degree * 0.75, 6),
       degree,
       pinned: false,
     };
