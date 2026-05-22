@@ -108,13 +108,20 @@ function tick(nodes: SimNode[], edges: SimEdge[], alpha: number) {
   const N = nodes.length;
   if (N === 0) return;
 
-  // Repulsion (Barnes-Hut would be better for 1000+ nodes, this is fine for 200)
+  // Repulsion — capped to a local radius. With no cutoff every node
+  // repels every other one (O(N²)); past ~200 nodes the cumulative
+  // outward push overpowers gravity and the whole graph explodes into a
+  // scattered cloud, hiding the connected structure no matter how many
+  // edges hold it together. Limiting repulsion to nearby nodes lets the
+  // link springs + gravity actually compose the layout.
   const repulse = 2000 * alpha;
+  const repelRange2 = 240 * 240;
   for (let i = 0; i < N; i++) {
     for (let j = i + 1; j < N; j++) {
       let dx = nodes[j].x - nodes[i].x;
       let dy = nodes[j].y - nodes[i].y;
       let d2 = dx * dx + dy * dy;
+      if (d2 > repelRange2) continue;
       if (d2 < 1) d2 = 1;
       const f = repulse / d2;
       const fx = dx * f;
@@ -137,8 +144,10 @@ function tick(nodes: SimNode[], edges: SimEdge[], alpha: number) {
     if (!t.pinned) { t.vx -= fx; t.vy -= fy; }
   }
 
-  // Center gravity
-  const gravity = 0.01 * alpha;
+  // Center gravity — scaled by node count so large graphs stay bounded;
+  // a 600-node graph needs a far firmer pull to the centre than a
+  // 50-node one, or it drifts apart faster than the springs can gather it.
+  const gravity = (0.01 + N * 0.00005) * alpha;
   for (const n of nodes) {
     if (n.pinned) continue;
     n.vx -= n.x * gravity;
