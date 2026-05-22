@@ -1,21 +1,41 @@
 /**
  * Metro bundler config.
  *
- * We opt out of the newer ``exports`` field resolution because several
+ * Package ``exports``-field resolution is OFF globally: several
  * transitive dependencies (zustand nested under @reactflow/*) ship an
  * ESM ``.mjs`` entrypoint that uses ``import.meta``. Metro can bundle
  * the file but the web runtime serves the result as a plain script, so
  * ``import.meta`` throws ``Cannot use 'import.meta' outside a module``.
- *
- * Falling back to the legacy ``main`` / ``module`` fields picks up the
- * CJS builds, which Metro handles correctly on both web and native.
- * This matches the Expo-blessed escape hatch:
+ * The legacy ``main`` / ``module`` fields pick up the CJS builds, which
+ * Metro handles correctly on both web and native.
  *   https://docs.expo.dev/guides/customizing-metro/#resolution
+ *
+ * Exception: ``shiki`` (syntax highlighting in Markdown) and its
+ * ``@shikijs/*`` subpackages expose their themes/langs ONLY through the
+ * ``exports`` field — with global resolution off Metro can't find
+ * ``@shikijs/themes/<theme>`` and the web build fails. The custom
+ * ``resolveRequest`` below re-enables ``exports`` resolution for just
+ * those packages, leaving every other dependency on the legacy path.
  */
 const { getDefaultConfig } = require('expo/metro-config');
 
 const config = getDefaultConfig(__dirname);
 
 config.resolver.unstable_enablePackageExports = false;
+
+config.resolver.resolveRequest = (context, moduleName, platform) => {
+  if (
+    moduleName === 'shiki' ||
+    moduleName.startsWith('shiki/') ||
+    moduleName.startsWith('@shikijs/')
+  ) {
+    return context.resolveRequest(
+      { ...context, unstable_enablePackageExports: true },
+      moduleName,
+      platform,
+    );
+  }
+  return context.resolveRequest(context, moduleName, platform);
+};
 
 module.exports = config;
