@@ -175,7 +175,10 @@ function escapeTomlString(s: string): string {
   return s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
-/** Idempotent insert/update keyed by ``name``. Returns the stored row.
+/** Idempotent insert/update keyed by ``(name, handle)``. Returns the
+ *  stored row. Two handles on the same network are distinct rows — a
+ *  user invite redeemed under a new handle must not clobber the row a
+ *  prior handle wrote.
  *  When optional address hints are provided they overwrite existing
  *  ones; when omitted, existing hints are preserved (so a re-login from
  *  a ticketless flow doesn't wipe a useful cache). */
@@ -193,7 +196,7 @@ export function addOrUpdate(
 ): StoredNetwork {
   for (let i = 0; i < store.networks.length; i++) {
     const existing = store.networks[i];
-    if (existing.name === args.name) {
+    if (existing.name === args.name && existing.handle === args.handle) {
       const updated: StoredNetwork = {
         name: args.name,
         networkId: args.networkId,
@@ -228,20 +231,29 @@ export function addOrUpdate(
   return row;
 }
 
-/** Look up a network by human name OR network_id. */
-export function find(store: NetworkStore, nameOrId: string): StoredNetwork | null {
+/** Look up a network by human name OR network_id. When ``handle`` is
+ *  passed, only a row whose handle also matches is returned — this lets
+ *  two handles share one network name (e.g. redeeming a user invite on
+ *  a machine that already joined the network under another handle).
+ *  With no ``handle``, returns the first row matching the name/id. */
+export function find(
+  store: NetworkStore,
+  nameOrId: string,
+  handle?: string,
+): StoredNetwork | null {
   for (const n of store.networks) {
-    if (n.name === nameOrId || n.networkId === nameOrId) {
+    if (n.name !== nameOrId && n.networkId !== nameOrId) continue;
+    if (handle === undefined || n.handle === handle) {
       return n;
     }
   }
   return null;
 }
 
-export function remove(store: NetworkStore, name: string): boolean {
+export function remove(store: NetworkStore, name: string, handle?: string): boolean {
   for (let i = 0; i < store.networks.length; i++) {
     const n = store.networks[i];
-    if (n.name === name) {
+    if (n.name === name && (handle === undefined || n.handle === handle)) {
       store.networks.splice(i, 1);
       try {
         if (fs.existsSync(n.certPath)) fs.unlinkSync(n.certPath);

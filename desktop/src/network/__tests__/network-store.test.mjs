@@ -1,5 +1,7 @@
 // Round-trip the network-store through a tempdir and assert
 // load/save/add/find/remove all behave like the Python user_store.
+// Networks are keyed by (name, handle): two handles can share one
+// network name without colliding.
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -39,6 +41,12 @@ const fById = ns.find(store, 'net-uuid-1');
 assert.ok(fById);
 assert.equal(fById.name, 'home');
 
+// find scoped to a handle: matches its own handle, misses others
+const fByHandle = ns.find(store, 'home', 'alice');
+assert.ok(fByHandle);
+assert.equal(fByHandle.handle, 'alice');
+assert.equal(ns.find(store, 'home', 'bob'), null);
+
 // not found
 assert.equal(ns.find(store, 'nope'), null);
 
@@ -68,7 +76,8 @@ assert.equal(reloaded.networks.length, 0);
 assert.equal(reloaded.activeNetwork, null);
 assert.equal(fs.existsSync(certBefore), false);
 
-// idempotent update keeps addedAt and bumps the rest
+// idempotent update: same (name, handle) updates the row in place and
+// keeps addedAt, bumping the rest.
 const s2 = ns.emptyStore();
 const r1 = ns.addOrUpdate(s2, {
   name: 'home',
@@ -78,6 +87,19 @@ const r1 = ns.addOrUpdate(s2, {
   handle: 'alice',
 });
 const addedAt = r1.addedAt;
+const r1b = ns.addOrUpdate(s2, {
+  name: 'home',
+  networkId: 'net1b',
+  coordinatorNodeId: 'n1b',
+  coordinatorPubkeyHex: 'cc'.repeat(32),
+  handle: 'alice',
+});
+assert.equal(s2.networks.length, 1, 'same (name, handle) updates in place');
+assert.equal(r1b.addedAt, addedAt, 'addedAt preserved on update');
+assert.equal(r1b.networkId, 'net1b');
+
+// Two handles on ONE network name are distinct rows — a user invite
+// redeemed under a new handle must NOT clobber the first handle's row.
 const r2 = ns.addOrUpdate(s2, {
   name: 'home',
   networkId: 'net2',
@@ -85,10 +107,39 @@ const r2 = ns.addOrUpdate(s2, {
   coordinatorPubkeyHex: 'bb'.repeat(32),
   handle: 'bob',
 });
-assert.equal(s2.networks.length, 1);
-assert.equal(r2.addedAt, addedAt, 'addedAt preserved on update');
-assert.equal(r2.networkId, 'net2');
+assert.equal(s2.networks.length, 2, 'distinct handle => distinct row');
 assert.equal(r2.handle, 'bob');
+
+const aliceRow = ns.find(s2, 'home', 'alice');
+const bobRow = ns.find(s2, 'home', 'bob');
+assert.ok(aliceRow && bobRow, 'both handles resolve to their own row');
+assert.equal(aliceRow.networkId, 'net1b');
+assert.equal(bobRow.networkId, 'net2');
+// handle-less find returns the first matching row (alice joined first)
+const firstRow = ns.find(s2, 'home');
+assert.ok(firstRow);
+assert.equal(firstRow.handle, 'alice');
+
+// remove targets one (name, handle) pair, leaving the other intact
+assert.equal(ns.remove(s2, 'home', 'alice'), true);
+assert.equal(s2.networks.length, 1);
+assert.equal(s2.networks[0].handle, 'bob');
+
+// multi-handle membership survives a save + reload round-trip
+const s3 = ns.emptyStore();
+ns.addOrUpdate(s3, {
+  name: 'shared', networkId: 'sid', coordinatorNodeId: 'sn',
+  coordinatorPubkeyHex: 'aa'.repeat(32), handle: 'alice',
+});
+ns.addOrUpdate(s3, {
+  name: 'shared', networkId: 'sid', coordinatorNodeId: 'sn',
+  coordinatorPubkeyHex: 'aa'.repeat(32), handle: 'bob',
+});
+ns.saveStore(s3);
+const s3reloaded = ns.loadStore();
+assert.equal(s3reloaded.networks.length, 2, 'both handles persist across reload');
+assert.ok(ns.find(s3reloaded, 'shared', 'alice'));
+assert.ok(ns.find(s3reloaded, 'shared', 'bob'));
 
 // schema-version bump returns empty
 fs.writeFileSync(ns.storePath(), 'schema_version = 999\n', 'utf-8');

@@ -159,7 +159,12 @@ export async function startNativeLoopback(
   }
 
   const store = loadStore();
-  let net: StoredNetwork | null = networkName ? find(store, networkName) : null;
+  // Look up by (network, handle): a user-invite redemption picks a NEW
+  // handle, so a row left by a different handle on the same network must
+  // NOT be treated as "already joined" — that would route a fresh join
+  // into the re-login path and reject the new handle.
+  let net: StoredNetwork | null =
+    networkName ? find(store, networkName, handle) : null;
 
   const identity = await loadOrCreateIdentity(userIdentityPath());
   const runtime = await startIrohNode(identity.secret);
@@ -238,11 +243,8 @@ export async function startNativeLoopback(
       writeCert(resolvedNet, loginResult.certWire);
       saveStore(store);
     } else {
-      if (net.handle !== handle) {
-        throw new LoginError(
-          `network ${networkName} is bound to ${net.handle}, not ${handle}`,
-        );
-      }
+      // ``net`` matched this exact (network, handle) pair — a returning
+      // login. Refresh the cert.
       // Reuse cached coordinator addresses (from a previous join's
       // ticket) on the refresh-cert path so this dial also skips
       // discovery.
