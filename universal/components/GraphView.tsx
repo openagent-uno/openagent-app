@@ -108,21 +108,23 @@ function tick(nodes: SimNode[], edges: SimEdge[], alpha: number) {
   const N = nodes.length;
   if (N === 0) return;
 
-  // Repulsion — capped to a local radius. With no cutoff every node
-  // repels every other one (O(N²)); past ~200 nodes the cumulative
-  // outward push overpowers gravity and the whole graph explodes into a
-  // scattered cloud, hiding the connected structure no matter how many
-  // edges hold it together. Limiting repulsion to nearby nodes lets the
-  // link springs + gravity actually compose the layout.
+  // Repulsion. Two safeguards keep the layout numerically stable on big
+  // graphs — the shipped version had neither, so a ~600-node graph
+  // diverged outright (positions ran off past 1e20) and never composed,
+  // leaving only scattered, disconnected-looking dots:
+  //   1. range cutoff — a node repels only nearby nodes, so the
+  //      cumulative O(N²) outward push can't overpower gravity;
+  //   2. minimum-distance floor — a close encounter can't inject a huge
+  //      1/d² impulse that the damping is unable to dissipate.
   const repulse = 2000 * alpha;
-  const repelRange2 = 240 * 240;
+  const repelRange2 = 280 * 280;
   for (let i = 0; i < N; i++) {
     for (let j = i + 1; j < N; j++) {
       let dx = nodes[j].x - nodes[i].x;
       let dy = nodes[j].y - nodes[i].y;
       let d2 = dx * dx + dy * dy;
       if (d2 > repelRange2) continue;
-      if (d2 < 1) d2 = 1;
+      if (d2 < 100) d2 = 100;
       const f = repulse / d2;
       const fx = dx * f;
       const fy = dy * f;
@@ -154,12 +156,22 @@ function tick(nodes: SimNode[], edges: SimEdge[], alpha: number) {
     n.vy -= n.y * gravity;
   }
 
-  // Velocity damping + position update
+  // Velocity damping, speed clamp, then position update. The clamp is
+  // the hard backstop against divergence: even a pathological force
+  // pile-up can't move a node more than maxSpeed px in one frame, so the
+  // layout always settles instead of exploding off-screen.
   const damping = 0.88;
+  const maxSpeed = 22;
   for (const n of nodes) {
     if (n.pinned) continue;
     n.vx *= damping;
     n.vy *= damping;
+    const sp = Math.sqrt(n.vx * n.vx + n.vy * n.vy);
+    if (sp > maxSpeed) {
+      const k = maxSpeed / sp;
+      n.vx *= k;
+      n.vy *= k;
+    }
     n.x += n.vx;
     n.y += n.vy;
   }
