@@ -109,9 +109,24 @@ async function patch<T>(path: string, body: object): Promise<T> {
 
 // ── Vault API ──
 
+/** Coerce a note's ``tags`` to a string array. The vault API derives
+ *  tags from YAML frontmatter, where ``tags: a,b,c`` parses as a bare
+ *  scalar string — agents on older builds return that un-normalized,
+ *  and a string reaching ``tags.slice(...).join(...)`` in the UI throws.
+ *  This is the client-side guard; the server also normalizes. */
+function normalizeNote(n: VaultNote): VaultNote {
+  const raw = (n as { tags?: unknown }).tags;
+  const tags = Array.isArray(raw)
+    ? raw.filter((t): t is string => typeof t === 'string')
+    : typeof raw === 'string' && raw
+      ? [raw]
+      : [];
+  return { ...n, tags };
+}
+
 export async function listNotes(): Promise<VaultNote[]> {
   const data = await get<{ notes: VaultNote[] }>('/api/vault/notes');
-  return data.notes;
+  return (data.notes ?? []).map(normalizeNote);
 }
 
 export async function readNote(path: string): Promise<{
@@ -137,7 +152,7 @@ export async function searchNotes(query: string): Promise<VaultNote[]> {
   const data = await get<{ results: VaultNote[] }>(
     `/api/vault/search?q=${encodeURIComponent(query)}`
   );
-  return data.results;
+  return (data.results ?? []).map(normalizeNote);
 }
 
 export async function getGraph(): Promise<GraphData> {
