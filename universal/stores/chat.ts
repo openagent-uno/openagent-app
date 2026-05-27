@@ -3,7 +3,14 @@
  */
 
 import { create } from 'zustand';
-import type { Attachment, ChatMessage, ChatSession, ServerMessage, ToolInfo } from '../../common/types';
+import {
+  toolPhase,
+  type Attachment,
+  type ChatMessage,
+  type ChatSession,
+  type ServerMessage,
+  type ToolInfo,
+} from '../../common/types';
 import type { SessionEntry, SessionRunMessage } from '../services/api';
 import {
   deleteSession as deleteSessionApi,
@@ -301,33 +308,43 @@ export const useChat = create<ChatState>((set, get) => ({
     if (msg.type === 'status') {
       const text = msg.text || '';
 
-      // Try to parse as structured tool event
+      // Try to parse as structured tool event. The server emits
+      // Agno's native ``ToolExecution.to_dict()`` shape — phase
+      // (running / completed / error) is derived locally below.
       let toolInfo: ToolInfo | undefined;
       try {
         const parsed = JSON.parse(text);
-        if (parsed && parsed.tool) toolInfo = parsed as ToolInfo;
+        if (parsed && parsed.tool_name) toolInfo = parsed as ToolInfo;
       } catch { /* plain text status */ }
 
       if (toolInfo) {
+        const phase = toolPhase(toolInfo);
         return {
           sessions: s.sessions.map((ses) => {
             if (ses.id !== msg.session_id) return ses;
-            if (toolInfo!.status === 'running') {
+            if (phase === 'running') {
               return {
                 ...ses,
                 messages: [...ses.messages, {
                   id: genId(),
                   role: 'tool' as const,
-                  text: `Using ${toolInfo!.tool}...`,
+                  text: `Using ${toolInfo!.tool_name}...`,
                   timestamp: Date.now(),
                   toolInfo,
                 }],
               };
             }
+            // ``completed`` or ``error``: locate the matching running
+            // chip (by tool_name) and replace its toolInfo in place.
             const msgs = [...ses.messages];
             let found = false;
             for (let i = msgs.length - 1; i >= 0; i--) {
-              if (msgs[i].toolInfo?.tool === toolInfo!.tool && msgs[i].toolInfo?.status === 'running') {
+              const existing = msgs[i].toolInfo;
+              if (
+                existing
+                && existing.tool_name === toolInfo!.tool_name
+                && toolPhase(existing) === 'running'
+              ) {
                 msgs[i] = { ...msgs[i], toolInfo: toolInfo! };
                 found = true;
                 break;
@@ -337,9 +354,9 @@ export const useChat = create<ChatState>((set, get) => ({
               msgs.push({
                 id: genId(),
                 role: 'tool' as const,
-                text: toolInfo!.status === 'error'
-                  ? `✗ ${toolInfo!.tool} failed`
-                  : `✓ ${toolInfo!.tool} done`,
+                text: phase === 'error'
+                  ? `✗ ${toolInfo!.tool_name} failed`
+                  : `✓ ${toolInfo!.tool_name} done`,
                 timestamp: Date.now(),
                 toolInfo,
               });
@@ -485,14 +502,17 @@ export const useChat = create<ChatState>((set, get) => ({
     const buildToolInfo = (entry: typeof history[0]): ToolInfo | undefined => {
       const name = entry.tool_name;
       if (!name) return undefined;
+      // Agno-native shape — phase is derived in the renderer from
+      // ``tool_call_error`` + ``result`` presence. Errors carry the
+      // message in ``result`` (same convention live wire frames use).
       const isError = !!entry.tool_error;
-      const isDone = !isError && entry.tool_result !== undefined;
       return {
-        tool: name,
-        params: entry.tool_args ?? {},
-        status: isError ? 'error' : isDone ? 'done' : 'running',
-        result: entry.tool_result,
-        error: entry.tool_error,
+        tool_name: name,
+        tool_args: entry.tool_args ?? {},
+        tool_call_error: isError,
+        result: isError
+          ? (entry.tool_error ?? null)
+          : (entry.tool_result ?? null),
       };
     };
     const messages: ChatMessage[] = history.map((entry, i) => {

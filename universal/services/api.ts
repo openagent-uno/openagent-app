@@ -798,17 +798,23 @@ export async function deleteSession(sessionId: string): Promise<void> {
   await del(`/api/sessions/${encodeURIComponent(sessionId)}`);
 }
 
+// Tool-call carrier on a rehydrated message — Agno's native
+// ``ToolExecution.to_dict()`` shape. Phase is derived in the renderer
+// via ``toolPhase(toolInfo)``; the server does not emit a status enum.
 export interface SessionRunMessage {
   id: string;
   role: 'user' | 'assistant' | 'tool';
   text: string;
   timestamp: number;
   toolInfo?: {
-    tool: string;
-    params?: Record<string, any>;
-    status: 'running' | 'done' | 'error';
-    result?: string;
-    error?: string;
+    tool_name: string;
+    tool_call_id?: string;
+    tool_args?: Record<string, any>;
+    tool_call_error?: boolean | null;
+    result?: string | null;
+    // Additional Agno-native fields (metrics, child_run_id, …) pass
+    // through verbatim from the server.
+    [key: string]: any;
   };
   attachments?: { type: 'image' | 'file' | 'voice' | 'video'; path: string; filename: string }[];
   model?: string;

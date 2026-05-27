@@ -3,7 +3,7 @@
  * Works on all platforms (React Native, Web, Electron).
  */
 
-import type { ClientMessage, ServerMessage } from '../../common/types';
+import type { Attachment, ClientMessage, ServerMessage } from '../../common/types';
 
 export type MessageHandler = (msg: ServerMessage) => void;
 
@@ -278,6 +278,7 @@ export class OpenAgentWS {
       source?: 'user_typed' | 'stt' | 'system';
       llmPin?: string;
       systemPrompt?: string;
+      attachments?: Attachment[];
     },
   ): void {
     if (!this.openedSessions.has(sessionId)) {
@@ -302,7 +303,10 @@ export class OpenAgentWS {
         );
       }
     }
-    this.sendTextFinal(sessionId, text, { source: options?.source ?? 'user_typed' });
+    this.sendTextFinal(sessionId, text, {
+      source: options?.source ?? 'user_typed',
+      attachments: options?.attachments,
+    });
   }
 
   sendCommand(
@@ -406,13 +410,23 @@ export class OpenAgentWS {
   sendTextFinal(
     sessionId: string,
     text: string,
-    options?: { source?: 'user_typed' | 'stt' | 'system' },
+    options?: {
+      source?: 'user_typed' | 'stt' | 'system';
+      attachments?: Attachment[];
+    },
   ): void {
+    // Structured attachments — server decodes via wire.py:TextFinal and
+    // forwards to Agent.run_stream(attachments=...), which routes
+    // non-image files to Agno's native files= parameter (no string
+    // injection into the user prompt).
     this.send({
       type: 'text_final',
       session_id: sessionId,
       text,
       source: options?.source ?? 'user_typed',
+      ...(options?.attachments && options.attachments.length
+        ? { attachments: options.attachments }
+        : {}),
     });
   }
 

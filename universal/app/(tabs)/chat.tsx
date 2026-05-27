@@ -534,17 +534,13 @@ export default function ChatScreen() {
     const lastUser = [...activeSession.messages].reverse().find((m) => m.role === 'user');
     if (!lastUser) return;
     const attachments = lastUser.attachments;
-    let payload = lastUser.text;
-    if (attachments && attachments.length) {
-      const lines = attachments.map((a) => `- ${a.type}: ${a.filename} — server path: ${a.path}`);
-      const noun = attachments.length === 1 ? 'a file' : `${attachments.length} files`;
-      const header = `The user attached ${noun}:\n${lines.join('\n')}\nUse the Read tool to inspect ${attachments.length === 1 ? 'it' : 'them'}.`;
-      payload = lastUser.text ? `${header}\n\nUser message: ${lastUser.text}` : header;
-    }
     addUserMessage(activeSessionId, lastUser.text || '(regenerate)', attachments);
-    ws.sendMessage(payload, activeSessionId, {
+    ws.sendMessage(lastUser.text, activeSessionId, {
       llmPin: activeSession?.llmPin,
       systemPrompt: activeSession?.systemPrompt,
+      attachments: attachments?.map((a) => ({
+        type: a.type, path: a.path, filename: a.filename,
+      })),
     });
   }, [ws, activeSessionId, activeSession, addUserMessage]);
 
@@ -596,28 +592,17 @@ export default function ChatScreen() {
     const sendableFiles = pendingFiles.filter((f) => !f.error && f.remotePath);
     if (!text && sendableFiles.length === 0) return;
 
-    let msg = text;
-    const displayMsg = text;
-
     const attachments: Attachment[] = sendableFiles.map((f) => ({
       type: f.kind,
       path: f.remotePath,
       filename: f.filename,
     }));
 
-    if (sendableFiles.length > 0) {
-      const lines = sendableFiles.map(
-        (f) => `- ${f.kind}: ${f.filename} — server path: ${f.remotePath}`,
-      );
-      const noun = sendableFiles.length === 1 ? 'a file' : `${sendableFiles.length} files`;
-      const fileHeader = `The user attached ${noun}:\n${lines.join('\n')}\nUse the Read tool to inspect ${sendableFiles.length === 1 ? 'it' : 'them'}.`;
-      msg = text ? `${fileHeader}\n\nUser message: ${text}` : fileHeader;
-    }
-
-    addUserMessage(activeSessionId, displayMsg, attachments.length ? attachments : undefined);
-    ws.sendMessage(msg, activeSessionId, {
+    addUserMessage(activeSessionId, text, attachments.length ? attachments : undefined);
+    ws.sendMessage(text, activeSessionId, {
       llmPin: activeSession?.llmPin,
       systemPrompt: activeSession?.systemPrompt,
+      attachments: attachments.length ? attachments : undefined,
     });
     setInput('');
     // Drop only the chips we actually sent; keep failed + still-uploading

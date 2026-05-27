@@ -177,12 +177,32 @@ export interface Attachment {
 
 // ── Chat State ──
 
+// Agno-native ``ToolExecution.to_dict()`` shape — the server emits
+// this verbatim on live STATUS frames and on the rehydration endpoint.
+// Phase (running / completed / error) is derived locally in the UI
+// from ``tool_call_error`` + presence of ``result``; the server does
+// not synthesise a status enum on the wire.
+//
+// Additional Agno-native fields (metrics, child_run_id, etc.) ride
+// along through the index signature so future renderers can pick them
+// up without another wire change.
 export interface ToolInfo {
-  tool: string;
-  params?: Record<string, any>;
-  status: 'running' | 'done' | 'error';
-  result?: string;
-  error?: string;
+  tool_name: string;
+  tool_call_id?: string;
+  tool_args?: Record<string, any>;
+  tool_call_error?: boolean | null;
+  result?: string | null;
+  [key: string]: any;
+}
+
+// Derive the chip's visual phase from the Agno-native fields. Errors
+// take precedence (the ``result`` slot carries the error text in error
+// frames — that's how live ``ToolCallErrorEvent`` rides through),
+// otherwise a populated ``result`` flips the chip to "completed".
+export function toolPhase(t: ToolInfo): 'running' | 'completed' | 'error' {
+  if (t.tool_call_error) return 'error';
+  if (t.result !== undefined && t.result !== null) return 'completed';
+  return 'running';
 }
 
 export interface ChatMessage {

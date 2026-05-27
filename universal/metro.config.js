@@ -17,9 +17,20 @@
  * ``resolveRequest`` below re-enables ``exports`` resolution for just
  * those packages, leaving every other dependency on the legacy path.
  */
+const path = require('path');
 const { getDefaultConfig } = require('expo/metro-config');
 
 const config = getDefaultConfig(__dirname);
+
+// ``../common`` lives outside the universal projectRoot. TypeScript
+// resolves it directly so type-only imports compile fine, but Metro
+// only bundles files it's been told to watch. Without this, the first
+// runtime-value import from ``../../common/types`` (e.g. ``toolPhase``)
+// fails to resolve at bundle time even though TypeScript sees the file.
+config.watchFolders = [
+  ...(config.watchFolders || []),
+  path.resolve(__dirname, '..', 'common'),
+];
 
 config.resolver.unstable_enablePackageExports = false;
 

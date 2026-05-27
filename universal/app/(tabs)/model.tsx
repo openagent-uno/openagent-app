@@ -31,7 +31,7 @@ import {
   setBaseUrl,
   getProviders, addProvider, deleteProvider, testProvider,
   listDbModels, deleteDbModel, enableDbModel, disableDbModel,
-  createDbModel, listAvailableModels,
+  createDbModel, updateDbModel, listAvailableModels,
   setClassifierModel, unsetClassifierModel,
   getUsage, getDailyUsage,
   getClaudeStatus, installClaude, launchClaudeAuthLogin,
@@ -92,6 +92,19 @@ export default function ModelScreen() {
   const [addProviderId, setAddProviderId] = useState<number | null>(null);
   const [available, setAvailable] = useState<AvailableModel[]>([]);
   const [loadingAvailable, setLoadingAvailable] = useState(false);
+  // Optional display_name + tier_hint applied to every model registered
+  // from this Add Model session — tier_hint feeds the leader's specialist
+  // picker in Team-as-router. Reset when the dialog closes.
+  const [addName, setAddName] = useState('');
+  const [addTierHint, setAddTierHint] = useState('');
+
+  // Per-row edit panel — only one row's display_name/tier_hint is open at
+  // a time. ``editingModelId`` is the row id; the two draft strings hold
+  // the in-flight values until the user hits save.
+  const [editingModelId, setEditingModelId] = useState<number | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editTierHint, setEditTierHint] = useState('');
+  const [savingEdit, setSavingEdit] = useState(false);
 
   // Usage
   const [usage, setUsage] = useState<UsageData | null>(null);
@@ -241,18 +254,55 @@ export default function ModelScreen() {
 
   const registerModel = async (entry: AvailableModel) => {
     if (addProviderId == null) return;
+    // Empty strings are dropped from the payload so the server stores
+    // NULL — never "" — for routing metadata. Same rule applies to the
+    // edit panel below. The user-supplied ``addName`` overrides the
+    // discovery display_name when present.
+    const name = addName.trim();
+    const tierHint = addTierHint.trim();
     try {
       await createDbModel({
         provider_id: addProviderId,
         model: entry.id,
-        display_name: entry.display_name,
+        display_name: name || entry.display_name || undefined,
         // ``kind`` comes straight from discovery — ``tts-1`` lands as
         // kind=tts, ``whisper-1`` as kind=stt, everything else as llm.
         kind: entry.kind ?? 'llm',
+        ...(tierHint ? { tier_hint: tierHint } : {}),
       });
       await reload();
     } catch (e: any) {
       setError(e?.message || String(e));
+    }
+  };
+
+  const openEditModel = (m: ModelEntry) => {
+    setEditingModelId(m.id);
+    setEditName(m.display_name ?? '');
+    setEditTierHint(m.tier_hint ?? '');
+  };
+
+  const cancelEditModel = () => {
+    setEditingModelId(null);
+    setEditName('');
+    setEditTierHint('');
+  };
+
+  const saveEditModel = async (m: ModelEntry) => {
+    setSavingEdit(true);
+    try {
+      const name = editName.trim();
+      const tier = editTierHint.trim();
+      await updateDbModel(m.id, {
+        display_name: name ? name : null,
+        tier_hint: tier ? tier : null,
+      });
+      await reload();
+      cancelEditModel();
+    } catch (e: any) {
+      setError(e?.message || String(e));
+    } finally {
+      setSavingEdit(false);
     }
   };
 
@@ -592,72 +642,128 @@ export default function ModelScreen() {
                 )}
               </Text>
               <Card padded={false}>
-                {rows.map((m, i) => (
-                  <View key={m.id} style={[styles.row, i > 0 && styles.rowBorder]}>
-                    <View style={styles.rowInfo}>
-                      <Text style={styles.rowTitle}>
-                        <Text style={styles.rowModel}>{m.model}</Text>
-                        {m.kind && m.kind !== 'llm' && (
-                          <>
-                            <Text style={styles.rowSep}>  ·  </Text>
-                            <Text style={styles.kindBadge}>{m.kind.toUpperCase()}</Text>
-                          </>
-                        )}
-                        {m.display_name && (
-                          <>
-                            <Text style={styles.rowSep}>  ·  </Text>
-                            <Text style={styles.rowProvider}>{m.display_name}</Text>
-                          </>
-                        )}
-                        {m.is_classifier && (
-                          <>
-                            <Text style={styles.rowSep}>  ·  </Text>
-                            <Text style={styles.routerTag}>router pool</Text>
-                          </>
-                        )}
-                      </Text>
-                      {p.framework === 'claude-cli' ? (
-                        <Text style={styles.rowMeta}>subscription</Text>
-                      ) : m.kind === 'tts' ? (
-                        <Text style={styles.rowMeta}>
-                          voice: {((m.metadata as Record<string, unknown>)?.voice_id as string) ?? '—'}
-                          {(m.metadata as Record<string, unknown>)?.voice_id_source === 'default' && (
-                            <Text style={styles.rowMetaMuted}> (default)</Text>
+                {rows.map((m, i) => {
+                  const isEditing = editingModelId === m.id;
+                  // Only LLM rows feed the Team-as-router specialist
+                  // picker, so the tier/description editor is hidden
+                  // on tts/stt rows where the field has no consumer.
+                  const editable = (m.kind ?? 'llm') === 'llm';
+                  return (
+                    <View key={m.id}>
+                      <View style={[styles.row, i > 0 && styles.rowBorder]}>
+                        <View style={styles.rowInfo}>
+                          <Text style={styles.rowTitle}>
+                            <Text style={styles.rowModel}>{m.display_name || m.model}</Text>
+                            {m.kind && m.kind !== 'llm' && (
+                              <>
+                                <Text style={styles.rowSep}>  ·  </Text>
+                                <Text style={styles.kindBadge}>{m.kind.toUpperCase()}</Text>
+                              </>
+                            )}
+                            {m.is_classifier && (
+                              <>
+                                <Text style={styles.rowSep}>  ·  </Text>
+                                <Text style={styles.routerTag}>router pool</Text>
+                              </>
+                            )}
+                          </Text>
+                          {m.display_name && (
+                            <Text style={styles.rowModelId}>{m.model}</Text>
                           )}
-                        </Text>
-                      ) : m.kind === 'stt' ? (
-                        <Text style={styles.rowMeta}>transcription</Text>
-                      ) : (m.input_cost_per_million || m.output_cost_per_million) ? (
-                        <Text style={styles.rowMeta}>
-                          ${m.input_cost_per_million ?? '-'} / ${m.output_cost_per_million ?? '-'} per M
-                        </Text>
-                      ) : (
-                        <Text style={styles.rowMeta}>no pricing</Text>
+                          {p.framework === 'claude-cli' ? (
+                            <Text style={styles.rowMeta}>subscription</Text>
+                          ) : m.kind === 'tts' ? (
+                            <Text style={styles.rowMeta}>
+                              voice: {((m.metadata as Record<string, unknown>)?.voice_id as string) ?? '—'}
+                              {(m.metadata as Record<string, unknown>)?.voice_id_source === 'default' && (
+                                <Text style={styles.rowMetaMuted}> (default)</Text>
+                              )}
+                            </Text>
+                          ) : m.kind === 'stt' ? (
+                            <Text style={styles.rowMeta}>transcription</Text>
+                          ) : (m.input_cost_per_million || m.output_cost_per_million) ? (
+                            <Text style={styles.rowMeta}>
+                              ${m.input_cost_per_million ?? '-'} / ${m.output_cost_per_million ?? '-'} per M
+                            </Text>
+                          ) : (
+                            <Text style={styles.rowMeta}>no pricing</Text>
+                          )}
+                          {m.tier_hint && (
+                            <Text style={styles.rowTierHint}>{m.tier_hint}</Text>
+                          )}
+                        </View>
+                        {editable && (
+                          <TouchableOpacity
+                            style={styles.classifierBtn}
+                            onPress={() => (isEditing ? cancelEditModel() : openEditModel(m))}
+                            accessibilityLabel={
+                              isEditing ? 'Close edit panel' : 'Edit tier hint and description'
+                            }
+                          >
+                            <Feather
+                              name="edit-2"
+                              size={13}
+                              color={isEditing ? colors.primary : colors.textMuted}
+                            />
+                          </TouchableOpacity>
+                        )}
+                        {editable && (
+                          <TouchableOpacity
+                            style={styles.classifierBtn}
+                            onPress={() => toggleClassifier(m)}
+                            accessibilityLabel={
+                              m.is_classifier ? 'Unset router classifier' : 'Set as router classifier'
+                            }
+                          >
+                            <Feather
+                              name="git-branch"
+                              size={14}
+                              color={m.is_classifier ? colors.primary : colors.textMuted}
+                            />
+                          </TouchableOpacity>
+                        )}
+                        <TouchableOpacity style={styles.toggleBtn} onPress={() => toggleModel(m)}>
+                          <View style={[styles.toggleDot, m.enabled ? styles.toggleOn : styles.toggleOff]} />
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.removeBtn} onPress={() => removeModel(m)}>
+                          <Feather name="x" size={14} color={colors.textMuted} />
+                        </TouchableOpacity>
+                      </View>
+                      {isEditing && (
+                        <View style={styles.editPanel}>
+                          <Text style={styles.label}>Name</Text>
+                          <TextInput
+                            style={styles.input}
+                            value={editName}
+                            onChangeText={setEditName}
+                            placeholder="Opus (coding)"
+                            placeholderTextColor={colors.textMuted}
+                          />
+                          <Text style={styles.label}>Tier hint</Text>
+                          <TextInput
+                            style={styles.input}
+                            value={editTierHint}
+                            onChangeText={setEditTierHint}
+                            placeholder="best for coding, complex reasoning"
+                            placeholderTextColor={colors.textMuted}
+                          />
+                          <View style={styles.formRow}>
+                            <TouchableOpacity onPress={cancelEditModel} disabled={savingEdit}>
+                              <Text style={{ color: colors.textMuted }}>Cancel</Text>
+                            </TouchableOpacity>
+                            <Button
+                              variant="primary"
+                              size="md"
+                              label={savingEdit ? 'Saving…' : 'Save'}
+                              onPress={() => saveEditModel(m)}
+                              disabled={savingEdit}
+                            />
+                          </View>
+                        </View>
                       )}
                     </View>
-                    {(m.kind ?? 'llm') === 'llm' && (
-                      <TouchableOpacity
-                        style={styles.classifierBtn}
-                        onPress={() => toggleClassifier(m)}
-                        accessibilityLabel={
-                          m.is_classifier ? 'Unset router classifier' : 'Set as router classifier'
-                        }
-                      >
-                        <Feather
-                          name="git-branch"
-                          size={14}
-                          color={m.is_classifier ? colors.primary : colors.textMuted}
-                        />
-                      </TouchableOpacity>
-                    )}
-                    <TouchableOpacity style={styles.toggleBtn} onPress={() => toggleModel(m)}>
-                      <View style={[styles.toggleDot, m.enabled ? styles.toggleOn : styles.toggleOff]} />
-                    </TouchableOpacity>
-                    <TouchableOpacity style={styles.removeBtn} onPress={() => removeModel(m)}>
-                      <Feather name="x" size={14} color={colors.textMuted} />
-                    </TouchableOpacity>
-                  </View>
-                ))}
+                  );
+                })}
               </Card>
             </View>
           );
@@ -682,6 +788,27 @@ export default function ModelScreen() {
 
             {selectedProvider && (
               <>
+                <Text style={styles.label}>Name (optional)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={addName}
+                  onChangeText={setAddName}
+                  placeholder="Opus (coding)"
+                  placeholderTextColor={colors.textMuted}
+                />
+                <Text style={styles.label}>Tier hint (optional)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={addTierHint}
+                  onChangeText={setAddTierHint}
+                  placeholder="best for coding, complex reasoning"
+                  placeholderTextColor={colors.textMuted}
+                />
+                <Text style={styles.hintInline}>
+                  Applied to every model picked in this session. Tier hint
+                  feeds the leader's specialist picker — leave blank to skip.
+                </Text>
+
                 <Text style={styles.label}>
                   Available from {selectedProvider.name} ({selectedProvider.framework})
                 </Text>
@@ -717,6 +844,7 @@ export default function ModelScreen() {
             <View style={[styles.formRow, { marginTop: 10 }]}>
               <TouchableOpacity onPress={() => {
                 setAddingModel(false); setAddProviderId(null); setAvailable([]);
+                setAddName(''); setAddTierHint('');
               }}>
                 <Text style={{ color: colors.textMuted }}>Close</Text>
               </TouchableOpacity>
@@ -845,6 +973,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 11, paddingVertical: 9,
     color: colors.text, fontSize: 13, fontFamily: font.mono,
   },
+  hintInline: {
+    fontSize: 11, color: colors.textMuted, marginTop: 6, marginBottom: 4, lineHeight: 15,
+  },
 
   card: {
     backgroundColor: colors.surface, borderRadius: radius.lg,
@@ -913,11 +1044,23 @@ const styles = StyleSheet.create({
   rowBorder: { borderTopWidth: 1, borderTopColor: colors.borderLight },
   rowInfo: { flex: 1 },
   rowTitle: { fontSize: 13, color: colors.text },
-  rowProvider: { color: colors.textSecondary, fontFamily: font.mono },
   rowSep: { color: colors.textMuted },
   rowModel: { color: colors.text, fontFamily: font.mono, fontWeight: '600' },
   rowMeta: { fontSize: 11, color: colors.textMuted, marginTop: 2, fontFamily: font.mono },
   rowMetaMuted: { color: colors.textMuted, fontStyle: 'italic' },
+  rowTierHint: {
+    fontSize: 11, color: colors.textSecondary, marginTop: 3,
+    fontWeight: '600', letterSpacing: 0.1,
+  },
+  rowModelId: {
+    fontSize: 11, color: colors.textMuted, marginTop: 2,
+    fontFamily: font.mono,
+  },
+  editPanel: {
+    paddingHorizontal: 12, paddingTop: 4, paddingBottom: 12,
+    backgroundColor: colors.inputBg,
+    borderTopWidth: 1, borderTopColor: colors.borderLight,
+  },
 
   toggleBtn: { padding: 6, marginHorizontal: 4 },
   toggleDot: { width: 10, height: 10, borderRadius: 5 },

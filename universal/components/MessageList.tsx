@@ -14,7 +14,12 @@
 import { memo, useState, useMemo } from 'react';
 import Feather from '@expo/vector-icons/Feather';
 import { View, Text, TouchableOpacity, StyleSheet, Platform, Image } from 'react-native';
-import type { Attachment, ChatMessage, ToolInfo } from '../../common/types';
+import {
+  toolPhase,
+  type Attachment,
+  type ChatMessage,
+  type ToolInfo,
+} from '../../common/types';
 import { downloadFile, fileUrl } from '../services/api';
 import Markdown from './Markdown';
 import { colors, font, radius } from '../theme';
@@ -329,7 +334,7 @@ const ToolCard = memo(function ToolCard({
     if (toolInfo) return toolInfo;
     try {
       const j = JSON.parse(fallbackText);
-      if (j && j.tool) return j as ToolInfo;
+      if (j && j.tool_name) return j as ToolInfo;
     } catch { /* not JSON */ }
     return undefined;
   }, [toolInfo, fallbackText]);
@@ -346,10 +351,19 @@ const ToolCard = memo(function ToolCard({
     );
   }
 
-  const isRunning = info.status === 'running';
-  const isError = info.status === 'error';
+  // Phase derived locally from Agno-native fields. ``tool_call_error``
+  // takes precedence; otherwise a populated ``result`` flips us to
+  // "completed" and bare frames render as "running".
+  const phase = toolPhase(info);
+  const isRunning = phase === 'running';
+  const isError = phase === 'error';
   const statusColor = isError ? colors.error : isRunning ? colors.warning : colors.success;
   const statusLabel = isRunning ? 'running' : isError ? 'error' : 'done';
+  // On error frames the message rides in ``result`` (the durable
+  // carrier — stored ToolExecution rows don't keep the error text).
+  const errorText = isError && typeof info.result === 'string'
+    ? info.result
+    : undefined;
 
   return (
     <TouchableOpacity
@@ -362,18 +376,18 @@ const ToolCard = memo(function ToolCard({
       <View style={styles.toolCardHeader}>
         <View style={[styles.toolStatusDot, { backgroundColor: statusColor }]} />
         <Feather name="tool" size={11} color={colors.textMuted} />
-        <Text style={styles.toolCardName}>{info.tool}</Text>
+        <Text style={styles.toolCardName}>{info.tool_name}</Text>
         <Text style={[styles.toolStatusText, { color: statusColor }]}>{statusLabel}</Text>
         <Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={12} color={colors.textMuted} />
       </View>
 
       {expanded && (
         <View style={styles.toolCardBody}>
-          {info.params && Object.keys(info.params).length > 0 && (
+          {info.tool_args && Object.keys(info.tool_args).length > 0 && (
             <>
               <Text style={styles.toolSectionTitle}>Parameters</Text>
               <View style={styles.toolCodeBlock}>
-                {Object.entries(info.params).map(([k, v]) => (
+                {Object.entries(info.tool_args).map(([k, v]) => (
                   <Text key={k} style={styles.toolCodeText}>
                     <Text style={{ color: colors.primary }}>{k}</Text>
                     <Text style={{ color: colors.textMuted }}>: </Text>
@@ -383,7 +397,7 @@ const ToolCard = memo(function ToolCard({
               </View>
             </>
           )}
-          {info.result && (
+          {!isError && info.result != null && (
             <>
               <Text style={styles.toolSectionTitle}>Result</Text>
               <View style={styles.toolCodeBlock}>
@@ -393,12 +407,12 @@ const ToolCard = memo(function ToolCard({
               </View>
             </>
           )}
-          {info.error && (
+          {errorText && (
             <>
               <Text style={[styles.toolSectionTitle, { color: colors.error }]}>Error</Text>
               <View style={[styles.toolCodeBlock, { borderColor: colors.errorBorder }]}>
                 <Text style={[styles.toolCodeText, { color: colors.error }]}>
-                  {typeof info.error === 'string' ? info.error : JSON.stringify(info.error)}
+                  {errorText}
                 </Text>
               </View>
             </>
