@@ -3,17 +3,18 @@ import { colors, font, radius } from '../../theme';
  * Model screen — v0.12 vocabulary.
  *
  * Three concepts on this screen:
- *   - **provider row** (anthropic+agno, anthropic+claude-cli, openai+agno…)
+ *   - **provider row** (anthropic+api-based, anthropic+claude-cli, openai+api-based…)
  *                      — a (name, framework) pair in the ``providers``
  *                      table, keyed on a surrogate integer ``id``. The
  *                      same vendor can exist twice: once with an API key
- *                      for agno dispatch, once without (claude-cli uses
- *                      the local ``claude`` binary / Pro/Max subscription).
+ *                      for API-based dispatch, once without (claude-cli
+ *                      uses the local ``claude`` binary / Pro/Max
+ *                      subscription).
  *   - **model**        (gpt-4o-mini, claude-sonnet-4-6, glm-5…) — the bare
  *                      vendor id. Lives in ``models.model`` with a
  *                      ``provider_id`` FK to ``providers.id``.
  *   - **runtime_id**   the derived composite string used in logs + session
- *                      pins — ``<provider>:<model>`` for agno,
+ *                      pins — ``<provider>:<model>`` for API-based,
  *                      ``claude-cli:<provider>:<model>`` for claude-cli.
  *
  * Add flow: pick a provider row → server does /api/models/available?
@@ -81,7 +82,7 @@ export default function ModelScreen() {
 
   const [addingProv, setAddingProv] = useState(false);
   const [newProvName, setNewProvName] = useState('');
-  const [newProvFramework, setNewProvFramework] = useState<ModelFramework>('agno');
+  const [newProvFramework, setNewProvFramework] = useState<ModelFramework>('api-based');
   const [newProvKey, setNewProvKey] = useState('');
   const [newProvUrl, setNewProvUrl] = useState('');
 
@@ -205,7 +206,7 @@ export default function ModelScreen() {
       });
       setAddingProv(false);
       setNewProvName('');
-      setNewProvFramework('agno');
+      setNewProvFramework('api-based');
       setNewProvKey('');
       setNewProvUrl('');
       await reload();
@@ -393,7 +394,7 @@ export default function ModelScreen() {
     const handleProvNameChange = (text: string) => {
       setNewProvName(text);
       if (text.trim().toLowerCase() !== 'anthropic' && newProvFramework === 'claude-cli') {
-        setNewProvFramework('agno');
+        setNewProvFramework('api-based');
       }
     };
 
@@ -402,7 +403,7 @@ export default function ModelScreen() {
         <Text style={styles.sectionTitle}>Providers</Text>
         <Text style={styles.hint}>
           Each row is a (vendor, framework) pair — the same vendor can be added twice:
-          once with an API key (Agno dispatch) and once without (claude-cli subscription).
+          once with an API key (API dispatch) and once without (claude-cli subscription).
         </Text>
 
         {/* Claude CLI binary + auth status */}
@@ -492,14 +493,15 @@ export default function ModelScreen() {
                   style={[styles.chip, newProvName === p && styles.chipActive]}
                   onPress={() => {
                     setNewProvName(p);
-                    // Anthropic defaults to claude-cli unless an agno row
-                    // already exists; audio-only vendors default to litellm.
+                    // Anthropic defaults to claude-cli unless an
+                    // API-based row already exists; audio-only vendors
+                    // default to litellm.
                     if (p === 'anthropic' && !existingKeys.has('anthropic:claude-cli')) {
                       setNewProvFramework('claude-cli');
                     } else if (AUDIO_ONLY_VENDORS.has(p)) {
                       setNewProvFramework('litellm');
                     } else {
-                      setNewProvFramework('agno');
+                      setNewProvFramework('api-based');
                     }
                   }}
                 >
@@ -510,10 +512,10 @@ export default function ModelScreen() {
             <Text style={styles.label}>Framework</Text>
             <View style={styles.chipRow}>
               <TouchableOpacity
-                style={[styles.chip, newProvFramework === 'agno' && styles.chipActive]}
-                onPress={() => setNewProvFramework('agno')}
+                style={[styles.chip, newProvFramework === 'api-based' && styles.chipActive]}
+                onPress={() => setNewProvFramework('api-based')}
               >
-                <Text style={[styles.chipText, newProvFramework === 'agno' && styles.chipTextActive]}>agno (API)</Text>
+                <Text style={[styles.chipText, newProvFramework === 'api-based' && styles.chipTextActive]}>API (default)</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.chip, newProvFramework === 'litellm' && styles.chipActive]}
@@ -563,7 +565,7 @@ export default function ModelScreen() {
             <View style={styles.formRow}>
               <TouchableOpacity onPress={() => {
                 setAddingProv(false); setNewProvName('');
-                setNewProvFramework('agno'); setNewProvKey(''); setNewProvUrl('');
+                setNewProvFramework('api-based'); setNewProvKey(''); setNewProvUrl('');
               }}>
                 <Text style={{ color: colors.textMuted }}>Cancel</Text>
               </TouchableOpacity>
@@ -606,7 +608,7 @@ export default function ModelScreen() {
         <Text style={styles.sectionTitle}>Models</Text>
         <Text style={styles.hint}>
           Each row is a (provider_row, model) pair. The smart router classifies each message and dispatches
-          via the provider row's framework — Agno hits the vendor API, claude-cli hits the local Claude binary.
+          via the provider row's framework — API-based hits the vendor API, claude-cli hits the local Claude binary.
         </Text>
 
         {/* Empty-state CTA: no providers → no models possible. */}
@@ -615,7 +617,7 @@ export default function ModelScreen() {
             <Text style={styles.emptyStateTitle}>No providers configured</Text>
             <Text style={styles.emptyStateBody}>
               Add a provider row first. For Anthropic-via-subscription, pick framework=claude-cli
-              (no API key needed). For every other vendor (or Anthropic-via-API), pick framework=agno
+              (no API key needed). For every other vendor (or Anthropic-via-API), pick framework=api-based
               and supply the API key.
             </Text>
             <View style={{ height: 10 }} />

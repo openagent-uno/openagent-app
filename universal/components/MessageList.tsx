@@ -351,9 +351,10 @@ const ToolCard = memo(function ToolCard({
     );
   }
 
-  // Phase derived locally from Agno-native fields. ``tool_call_error``
-  // takes precedence; otherwise a populated ``result`` flips us to
-  // "completed" and bare frames render as "running".
+  // Phase derived locally from the wire tool-execution fields.
+  // ``tool_call_error`` takes precedence; otherwise a populated
+  // ``result`` flips us to "completed" and bare frames render as
+  // "running".
   const phase = toolPhase(info);
   const isRunning = phase === 'running';
   const isError = phase === 'error';

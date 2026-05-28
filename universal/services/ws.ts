@@ -417,8 +417,8 @@ export class OpenAgentWS {
   ): void {
     // Structured attachments — server decodes via wire.py:TextFinal and
     // forwards to Agent.run_stream(attachments=...), which routes
-    // non-image files to Agno's native files= parameter (no string
-    // injection into the user prompt).
+    // non-image files via the agent's native files= parameter (no
+    // string injection into the user prompt).
     this.send({
       type: 'text_final',
       session_id: sessionId,

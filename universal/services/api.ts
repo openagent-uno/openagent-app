@@ -6,7 +6,7 @@ import type {
   VaultNote, GraphData, AgentConfig, ProviderConfig, ModelsResponse,
   UsageData, ModelCatalogEntry, DailyUsageEntry, ScheduledTask,
   CreateScheduledTaskInput, UpdateScheduledTaskInput, MCPEntry,
-  ModelEntry, AvailableModel,
+  ModelEntry, ModelFramework, AvailableModel,
   WorkflowTask, CreateWorkflowInput, UpdateWorkflowInput, WorkflowRun,
   WorkflowStats, BlockTypeSpec, MCPToolkitDescriptor,
   SystemSnapshot,
@@ -444,9 +444,29 @@ export async function triggerRestart(): Promise<{ ok: boolean }> {
 // addModel/updateModel/deleteModel helpers below target the DB-backed
 // ``/api/models/db`` endpoints.
 
+// The server collapsed legacy framework names (``agno`` / ``litellm``)
+// into ``api-based`` in v0.14, but very old caches or third-party
+// integrations could still hand back the legacy literal. Coerce here
+// so callers only ever see canonical ``ModelFramework`` values.
+//
+// @deprecated The ``'agno'`` branch exists only to swallow stale data;
+// remove once v0.13 cohorts are fully off the network.
+function normalizeFramework(raw: unknown): ModelFramework {
+  if (raw === 'agno') return 'api-based';
+  return raw as ModelFramework;
+}
+
+function normalizeProvider(p: ProviderConfig): ProviderConfig {
+  return { ...p, framework: normalizeFramework(p.framework) };
+}
+
+function normalizeModel(m: ModelEntry): ModelEntry {
+  return { ...m, framework: normalizeFramework(m.framework) };
+}
+
 export async function getProviders(): Promise<ProviderConfig[]> {
   const data = await get<{ providers: ProviderConfig[] }>('/api/providers');
-  return data.providers;
+  return (data.providers || []).map(normalizeProvider);
 }
 
 export async function testProvider(
@@ -461,7 +481,7 @@ export async function testProvider(
 
 export async function addProvider(body: {
   name: string;
-  framework: 'agno' | 'claude-cli' | 'litellm';
+  framework: 'api-based' | 'claude-cli' | 'litellm';
   api_key?: string;
   base_url?: string;
   // ``kind`` defaults server-side to ``'llm'``. Audio providers (TTS
@@ -470,13 +490,18 @@ export async function addProvider(body: {
   kind?: 'llm' | 'tts' | 'stt';
   metadata?: Record<string, unknown>;
 }): Promise<{ ok: boolean; provider: ProviderConfig }> {
-  return post('/api/providers', body);
+  const data = await post<{ ok: boolean; provider: ProviderConfig }>('/api/providers', body);
+  return { ...data, provider: normalizeProvider(data.provider) };
 }
 
 export async function updateProvider(
   providerId: number, body: { api_key?: string; base_url?: string; enabled?: boolean },
 ): Promise<{ ok: boolean; provider: ProviderConfig }> {
-  return put(`/api/providers/${providerId}`, body);
+  const data = await put<{ ok: boolean; provider: ProviderConfig }>(
+    `/api/providers/${providerId}`,
+    body,
+  );
+  return { ...data, provider: normalizeProvider(data.provider) };
 }
 
 export async function deleteProvider(providerId: number): Promise<void> {
@@ -707,7 +732,7 @@ export async function installFromMarketplace(
 
 export async function listDbModels(opts?: {
   providerId?: number;
-  framework?: 'agno' | 'claude-cli';
+  framework?: 'api-based' | 'claude-cli';
   enabledOnly?: boolean;
 }): Promise<ModelEntry[]> {
   const params = new URLSearchParams();
@@ -716,7 +741,7 @@ export async function listDbModels(opts?: {
   if (opts?.enabledOnly) params.set('enabled_only', '1');
   const qs = params.toString();
   const data = await get<{ models: ModelEntry[] }>(`/api/models${qs ? `?${qs}` : ''}`);
-  return data.models;
+  return (data.models || []).map(normalizeModel);
 }
 
 export async function createDbModel(entry: {
@@ -732,7 +757,7 @@ export async function createDbModel(entry: {
   kind?: 'llm' | 'tts' | 'stt';
 }): Promise<ModelEntry> {
   const data = await post<{ model: ModelEntry }>('/api/models', entry);
-  return data.model;
+  return normalizeModel(data.model);
 }
 
 // Opt this model into the SmartRouter classifier pool. Multiple rows
@@ -749,7 +774,7 @@ export async function unsetClassifierModel(modelId: number): Promise<ModelEntry>
 
 export async function updateDbModel(modelId: number, patchBody: Partial<ModelEntry>): Promise<ModelEntry> {
   const data = await put<{ model: ModelEntry }>(`/api/models/${modelId}`, patchBody);
-  return data.model;
+  return normalizeModel(data.model);
 }
 
 export async function deleteDbModel(modelId: number): Promise<void> {
@@ -758,12 +783,12 @@ export async function deleteDbModel(modelId: number): Promise<void> {
 
 export async function enableDbModel(modelId: number): Promise<ModelEntry> {
   const data = await post<{ model: ModelEntry }>(`/api/models/${modelId}/enable`, {});
-  return data.model;
+  return normalizeModel(data.model);
 }
 
 export async function disableDbModel(modelId: number): Promise<ModelEntry> {
   const data = await post<{ model: ModelEntry }>(`/api/models/${modelId}/disable`, {});
-  return data.model;
+  return normalizeModel(data.model);
 }
 
 export async function listAvailableModels(providerId: number): Promise<AvailableModel[]> {
@@ -798,7 +823,7 @@ export async function deleteSession(sessionId: string): Promise<void> {
   await del(`/api/sessions/${encodeURIComponent(sessionId)}`);
 }
 
-// Tool-call carrier on a rehydrated message — Agno's native
+// Tool-call carrier on a rehydrated message — the server's native
 // ``ToolExecution.to_dict()`` shape. Phase is derived in the renderer
 // via ``toolPhase(toolInfo)``; the server does not emit a status enum.
 export interface SessionRunMessage {
@@ -812,7 +837,7 @@ export interface SessionRunMessage {
     tool_args?: Record<string, any>;
     tool_call_error?: boolean | null;
     result?: string | null;
-    // Additional Agno-native fields (metrics, child_run_id, …) pass
+    // Additional tool-execution fields (metrics, child_run_id, …) pass
     // through verbatim from the server.
     [key: string]: any;
   };

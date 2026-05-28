@@ -177,15 +177,15 @@ export interface Attachment {
 
 // ── Chat State ──
 
-// Agno-native ``ToolExecution.to_dict()`` shape — the server emits
-// this verbatim on live STATUS frames and on the rehydration endpoint.
-// Phase (running / completed / error) is derived locally in the UI
-// from ``tool_call_error`` + presence of ``result``; the server does
-// not synthesise a status enum on the wire.
+// Server-native ``ToolExecution.to_dict()`` shape — emitted verbatim
+// on live STATUS frames and on the rehydration endpoint. Phase
+// (running / completed / error) is derived locally in the UI from
+// ``tool_call_error`` + presence of ``result``; the server does not
+// synthesise a status enum on the wire.
 //
-// Additional Agno-native fields (metrics, child_run_id, etc.) ride
-// along through the index signature so future renderers can pick them
-// up without another wire change.
+// Additional fields (metrics, child_run_id, etc.) ride along through
+// the index signature so future renderers can pick them up without
+// another wire change.
 export interface ToolInfo {
   tool_name: string;
   tool_call_id?: string;
@@ -195,10 +195,11 @@ export interface ToolInfo {
   [key: string]: any;
 }
 
-// Derive the chip's visual phase from the Agno-native fields. Errors
-// take precedence (the ``result`` slot carries the error text in error
-// frames — that's how live ``ToolCallErrorEvent`` rides through),
-// otherwise a populated ``result`` flips the chip to "completed".
+// Derive the chip's visual phase from the wire tool-execution fields.
+// Errors take precedence (the ``result`` slot carries the error text
+// in error frames — that's how live ``ToolCallErrorEvent`` rides
+// through), otherwise a populated ``result`` flips the chip to
+// "completed".
 export function toolPhase(t: ToolInfo): 'running' | 'completed' | 'error' {
   if (t.tool_call_error) return 'error';
   if (t.result !== undefined && t.result !== null) return 'completed';
@@ -408,9 +409,14 @@ export interface JoinNetworkInput {
 
 // OpenAgent v0.12 vocabulary:
 //   - provider row = (name, framework) pair with a surrogate integer id
-//   - the same vendor can appear twice (e.g. anthropic+agno and anthropic+claude-cli)
+//   - the same vendor can appear twice (e.g. anthropic+api-based and anthropic+claude-cli)
 //   - api_key is NULL for claude-cli rows (subscription auth, no API key)
-export type ModelFramework = 'agno' | 'claude-cli' | 'litellm';
+//
+// The server collapsed the legacy ``'agno'`` and ``'litellm'`` values
+// into ``'api-based'`` in v0.14. The desktop normalises any stray
+// ``'agno'`` payload at the read boundary in services/api.ts so the
+// rest of the app only sees the canonical names below.
+export type ModelFramework = 'api-based' | 'claude-cli' | 'litellm';
 // ``llm`` covers the existing text-generation rows; ``tts`` covers
 // audio synthesis providers (ElevenLabs in v1). The LLM dispatcher
 // filters to ``kind='llm'`` so a TTS row never gets handed a turn.
@@ -491,7 +497,7 @@ export interface MCPEntry {
 //   provider_id   = FK to providers.id — authoritative.
 //   provider_name = the vendor (anthropic, openai, google, zai, …).
 //                   Denormalised on the response for rendering.
-//   framework     = inherited from the provider row ("agno" | "claude-cli").
+//   framework     = inherited from the provider row ("api-based" | "claude-cli").
 //                   Same reason: denormalised for the UI.
 //   model         = bare vendor id (gpt-4o-mini, claude-sonnet-4-6, …).
 //   runtime_id    = derived string used in session pins and classifier

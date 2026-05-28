@@ -120,7 +120,7 @@ export const useChat = create<ChatState>((set, get) => ({
     });
     // Fetch run history from the server when switching to a hydrated
     // session that hasn't loaded its messages yet (e.g. from a
-    // previous run that survived in agno_sessions).
+    // previous run that survived in the server's session store).
     if (state.sessionsHydrated) {
       const ses = state.sessions.find((s) => s.id === id);
       if (ses && ses.messages.length === 0) {
@@ -309,7 +309,7 @@ export const useChat = create<ChatState>((set, get) => ({
       const text = msg.text || '';
 
       // Try to parse as structured tool event. The server emits
-      // Agno's native ``ToolExecution.to_dict()`` shape — phase
+      // its native ``ToolExecution.to_dict()`` shape — phase
       // (running / completed / error) is derived locally below.
       let toolInfo: ToolInfo | undefined;
       try {
@@ -502,9 +502,10 @@ export const useChat = create<ChatState>((set, get) => ({
     const buildToolInfo = (entry: typeof history[0]): ToolInfo | undefined => {
       const name = entry.tool_name;
       if (!name) return undefined;
-      // Agno-native shape — phase is derived in the renderer from
-      // ``tool_call_error`` + ``result`` presence. Errors carry the
-      // message in ``result`` (same convention live wire frames use).
+      // Server-native tool-execution shape — phase is derived in the
+      // renderer from ``tool_call_error`` + ``result`` presence. Errors
+      // carry the message in ``result`` (same convention live wire
+      // frames use).
       const isError = !!entry.tool_error;
       return {
         tool_name: name,
