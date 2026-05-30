@@ -5,7 +5,9 @@
  * not always kick in for nested component paths — keeping an explicit
  * dispatcher file guarantees the right variant loads on each target.
  * The web variant pulls in React Flow (DOM-only); the native variant
- * is a lightweight stub until Phase 7 ships the touch-first editor.
+ * is a touch-first editor backed by an SVG canvas (Phase 7 shipped).
+ * Both expose the same metadata controls — concurrency cap, history
+ * drawer, save/run — so behaviour stays consistent across surfaces.
  */
 
 import { Platform } from 'react-native';

@@ -706,6 +706,11 @@ export interface WorkflowTask {
   trigger_types: string[];
   // Per-block schedule state (one row per ``trigger-schedule`` block).
   schedules: WorkflowSchedule[];
+  // Optional cap on overlapping runs of this workflow. ``null`` means
+  // unlimited (default) — concurrent runs all execute. ``1`` fully
+  // serializes. ``N>1`` admits up to N simultaneous runs; the rest
+  // queue on the executor's per-workflow semaphore.
+  max_concurrent_runs?: number | null;
 }
 
 export interface CreateWorkflowInput {
@@ -714,6 +719,7 @@ export interface CreateWorkflowInput {
   nodes?: WorkflowNode[];
   edges?: WorkflowEdge[];
   variables?: Record<string, unknown>;
+  max_concurrent_runs?: number | null;
 }
 
 export type UpdateWorkflowInput = Partial<{
@@ -723,6 +729,7 @@ export type UpdateWorkflowInput = Partial<{
   edges: WorkflowEdge[];
   variables: Record<string, unknown>;
   enabled: boolean;
+  max_concurrent_runs: number | null;
 }>;
 
 // Per-block trace entry appended to workflow_runs.trace_json after

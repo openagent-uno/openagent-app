@@ -90,6 +90,16 @@ function EditorInner({ workflow, onBack, onWorkflowUpdated }: Props) {
   const [lastRunStatus, setLastRunStatus] = useState<string | null>(null);
   const [nodeStatuses, setNodeStatuses] = useState<Record<string, NodeStatus>>({});
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // Empty string ↔ no cap (unlimited). The text input keeps the raw
+  // string so a user can type-and-correct without losing focus.
+  const [maxConcurrentInput, setMaxConcurrentInput] = useState<string>(
+    workflow.max_concurrent_runs != null
+      ? String(workflow.max_concurrent_runs)
+      : '',
+  );
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
 
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const { screenToFlowPosition } = useReactFlow();
@@ -118,7 +128,24 @@ function EditorInner({ workflow, onBack, onWorkflowUpdated }: Props) {
     setVariables(g.variables || {});
     setDirty(false);
     setSelectedNodeId(null);
+    // ``maxConcurrentInput`` is seeded in its OWN effect (below) so a
+    // settings save — which mutates ``workflow.max_concurrent_runs`` on
+    // the parent and re-renders us — cannot retrigger this effect and
+    // wipe unsaved graph edits. Same applies to any future scalar
+    // metadata field: do not depend on it here.
   }, [workflow.id]);
+
+  // Seed/refresh just the concurrency input when the parent prop
+  // changes. Decoupled from the graph-seed effect so saving the cap
+  // mid-edit does not clobber unsaved nodes/edges/variables.
+  useEffect(() => {
+    setMaxConcurrentInput(
+      workflow.max_concurrent_runs != null
+        ? String(workflow.max_concurrent_runs)
+        : '',
+    );
+    setSettingsError(null);
+  }, [workflow.id, workflow.max_concurrent_runs]);
 
   useEffect(() => {
     if (blockTypes.length === 0) void loadBlockTypes();
@@ -280,6 +307,44 @@ function EditorInner({ workflow, onBack, onWorkflowUpdated }: Props) {
     }
   };
 
+  const handleSaveSettings = async () => {
+    setSettingsError(null);
+    const trimmed = maxConcurrentInput.trim();
+    let cap: number | null;
+    if (trimmed === '') {
+      cap = null;
+    } else {
+      const parsed = Number(trimmed);
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        setSettingsError(
+          'Enter a whole number >= 1, or leave empty for unlimited.',
+        );
+        return;
+      }
+      cap = parsed;
+    }
+    setSavingSettings(true);
+    try {
+      const ok = await updateWorkflow(workflow.id, {
+        max_concurrent_runs: cap,
+      });
+      if (ok) {
+        setSettingsOpen(false);
+        const updated = useWorkflows
+          .getState()
+          .workflows.find((w) => w.id === workflow.id);
+        if (updated && onWorkflowUpdated) onWorkflowUpdated(updated);
+      } else {
+        setSettingsError(
+          useWorkflows.getState().error ||
+            'Failed to save concurrency setting.',
+        );
+      }
+    } finally {
+      setSavingSettings(false);
+    }
+  };
+
   const handleRun = async () => {
     // Reset node statuses for the new run, then stream trace entries
     // back onto the canvas as the executor resolves each block.
@@ -375,6 +440,22 @@ function EditorInner({ workflow, onBack, onWorkflowUpdated }: Props) {
             <span style={{ marginLeft: 5 }}>History</span>
           </button>
           <button
+            onClick={() => setSettingsOpen((open) => !open)}
+            style={styles.secondaryBtn as any}
+            title={
+              workflow.max_concurrent_runs == null
+                ? 'Concurrency: unlimited'
+                : `Concurrency: max ${workflow.max_concurrent_runs} at a time`
+            }
+          >
+            <Feather name="sliders" size={12} color={colors.textSecondary} />
+            <span style={{ marginLeft: 5 }}>
+              {workflow.max_concurrent_runs == null
+                ? '∞'
+                : `≤${workflow.max_concurrent_runs}`}
+            </span>
+          </button>
+          <button
             onClick={handleAutoLayout}
             style={styles.secondaryBtn as any}
             title="Auto-layout with dagre"
@@ -420,6 +501,60 @@ function EditorInner({ workflow, onBack, onWorkflowUpdated }: Props) {
       </div>
 
       {saveError && <div style={styles.banner}>{saveError}</div>}
+
+      {settingsOpen && (
+        <div style={styles.settingsPanel as any}>
+          <div style={styles.settingsRow as any}>
+            <div style={styles.settingsLabel as any}>Max concurrent runs</div>
+            <input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={maxConcurrentInput}
+              onChange={(e) => setMaxConcurrentInput(e.target.value)}
+              placeholder="unlimited"
+              style={styles.settingsInput as any}
+              aria-label="Maximum concurrent runs"
+            />
+            <button
+              onClick={() => {
+                void handleSaveSettings();
+              }}
+              disabled={savingSettings}
+              style={
+                {
+                  ...styles.primaryBtn,
+                  opacity: savingSettings ? 0.55 : 1,
+                } as any
+              }
+            >
+              {savingSettings ? 'Saving…' : 'Save'}
+            </button>
+            <button
+              onClick={() => {
+                setSettingsOpen(false);
+                setSettingsError(null);
+                setMaxConcurrentInput(
+                  workflow.max_concurrent_runs != null
+                    ? String(workflow.max_concurrent_runs)
+                    : '',
+                );
+              }}
+              style={styles.secondaryBtn as any}
+            >
+              Cancel
+            </button>
+          </div>
+          <div style={styles.settingsHint as any}>
+            Leave empty for unlimited (default — every triggered run starts
+            immediately). 1 fully serializes. Higher numbers admit that many
+            simultaneous runs; additional ones queue.
+          </div>
+          {settingsError && (
+            <div style={styles.settingsError as any}>{settingsError}</div>
+          )}
+        </div>
+      )}
 
       <div style={styles.main}>
         <BlockPalette blockTypes={blockTypes} />
@@ -660,6 +795,43 @@ const styles: Record<string, any> = {
     color: colors.error,
     fontSize: 11,
     borderBottom: `1px solid ${colors.border}`,
+  },
+  settingsPanel: {
+    padding: '10px 14px',
+    background: colors.surface,
+    borderBottom: `1px solid ${colors.border}`,
+  },
+  settingsRow: {
+    display: 'flex',
+    alignItems: 'center',
+    gap: 8,
+  },
+  settingsLabel: {
+    fontSize: 12,
+    fontWeight: 600,
+    color: colors.text,
+  },
+  settingsInput: {
+    flex: '0 0 110px',
+    padding: '5px 9px',
+    fontSize: 12,
+    fontFamily: 'inherit',
+    border: `1px solid ${colors.border}`,
+    borderRadius: radius.md,
+    background: colors.inputBg,
+    color: colors.text,
+    outline: 'none',
+  },
+  settingsHint: {
+    marginTop: 6,
+    fontSize: 11,
+    color: colors.textMuted,
+    lineHeight: '15px',
+  },
+  settingsError: {
+    marginTop: 6,
+    fontSize: 11,
+    color: colors.error,
   },
   main: {
     flex: 1,

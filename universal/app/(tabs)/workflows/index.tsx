@@ -94,6 +94,11 @@ export default function WorkflowsScreen() {
 
   const [creating, setCreating] = useState(false);
   const [form, setForm] = useState<CreateWorkflowInput>(EMPTY_CREATE);
+  // Concurrency cap input is its own piece of state because empty string
+  // is a meaningful value (unlimited) and the rest of the form holds
+  // strings already.
+  const [maxConcurrentInput, setMaxConcurrentInput] = useState<string>('');
+  const [createError, setCreateError] = useState<string | null>(null);
   const confirm = useConfirm();
 
   useEffect(() => {
@@ -114,8 +119,21 @@ export default function WorkflowsScreen() {
   }, [loadWorkflows]);
 
   const handleCreate = async () => {
+    setCreateError(null);
     const name = form.name.trim();
     if (!name) return;
+    const trimmedCap = maxConcurrentInput.trim();
+    let cap: number | null = null;
+    if (trimmedCap !== '') {
+      const parsed = Number(trimmedCap);
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        setCreateError(
+          'Max concurrent runs must be a whole number ≥ 1, or empty for unlimited.',
+        );
+        return;
+      }
+      cap = parsed;
+    }
     // Seed every new workflow with a manual trigger so it can run
     // from the Run button without the user first opening the editor.
     // They can add a schedule trigger or AI trigger inside the editor
@@ -125,10 +143,12 @@ export default function WorkflowsScreen() {
       name,
       nodes: initialGraphNodes(),
       edges: [],
+      max_concurrent_runs: cap,
     });
     if (created) {
       setCreating(false);
       setForm(EMPTY_CREATE);
+      setMaxConcurrentInput('');
       router.push(`/workflows/${created.id}` as any);
     }
   };
@@ -222,6 +242,9 @@ export default function WorkflowsScreen() {
                     <Text style={styles.blockCount}>
                       {nodeCount} block{nodeCount === 1 ? '' : 's'} ·{' '}
                       {edgeCount} edge{edgeCount === 1 ? '' : 's'}
+                      {wf.max_concurrent_runs != null
+                        ? ` · ≤${wf.max_concurrent_runs} concurrent`
+                        : ''}
                     </Text>
                   </View>
                   <Text style={styles.name}>{wf.name}</Text>
@@ -334,11 +357,24 @@ export default function WorkflowsScreen() {
                   multiline
                 />
               )}
+              <TextInput
+                style={styles.input}
+                value={maxConcurrentInput}
+                onChangeText={(v) => setMaxConcurrentInput(v)}
+                placeholder="Max concurrent runs (empty = unlimited)"
+                placeholderTextColor={colors.textMuted}
+                keyboardType="number-pad"
+                inputMode="numeric"
+              />
               <Text style={styles.createHint}>
                 Starts with a manual trigger so you can Run it right
                 away. Add scheduled or AI triggers from the editor's
-                block palette.
+                block palette. Leave concurrency empty to let every
+                triggered run start immediately; set 1 to serialize.
               </Text>
+              {createError && (
+                <Text style={styles.errorMsg}>{createError}</Text>
+              )}
               <View style={styles.formActions}>
                 <Button
                   variant="ghost"
@@ -347,6 +383,8 @@ export default function WorkflowsScreen() {
                   onPress={() => {
                     setCreating(false);
                     setForm(EMPTY_CREATE);
+                    setMaxConcurrentInput('');
+                    setCreateError(null);
                     clearError();
                   }}
                 />

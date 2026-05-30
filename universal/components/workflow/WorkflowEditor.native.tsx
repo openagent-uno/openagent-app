@@ -19,6 +19,7 @@ import {
   ActivityIndicator,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -74,6 +75,14 @@ export default function WorkflowEditorNative({
   } | null>(null);
   const [lastRunStatus, setLastRunStatus] = useState<string | null>(null);
   const [nodeStatuses, setNodeStatuses] = useState<Record<string, NodeStatus>>({});
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [maxConcurrentInput, setMaxConcurrentInput] = useState<string>(
+    workflow.max_concurrent_runs != null
+      ? String(workflow.max_concurrent_runs)
+      : '',
+  );
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
 
   useEffect(() => {
     const g = workflow.graph || { nodes: [], edges: [], variables: {} };
@@ -83,7 +92,18 @@ export default function WorkflowEditorNative({
     setDirty(false);
     setSelectedId(null);
     setConnectFrom(null);
+    // Concurrency input has its own seed effect so saving the cap
+    // mid-edit can't clobber unsaved canvas state.
   }, [workflow.id]);
+
+  useEffect(() => {
+    setMaxConcurrentInput(
+      workflow.max_concurrent_runs != null
+        ? String(workflow.max_concurrent_runs)
+        : '',
+    );
+    setSettingsError(null);
+  }, [workflow.id, workflow.max_concurrent_runs]);
 
   useEffect(() => {
     if (blockTypes.length === 0) void loadBlockTypes();
@@ -207,6 +227,42 @@ export default function WorkflowEditorNative({
     }
   }, [nodes, edges, variables, workflow.id, updateWorkflow, onWorkflowUpdated]);
 
+  const handleSaveSettings = useCallback(async () => {
+    setSettingsError(null);
+    const trimmed = maxConcurrentInput.trim();
+    let cap: number | null;
+    if (trimmed === '') {
+      cap = null;
+    } else {
+      const parsed = Number(trimmed);
+      if (!Number.isInteger(parsed) || parsed < 1) {
+        setSettingsError('Enter a whole number ≥ 1, or empty for unlimited.');
+        return;
+      }
+      cap = parsed;
+    }
+    setSavingSettings(true);
+    try {
+      const ok = await updateWorkflow(workflow.id, {
+        max_concurrent_runs: cap,
+      });
+      if (ok) {
+        setSettingsOpen(false);
+        const updated = useWorkflows
+          .getState()
+          .workflows.find((w) => w.id === workflow.id);
+        if (updated && onWorkflowUpdated) onWorkflowUpdated(updated);
+      } else {
+        setSettingsError(
+          useWorkflows.getState().error ||
+            'Failed to save concurrency setting.',
+        );
+      }
+    } finally {
+      setSavingSettings(false);
+    }
+  }, [maxConcurrentInput, workflow.id, updateWorkflow, onWorkflowUpdated]);
+
   const handleRun = useCallback(async () => {
     setNodeStatuses({});
     setLastRunStatus('running');
@@ -262,6 +318,22 @@ export default function WorkflowEditorNative({
           <Feather name="clock" size={16} color={colors.textSecondary} />
         </TouchableOpacity>
         <TouchableOpacity
+          onPress={() => setSettingsOpen((open) => !open)}
+          style={styles.concurrencyChip}
+          accessibilityLabel={
+            workflow.max_concurrent_runs == null
+              ? 'Concurrency unlimited'
+              : `Max ${workflow.max_concurrent_runs} concurrent runs`
+          }
+        >
+          <Feather name="sliders" size={12} color={colors.textSecondary} />
+          <Text style={styles.concurrencyChipText}>
+            {workflow.max_concurrent_runs == null
+              ? '∞'
+              : `≤${workflow.max_concurrent_runs}`}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
           onPress={handleSave}
           disabled={!dirty || saving}
           style={[
@@ -297,6 +369,60 @@ export default function WorkflowEditorNative({
       </View>
 
       {saveError ? <Text style={styles.errorBanner}>{saveError}</Text> : null}
+      {settingsOpen ? (
+        <View style={styles.settingsPanel}>
+          <Text style={styles.settingsLabel}>Max concurrent runs</Text>
+          <TextInput
+            style={styles.settingsInput}
+            value={maxConcurrentInput}
+            onChangeText={setMaxConcurrentInput}
+            placeholder="unlimited"
+            placeholderTextColor={colors.textMuted}
+            keyboardType="number-pad"
+            inputMode="numeric"
+          />
+          <View style={styles.settingsActions}>
+            <TouchableOpacity
+              onPress={() => {
+                setSettingsOpen(false);
+                setSettingsError(null);
+                setMaxConcurrentInput(
+                  workflow.max_concurrent_runs != null
+                    ? String(workflow.max_concurrent_runs)
+                    : '',
+                );
+              }}
+              style={styles.settingsCancelBtn}
+            >
+              <Text style={styles.settingsCancelText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => {
+                void handleSaveSettings();
+              }}
+              disabled={savingSettings}
+              style={[
+                styles.settingsSaveBtn,
+                savingSettings && { opacity: 0.55 },
+              ]}
+            >
+              {savingSettings ? (
+                <ActivityIndicator size="small" color={colors.textInverse} />
+              ) : (
+                <Text style={styles.settingsSaveText}>Save</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+          <Text style={styles.settingsHint}>
+            Empty = unlimited (default — every triggered run starts
+            immediately). 1 serializes. Higher numbers admit that many
+            simultaneous runs.
+          </Text>
+          {settingsError ? (
+            <Text style={styles.settingsErrorText}>{settingsError}</Text>
+          ) : null}
+        </View>
+      ) : null}
       {connectFrom ? (
         <View style={styles.connectBanner}>
           <Feather name="link" size={12} color={colors.primary} />
@@ -460,6 +586,82 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(201, 74, 67, 0.08)',
     color: colors.error,
     fontSize: 11,
+  },
+  concurrencyChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  concurrencyChipText: {
+    fontSize: 11,
+    color: colors.textSecondary,
+    fontWeight: '500',
+  },
+  settingsPanel: {
+    padding: 12,
+    backgroundColor: colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    gap: 6,
+  },
+  settingsLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.text,
+  },
+  settingsInput: {
+    backgroundColor: colors.inputBg,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    color: colors.text,
+    fontSize: 12,
+  },
+  settingsActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: 6,
+  },
+  settingsCancelBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  settingsCancelText: {
+    fontSize: 12,
+    color: colors.textSecondary,
+  },
+  settingsSaveBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radius.md,
+    backgroundColor: colors.primary,
+    minWidth: 60,
+    alignItems: 'center',
+  },
+  settingsSaveText: {
+    fontSize: 12,
+    color: colors.textInverse,
+    fontWeight: '600',
+  },
+  settingsHint: {
+    fontSize: 11,
+    color: colors.textMuted,
+    lineHeight: 15,
+  },
+  settingsErrorText: {
+    fontSize: 11,
+    color: colors.error,
   },
   connectBanner: {
     flexDirection: 'row',
