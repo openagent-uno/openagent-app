@@ -5,7 +5,7 @@
 import type {
   VaultNote, GraphData, AgentConfig, ProviderConfig, ModelsResponse,
   UsageData, ModelCatalogEntry, DailyUsageEntry, ScheduledTask,
-  CreateScheduledTaskInput, UpdateScheduledTaskInput, MCPEntry,
+  CreateScheduledTaskInput, UpdateScheduledTaskInput, TaskRun, MCPEntry,
   ModelEntry, ModelFramework, AvailableModel,
   WorkflowTask, CreateWorkflowInput, UpdateWorkflowInput, WorkflowRun,
   WorkflowStats, BlockTypeSpec, MCPToolkitDescriptor,
@@ -167,6 +167,10 @@ export async function getScheduledTasks(enabledOnly: boolean = false): Promise<S
   return data.tasks;
 }
 
+export async function getScheduledTask(id: string): Promise<ScheduledTask> {
+  return get<ScheduledTask>(`/api/scheduled-tasks/${encodeURIComponent(id)}`);
+}
+
 export async function createScheduledTask(input: CreateScheduledTaskInput): Promise<ScheduledTask> {
   return post<ScheduledTask>('/api/scheduled-tasks', input);
 }
@@ -177,6 +181,23 @@ export async function updateScheduledTask(id: string, input: UpdateScheduledTask
 
 export async function deleteScheduledTask(id: string): Promise<void> {
   await del(`/api/scheduled-tasks/${encodeURIComponent(id)}`);
+}
+
+// Per-firing execution history for one scheduled task (newest first).
+// The scheduled-task analogue of ``getWorkflowRuns`` — same query
+// params (limit + optional status filter) and the same envelope shape.
+export async function getScheduledTaskRuns(
+  id: string,
+  opts: { limit?: number; status?: string } = {},
+): Promise<TaskRun[]> {
+  const params = new URLSearchParams();
+  if (opts.limit) params.set('limit', String(opts.limit));
+  if (opts.status) params.set('status', opts.status);
+  const qs = params.toString();
+  const data = await get<{ runs: TaskRun[] }>(
+    `/api/scheduled-tasks/${encodeURIComponent(id)}/runs${qs ? `?${qs}` : ''}`,
+  );
+  return data.runs;
 }
 
 // ── Workflows API ──

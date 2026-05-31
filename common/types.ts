@@ -614,6 +614,28 @@ export type UpdateScheduledTaskInput = Partial<
   Pick<ScheduledTask, 'name' | 'cron_expression' | 'prompt' | 'enabled'>
 >;
 
+// One row in a scheduled task's execution history — the analogue of
+// ``WorkflowRun`` for cron tasks. Persisted server-side in the
+// ``task_runs`` table and served newest-first by
+// ``GET /api/scheduled-tasks/{id}/runs``. A task firing has no block
+// graph, so there is no trace: just the agent's output preview (or the
+// error that aborted it). No 'cancelled' state — a task run either
+// completes, fails, or is reaped to 'failed' on restart.
+export type TaskRunStatus = 'running' | 'success' | 'failed';
+
+export interface TaskRun {
+  id: string;
+  task_id: string;
+  trigger: string; // 'schedule' for a cron fire, 'manual' for a hand-run, …
+  status: TaskRunStatus;
+  started_at: number;
+  finished_at: number | null;
+  output: string | null;
+  error: string | null;
+  started_at_iso?: string;
+  finished_at_iso?: string | null;
+}
+
 // ── Workflows (n8n-style multi-block pipelines) ──
 
 // A workflow is a DAG of blocks (nodes) connected by edges. The
@@ -733,7 +755,7 @@ export type UpdateWorkflowInput = Partial<{
 }>;
 
 // Per-block trace entry appended to workflow_runs.trace_json after
-// each block finishes. Shared between the UI's RunHistoryDrawer and
+// each block finishes. Shared between the UI's RunHistoryContent and
 // the workflow-manager MCP's get_workflow_run tool.
 export interface WorkflowTraceEntry {
   node_id: string;
@@ -803,7 +825,7 @@ export interface MCPToolkitDescriptor {
   tools: MCPToolDescriptor[];
 }
 
-// Stats surface for RunHistoryDrawer + list row sparklines.
+// Stats surface for the run-history view + list row sparklines.
 export interface WorkflowRunSummary {
   id: string;
   status: WorkflowRunStatus;

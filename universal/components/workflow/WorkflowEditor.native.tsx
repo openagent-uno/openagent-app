@@ -6,8 +6,9 @@
  *   - NativeCanvas: SVG + gesture layer for nodes/edges
  *   - Floating "+" button bottom-right opens BlockPaletteNative
  *   - Selected node → PropertiesPanelNative modal
- *   - History button → RunHistoryDrawer (same component as web —
- *     it's RN-friendly enough to share)
+ *   - History button → opens the run-history screen detached
+ *     (``openDetached`` → a window on desktop, a pushed full screen on
+ *     native) instead of an in-editor drawer
  *
  * Same data flow as the web editor: unsaved edits stay local, Save
  * flushes the whole graph via ``updateWorkflow``, Run streams trace
@@ -15,6 +16,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'expo-router';
 import {
   ActivityIndicator,
   StyleSheet,
@@ -36,7 +38,7 @@ import type {
 import BlockPaletteNative from './BlockPaletteNative';
 import NativeCanvas from './NativeCanvas';
 import PropertiesPanelNative from './PropertiesPanelNative';
-import RunHistoryDrawer from './RunHistoryDrawer';
+import { openDetached } from '../../services/windows';
 import { NODE_META } from './nodes-native/nodeMeta';
 
 type NodeStatus = 'idle' | 'running' | 'success' | 'failed';
@@ -59,6 +61,7 @@ export default function WorkflowEditorNative({
     updateWorkflow,
     runWorkflow,
   } = useWorkflows();
+  const router = useRouter();
 
   const [nodes, setNodes] = useState<WorkflowNode[]>([]);
   const [edges, setEdges] = useState<WorkflowEdge[]>([]);
@@ -68,7 +71,6 @@ export default function WorkflowEditorNative({
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [paletteOpen, setPaletteOpen] = useState(false);
-  const [historyOpen, setHistoryOpen] = useState(false);
   const [connectFrom, setConnectFrom] = useState<{
     nodeId: string;
     handle: string;
@@ -312,7 +314,7 @@ export default function WorkflowEditorNative({
           ) : null}
         </View>
         <TouchableOpacity
-          onPress={() => setHistoryOpen(true)}
+          onPress={() => openDetached(router, `workflows/runs/${workflow.id}`)}
           style={styles.iconBtn}
         >
           <Feather name="clock" size={16} color={colors.textSecondary} />
@@ -468,12 +470,6 @@ export default function WorkflowEditorNative({
         onChange={patchNode}
         onDelete={deleteNode}
         onClose={() => setSelectedId(null)}
-      />
-
-      <RunHistoryDrawer
-        workflowId={workflow.id}
-        open={historyOpen}
-        onClose={() => setHistoryOpen(false)}
       />
     </View>
   );

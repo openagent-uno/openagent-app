@@ -1,17 +1,17 @@
 /**
- * RunHistoryDrawer — slide-over panel listing the workflow's last runs
- * with expandable per-block traces.
+ * RunHistoryContent — the workflow run-history body.
  *
- * Lives inside the editor's canvas layer so it doesn't fight with the
- * top bar. Fetches once on open from ``/api/workflows/{id}/runs`` +
- * ``/api/workflows/{id}/stats`` (via the workflows store) so the user
- * doesn't have to click through to each run. Each run is a collapsed
- * header showing status/time/duration; clicking expands to the full
- * trace (one row per block with status dot, input, output, error).
+ * Fetches a workflow's last runs from ``/api/workflows/{id}/runs`` +
+ * ``/stats`` (via the workflows store), merges any in-flight live run on
+ * top, and renders a summary line plus an expandable per-run trace list
+ * (one row per block with status dot, input, output, error).
  *
- * Also renders the live run if one is in progress — tracking
- * ``runs[workflow.id]`` in the store — so the user sees blocks
- * resolve as they execute.
+ * Carries no chrome of its own so it drops straight into the run-history
+ * *screen* (``app/(tabs)/workflows/runs/[id].tsx``) under a
+ * ``DetachedHeader``. Run history used to be an in-editor slide-over
+ * drawer; it now opens as its own window/screen everywhere (the list
+ * rows and the editor's History button both ``openDetached`` to that
+ * route), so the drawer shell was retired and only this body remains.
  */
 
 import Feather from '@expo/vector-icons/Feather';
@@ -33,12 +33,6 @@ import type {
   WorkflowTraceEntry,
 } from '../../../common/types';
 
-interface Props {
-  workflowId: string;
-  open: boolean;
-  onClose: () => void;
-}
-
 const STATUS_COLOR: Record<WorkflowRunStatus, string> = {
   running: '#CC8020',
   success: '#15885E',
@@ -46,7 +40,7 @@ const STATUS_COLOR: Record<WorkflowRunStatus, string> = {
   cancelled: '#55524B',
 };
 
-export default function RunHistoryDrawer({ workflowId, open, onClose }: Props) {
+export function RunHistoryContent({ workflowId }: { workflowId: string }) {
   const stats = useWorkflows((s) => s.stats[workflowId]);
   const liveRun = useWorkflows((s) => s.runs[workflowId]);
   const loadStats = useWorkflows((s) => s.loadStats);
@@ -56,7 +50,6 @@ export default function RunHistoryDrawer({ workflowId, open, onClose }: Props) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -76,7 +69,7 @@ export default function RunHistoryDrawer({ workflowId, open, onClose }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [open, workflowId, loadStats]);
+  }, [workflowId, loadStats]);
 
   // Merge the live run (if any) into the fetched list so in-flight
   // runs appear at the top — even before the first stats refresh.
@@ -86,58 +79,42 @@ export default function RunHistoryDrawer({ workflowId, open, onClose }: Props) {
     return [liveRun, ...others];
   }, [liveRun, runs]);
 
-  if (!open) return null;
-
   return (
-    <div style={styles.overlay}>
-      <div style={styles.backdrop} onClick={onClose} />
-      <View style={styles.drawer}>
-        <View style={styles.header}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.title}>Run history</Text>
-            {stats ? (
-              <Text style={styles.subtitle}>
-                {stats.total_runs} run{stats.total_runs === 1 ? '' : 's'} ·{' '}
-                {(stats.success_rate * 100).toFixed(0)}% success
-                {stats.avg_duration_s != null
-                  ? ` · avg ${stats.avg_duration_s.toFixed(1)}s`
-                  : ''}
-              </Text>
-            ) : (
-              <Text style={styles.subtitle}>&nbsp;</Text>
-            )}
+    <View style={styles.content}>
+      {stats ? (
+        <Text style={styles.summary}>
+          {stats.total_runs} run{stats.total_runs === 1 ? '' : 's'} ·{' '}
+          {(stats.success_rate * 100).toFixed(0)}% success
+          {stats.avg_duration_s != null
+            ? ` · avg ${stats.avg_duration_s.toFixed(1)}s`
+            : ''}
+        </Text>
+      ) : null}
+      <ScrollView style={styles.scroll}>
+        {loading ? (
+          <View style={styles.loadingPane}>
+            <ActivityIndicator size="small" color={colors.textMuted} />
           </View>
-          <TouchableOpacity onPress={onClose} style={styles.closeBtn}>
-            <Feather name="x" size={16} color={colors.textMuted} />
-          </TouchableOpacity>
-        </View>
-
-        <ScrollView style={styles.scroll}>
-          {loading ? (
-            <View style={styles.loadingPane}>
-              <ActivityIndicator size="small" color={colors.textMuted} />
-            </View>
-          ) : error ? (
-            <Text style={styles.errorText}>{error}</Text>
-          ) : displayRuns.length === 0 ? (
-            <Text style={styles.emptyText}>
-              No runs yet. Hit Run to create the first one.
-            </Text>
-          ) : (
-            displayRuns.map((run) => (
-              <RunCard
-                key={run.id}
-                run={run}
-                expanded={expandedId === run.id}
-                onToggle={() =>
-                  setExpandedId(expandedId === run.id ? null : run.id)
-                }
-              />
-            ))
-          )}
-        </ScrollView>
-      </View>
-    </div>
+        ) : error ? (
+          <Text style={styles.errorText}>{error}</Text>
+        ) : displayRuns.length === 0 ? (
+          <Text style={styles.emptyText}>
+            No runs yet. Hit Run to create the first one.
+          </Text>
+        ) : (
+          displayRuns.map((run) => (
+            <RunCard
+              key={run.id}
+              run={run}
+              expanded={expandedId === run.id}
+              onToggle={() =>
+                setExpandedId(expandedId === run.id ? null : run.id)
+              }
+            />
+          ))
+        )}
+      </ScrollView>
+    </View>
   );
 }
 
@@ -228,17 +205,13 @@ function TraceRow({ entry }: { entry: WorkflowTraceEntry }) {
           {entry.input != null && (
             <>
               <Text style={styles.traceLabel}>input</Text>
-              <Text style={styles.traceValue}>
-                {safeJson(entry.input)}
-              </Text>
+              <Text style={styles.traceValue}>{safeJson(entry.input)}</Text>
             </>
           )}
           {entry.output != null && (
             <>
               <Text style={styles.traceLabel}>output</Text>
-              <Text style={styles.traceValue}>
-                {safeJson(entry.output)}
-              </Text>
+              <Text style={styles.traceValue}>{safeJson(entry.output)}</Text>
             </>
           )}
           {entry.error && (
@@ -266,53 +239,13 @@ function safeJson(v: unknown): string {
 }
 
 const styles = StyleSheet.create({
-  overlay: {
-    position: 'absolute',
-    top: 0,
-    right: 0,
-    bottom: 0,
-    left: 0,
-    zIndex: 10,
-    display: 'flex',
-    flexDirection: 'row',
-    pointerEvents: 'auto',
-  } as any,
-  backdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(26, 25, 21, 0.18)',
-  } as any,
-  drawer: {
-    width: 420,
-    maxWidth: '100%',
-    backgroundColor: colors.surface,
-    borderLeftWidth: 1,
-    borderLeftColor: colors.border,
-    display: 'flex',
-    flexDirection: 'column',
-    boxShadow: '-8px 0 24px rgba(26,25,21,0.08)',
-  } as any,
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
-  },
-  title: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: colors.text,
-    fontFamily: font.display,
-    letterSpacing: -0.2,
-  },
-  subtitle: {
+  // Fills its parent (the run-history screen's flex column).
+  content: { flex: 1 },
+  summary: {
     fontSize: 11,
     color: colors.textMuted,
-    marginTop: 2,
-  },
-  closeBtn: {
-    padding: 4,
-    borderRadius: radius.sm,
+    paddingHorizontal: 14,
+    paddingTop: 10,
   },
   scroll: {
     flex: 1,

@@ -37,6 +37,7 @@ import 'reactflow/dist/style.css';
 import Feather from '@expo/vector-icons/Feather';
 import dagre from 'dagre';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'expo-router';
 
 import type {
   WorkflowEdge,
@@ -48,7 +49,7 @@ import { useWorkflows } from '../../stores/workflows';
 import { colors, font, radius } from '../../theme';
 import BlockPalette from './BlockPalette';
 import PropertiesPanel from './PropertiesPanel';
-import RunHistoryDrawer from './RunHistoryDrawer';
+import { openDetached } from '../../services/windows';
 import { nodeTypes } from './nodes/nodeTypes';
 
 interface Props {
@@ -78,6 +79,7 @@ function EditorInner({ workflow, onBack, onWorkflowUpdated }: Props) {
     updateWorkflow,
     runWorkflow,
   } = useWorkflows();
+  const router = useRouter();
 
   // Local graph state — the gateway-persisted shape only flushes on Save.
   const [nodes, setNodes] = useState<RFNode[]>([]);
@@ -89,7 +91,6 @@ function EditorInner({ workflow, onBack, onWorkflowUpdated }: Props) {
   const [saveError, setSaveError] = useState<string | null>(null);
   const [lastRunStatus, setLastRunStatus] = useState<string | null>(null);
   const [nodeStatuses, setNodeStatuses] = useState<Record<string, NodeStatus>>({});
-  const [historyOpen, setHistoryOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   // Empty string ↔ no cap (unlimited). The text input keeps the raw
   // string so a user can type-and-correct without losing focus.
@@ -432,7 +433,7 @@ function EditorInner({ workflow, onBack, onWorkflowUpdated }: Props) {
             </span>
           )}
           <button
-            onClick={() => setHistoryOpen(true)}
+            onClick={() => openDetached(router, `workflows/runs/${workflow.id}`)}
             style={styles.secondaryBtn as any}
             title="Run history"
           >
@@ -604,12 +605,6 @@ function EditorInner({ workflow, onBack, onWorkflowUpdated }: Props) {
           onDelete={deleteSelectedNode}
         />
       </div>
-
-      <RunHistoryDrawer
-        workflowId={workflow.id}
-        open={historyOpen}
-        onClose={() => setHistoryOpen(false)}
-      />
     </div>
   );
 }

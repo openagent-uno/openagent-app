@@ -33,6 +33,7 @@ import { useConfirm } from '../../../components/ConfirmDialog';
 import Button from '../../../components/Button';
 import Card from '../../../components/Card';
 import ThemedSwitch from '../../../components/ThemedSwitch';
+import { openDetached } from '../../../services/windows';
 import type {
   CreateWorkflowInput,
   WorkflowNode,
@@ -149,12 +150,14 @@ export default function WorkflowsScreen() {
       setCreating(false);
       setForm(EMPTY_CREATE);
       setMaxConcurrentInput('');
-      router.push(`/workflows/${created.id}` as any);
+      openDetached(router, `workflows/${created.id}`);
     }
   };
 
   const handleEdit = (wf: WorkflowTask) => {
-    router.push(`/workflows/${wf.id}` as any);
+    // Detached: a separate desktop window, or a full-screen route on
+    // web / native.
+    openDetached(router, `workflows/${wf.id}`);
   };
 
   const handleRun = async (wf: WorkflowTask) => {
@@ -278,6 +281,13 @@ export default function WorkflowsScreen() {
                       void toggleWorkflow(wf.id, v);
                     }}
                   />
+                  <TouchableOpacity
+                    onPress={() => openDetached(router, `workflows/runs/${wf.id}`)}
+                    style={styles.iconBtn}
+                    accessibilityLabel={`Run history for ${wf.name}`}
+                  >
+                    <Feather name="clock" size={14} color={colors.textSecondary} />
+                  </TouchableOpacity>
                   <TouchableOpacity
                     onPress={() => {
                       void handleRun(wf);

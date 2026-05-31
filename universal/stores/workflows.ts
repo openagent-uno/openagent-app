@@ -36,7 +36,7 @@ interface WorkflowsState {
   runs: Record<string, WorkflowRun | null>;
   runningId: string | null;
 
-  // Stats cache for the RunHistoryDrawer + list-row sparkline.
+  // Stats cache for the run-history view + list-row sparkline.
   stats: Record<string, WorkflowStats | null>;
 
   loadWorkflows: () => Promise<void>;

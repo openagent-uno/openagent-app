@@ -40,11 +40,19 @@ export default function Header() {
 
   const segments = useSegments();
   const screenTitle = useMemo(() => {
-    const name = segments.filter((s) => !s.startsWith('(')).pop();
+    const meaningful = segments.filter((s) => !s.startsWith('('));
+    // Skip trailing dynamic segments (``[id]``) so a detached window
+    // titles by its section — "Run History", "Workflows" — rather than
+    // the literal route param.
+    let name = '';
+    for (let i = meaningful.length - 1; i >= 0; i--) {
+      if (!meaningful[i].startsWith('[')) { name = meaningful[i]; break; }
+    }
     if (!name) return '';
     const titles: Record<string, string> = {
       chat: 'Chat', voice: 'Voice', memory: 'Memory',
       mcps: 'MCPs', workflows: 'Workflows', tasks: 'Scheduled',
+      runs: 'Run History',
       model: 'Model', system: 'System', settings: 'Settings',
     };
     return titles[name] ?? name.charAt(0).toUpperCase() + name.slice(1);
