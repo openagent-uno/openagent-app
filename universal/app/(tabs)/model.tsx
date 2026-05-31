@@ -3,19 +3,14 @@ import { colors, font, radius } from '../../theme';
  * Model screen — v0.12 vocabulary.
  *
  * Three concepts on this screen:
- *   - **provider row** (anthropic+api-based, anthropic+claude-cli, openai+api-based…)
+ *   - **provider row** (anthropic+api-based, openai+api-based…)
  *                      — a (name, framework) pair in the ``providers``
- *                      table, keyed on a surrogate integer ``id``. The
- *                      same vendor can exist twice: once with an API key
- *                      for API-based dispatch, once without (claude-cli
- *                      uses the local ``claude`` binary / Pro/Max
- *                      subscription).
+ *                      table, keyed on a surrogate integer ``id``.
  *   - **model**        (gpt-4o-mini, claude-sonnet-4-6, glm-5…) — the bare
  *                      vendor id. Lives in ``models.model`` with a
  *                      ``provider_id`` FK to ``providers.id``.
  *   - **runtime_id**   the derived composite string used in logs + session
- *                      pins — ``<provider>:<model>`` for API-based,
- *                      ``claude-cli:<provider>:<model>`` for claude-cli.
+ *                      pins — ``<provider>:<model>``.
  *
  * Add flow: pick a provider row → server does /api/models/available?
  * provider_id=N to surface the vendor's catalog → multi-pick → POST
@@ -35,7 +30,6 @@ import {
   createDbModel, updateDbModel, listAvailableModels,
   setClassifierModel, unsetClassifierModel,
   getUsage, getDailyUsage,
-  getClaudeStatus, installClaude, launchClaudeAuthLogin,
 } from '../../services/api';
 import Button from '../../components/Button';
 import Card from '../../components/Card';
@@ -114,73 +108,22 @@ export default function ModelScreen() {
 
   const [error, setError] = useState<string | null>(null);
 
-  // Claude CLI status
-  const [claudeStatus, setClaudeStatus] = useState<{
-    binary_ok: boolean; binary_path?: string;
-    auth_ok: boolean; auth_email?: string; auth_type?: string;
-  } | null>(null);
-  const [claudeInstalling, setClaudeInstalling] = useState(false);
-  const [claudeLoginLaunching, setClaudeLoginLaunching] = useState(false);
-
-  const fetchClaudeStatus = useCallback(async () => {
-    if (!connConfig) return;
-    try {
-      const s = await getClaudeStatus();
-      setClaudeStatus(s);
-    } catch {
-      // server may not have the endpoint yet — ignore
-    }
-  }, [connConfig]);
-
-  const handleInstallClaude = async () => {
-    setClaudeInstalling(true);
-    setError(null);
-    try {
-      const r = await installClaude();
-      if (!r.binary_ok) {
-        setError(r.error || 'Install failed');
-      }
-      setClaudeStatus({ binary_ok: r.binary_ok, binary_path: r.binary_path, auth_ok: r.auth_ok, auth_email: r.auth_email, auth_type: r.auth_type });
-    } catch (e: any) {
-      setError(e?.message || String(e));
-    } finally {
-      setClaudeInstalling(false);
-    }
-  };
-
-  const handleLaunchClaudeLogin = async () => {
-    setClaudeLoginLaunching(true);
-    setError(null);
-    try {
-      const r = await launchClaudeAuthLogin();
-      if (!r.ok) {
-        setError(r.error || 'Failed to launch login');
-      }
-    } catch (e: any) {
-      setError(e?.message || String(e));
-    } finally {
-      setClaudeLoginLaunching(false);
-    }
-  };
-
   const reload = useCallback(async () => {
     if (!connConfig) return;
     // Four independent fetches — fire in parallel so the screen doesn't
     // serialise network latency. ``allSettled`` keeps a slow /api/usage
     // from blocking the providers/models panels on first render.
-    const [provs, dbModels, usageRes, dailyRes, claudeRes] = await Promise.allSettled([
+    const [provs, dbModels, usageRes, dailyRes] = await Promise.allSettled([
       getProviders(),
       listDbModels(),
       getUsage(),
       getDailyUsage(costDays),
-      getClaudeStatus(),
     ]);
     if (provs.status === 'fulfilled') setProviders(provs.value || []);
     if (dbModels.status === 'fulfilled') setModels(dbModels.value);
     else setError(dbModels.reason?.message || String(dbModels.reason));
     if (usageRes.status === 'fulfilled') setUsage(usageRes.value);
     if (dailyRes.status === 'fulfilled') setDailyUsage(dailyRes.value);
-    if (claudeRes.status === 'fulfilled') setClaudeStatus(claudeRes.value);
   }, [connConfig, costDays]);
 
   useEffect(() => {
@@ -194,9 +137,7 @@ export default function ModelScreen() {
 
   const submitAddProvider = async () => {
     if (!newProvName.trim()) return;
-    // claude-cli rows carry no api_key (the subprocess uses the Pro/Max
-    // subscription); the backend rejects non-empty keys at the schema.
-    const key = newProvFramework === 'claude-cli' ? undefined : newProvKey.trim() || undefined;
+    const key = newProvKey.trim() || undefined;
     try {
       await addProvider({
         name: newProvName.trim(),
@@ -388,65 +329,14 @@ export default function ModelScreen() {
     const existingKeys = new Set(providers.map((p) => `${p.name}:${p.framework}`));
     const duplicate = newProvName
       && existingKeys.has(`${newProvName}:${newProvFramework}`);
-    // claude-cli dispatches the local `claude` binary, which only speaks
-    // Anthropic — so the framework chip only appears for that vendor.
-    const isAnthropicProv = newProvName.trim().toLowerCase() === 'anthropic';
-    const handleProvNameChange = (text: string) => {
-      setNewProvName(text);
-      if (text.trim().toLowerCase() !== 'anthropic' && newProvFramework === 'claude-cli') {
-        setNewProvFramework('api-based');
-      }
-    };
 
     return (
       <>
         <Text style={styles.sectionTitle}>Providers</Text>
         <Text style={styles.hint}>
-          Each row is a (vendor, framework) pair — the same vendor can be added twice:
-          once with an API key (API dispatch) and once without (claude-cli subscription).
+          Each row is a (vendor, framework) pair. Add a vendor with its API
+          key; audio vendors (TTS/STT) use the litellm framework.
         </Text>
-
-        {/* Claude CLI binary + auth status */}
-        {claudeStatus && (
-          <View style={[styles.card, { marginBottom: 14 }]}>
-            <Text style={styles.providerName}>Claude Code CLI</Text>
-            <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 6, gap: 8 }}>
-              <View style={[styles.statusDot, { backgroundColor: claudeStatus.binary_ok ? '#34C759' : '#FF3B30' }]} />
-              <Text style={styles.statusText}>
-                {claudeStatus.binary_ok
-                  ? `Binary: ${claudeStatus.binary_path || 'found'}`
-                  : 'Binary not found'}
-              </Text>
-            </View>
-            {claudeStatus.binary_ok && (
-              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 8 }}>
-                <View style={[styles.statusDot, { backgroundColor: claudeStatus.auth_ok ? '#34C759' : '#FF9500' }]} />
-                <Text style={styles.statusText}>
-                  {claudeStatus.auth_ok
-                    ? `Logged in: ${claudeStatus.auth_email || claudeStatus.auth_type || 'yes'}`
-                    : 'Not authenticated'}
-                </Text>
-              </View>
-            )}
-            <View style={{ flexDirection: 'row', marginTop: 8, gap: 8 }}>
-              {!claudeStatus.binary_ok ? (
-                <Button
-                  variant="primary" size="sm"
-                  label={claudeInstalling ? 'Installing…' : 'Install Claude CLI'}
-                  onPress={handleInstallClaude}
-                  disabled={claudeInstalling}
-                />
-              ) : !claudeStatus.auth_ok ? (
-                <Button
-                  variant="primary" size="sm"
-                  label={claudeLoginLaunching ? 'Opening browser…' : 'Log in with Anthropic'}
-                  onPress={handleLaunchClaudeLogin}
-                  disabled={claudeLoginLaunching}
-                />
-              ) : null}
-            </View>
-          </View>
-        )}
 
         {providers.map((p) => (
           <View key={p.id} style={styles.card}>
@@ -465,7 +355,7 @@ export default function ModelScreen() {
               </View>
             </View>
             <Text style={styles.keyDisplay}>
-              Key: {p.framework === 'claude-cli' ? 'subscription — no API key' : p.api_key_display}
+              Key: {p.api_key_display}
             </Text>
             {p.base_url && <Text style={styles.keyDisplay}>URL: {p.base_url}</Text>}
             {testResults[p.id] && (
@@ -482,7 +372,7 @@ export default function ModelScreen() {
             <TextInput
               style={[styles.input, { marginBottom: 8 }]}
               value={newProvName}
-              onChangeText={handleProvNameChange}
+              onChangeText={setNewProvName}
               placeholder="Type or pick below"
               placeholderTextColor={colors.textMuted}
             />
@@ -493,12 +383,9 @@ export default function ModelScreen() {
                   style={[styles.chip, newProvName === p && styles.chipActive]}
                   onPress={() => {
                     setNewProvName(p);
-                    // Anthropic defaults to claude-cli unless an
-                    // API-based row already exists; audio-only vendors
-                    // default to litellm.
-                    if (p === 'anthropic' && !existingKeys.has('anthropic:claude-cli')) {
-                      setNewProvFramework('claude-cli');
-                    } else if (AUDIO_ONLY_VENDORS.has(p)) {
+                    // Audio-only vendors default to litellm; everything
+                    // else to api-based.
+                    if (AUDIO_ONLY_VENDORS.has(p)) {
                       setNewProvFramework('litellm');
                     } else {
                       setNewProvFramework('api-based');
@@ -525,35 +412,21 @@ export default function ModelScreen() {
                   litellm (TTS/STT)
                 </Text>
               </TouchableOpacity>
-              {isAnthropicProv && (
-                <TouchableOpacity
-                  style={[styles.chip, newProvFramework === 'claude-cli' && styles.chipActive]}
-                  onPress={() => setNewProvFramework('claude-cli')}
-                >
-                  <Text style={[styles.chipText, newProvFramework === 'claude-cli' && styles.chipTextActive]}>
-                    claude-cli (subscription)
-                  </Text>
-                </TouchableOpacity>
-              )}
             </View>
             {duplicate && (
               <Text style={styles.warnText}>
                 {newProvName} already exists under {newProvFramework}. Pick another framework.
               </Text>
             )}
-            {newProvFramework !== 'claude-cli' && (
-              <>
-                <Text style={styles.label}>API Key</Text>
-                <TextInput
-                  style={styles.input}
-                  value={newProvKey}
-                  onChangeText={setNewProvKey}
-                  placeholder="sk-..."
-                  placeholderTextColor={colors.textMuted}
-                  secureTextEntry
-                />
-              </>
-            )}
+            <Text style={styles.label}>API Key</Text>
+            <TextInput
+              style={styles.input}
+              value={newProvKey}
+              onChangeText={setNewProvKey}
+              placeholder="sk-..."
+              placeholderTextColor={colors.textMuted}
+              secureTextEntry
+            />
             <Text style={styles.label}>Base URL (optional)</Text>
             <TextInput
               style={styles.input}
@@ -608,7 +481,7 @@ export default function ModelScreen() {
         <Text style={styles.sectionTitle}>Models</Text>
         <Text style={styles.hint}>
           Each row is a (provider_row, model) pair. The smart router classifies each message and dispatches
-          via the provider row's framework — API-based hits the vendor API, claude-cli hits the local Claude binary.
+          it to the matching provider's API.
         </Text>
 
         {/* Empty-state CTA: no providers → no models possible. */}
@@ -616,9 +489,8 @@ export default function ModelScreen() {
           <Card>
             <Text style={styles.emptyStateTitle}>No providers configured</Text>
             <Text style={styles.emptyStateBody}>
-              Add a provider row first. For Anthropic-via-subscription, pick framework=claude-cli
-              (no API key needed). For every other vendor (or Anthropic-via-API), pick framework=api-based
-              and supply the API key.
+              Add a provider row first with framework=api-based and supply
+              the API key.
             </Text>
             <View style={{ height: 10 }} />
             <Button
@@ -639,9 +511,6 @@ export default function ModelScreen() {
               <Text style={styles.frameworkHeader}>
                 {p.name}
                 <Text style={styles.frameworkSub}>  ·  {p.framework}</Text>
-                {p.framework === 'claude-cli' && (
-                  <Text style={styles.frameworkSub}>  ·  subscription billing</Text>
-                )}
               </Text>
               <Card padded={false}>
                 {rows.map((m, i) => {
@@ -672,9 +541,7 @@ export default function ModelScreen() {
                           {m.display_name && (
                             <Text style={styles.rowModelId}>{m.model}</Text>
                           )}
-                          {p.framework === 'claude-cli' ? (
-                            <Text style={styles.rowMeta}>subscription</Text>
-                          ) : m.kind === 'tts' ? (
+                          {m.kind === 'tts' ? (
                             <Text style={styles.rowMeta}>
                               voice: {((m.metadata as Record<string, unknown>)?.voice_id as string) ?? '—'}
                               {(m.metadata as Record<string, unknown>)?.voice_id_source === 'default' && (

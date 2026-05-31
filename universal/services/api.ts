@@ -502,7 +502,7 @@ export async function testProvider(
 
 export async function addProvider(body: {
   name: string;
-  framework: 'api-based' | 'claude-cli' | 'litellm';
+  framework: 'api-based' | 'litellm';
   api_key?: string;
   base_url?: string;
   // ``kind`` defaults server-side to ``'llm'``. Audio providers (TTS
@@ -753,7 +753,7 @@ export async function installFromMarketplace(
 
 export async function listDbModels(opts?: {
   providerId?: number;
-  framework?: 'api-based' | 'claude-cli';
+  framework?: 'api-based';
   enabledOnly?: boolean;
 }): Promise<ModelEntry[]> {
   const params = new URLSearchParams();
@@ -889,28 +889,6 @@ export async function updateSessionMetadata(
 
 export async function getSystemSnapshot(): Promise<SystemSnapshot> {
   return get<SystemSnapshot>('/api/system');
-}
-
-// ── Claude Code CLI setup ──
-
-export async function getClaudeStatus(): Promise<{
-  binary_ok: boolean; binary_path: string | null;
-  auth_ok: boolean; auth_email: string | null; auth_type: string | null;
-}> {
-  return get('/api/claude/status');
-}
-
-export async function installClaude(): Promise<{
-  binary_ok: boolean; binary_path?: string;
-  auth_ok: boolean; auth_email?: string; auth_type?: string; error?: string;
-}> {
-  return post('/api/claude/install');
-}
-
-export async function launchClaudeAuthLogin(body?: {
-  email?: string; sso?: boolean; console?: boolean;
-}): Promise<{ ok: boolean; pid?: number; detail?: string; error?: string }> {
-  return post('/api/claude/auth/login', body || {});
 }
 
 // ── Network: users, agents, invitations ──

@@ -409,14 +409,12 @@ export interface JoinNetworkInput {
 
 // OpenAgent v0.12 vocabulary:
 //   - provider row = (name, framework) pair with a surrogate integer id
-//   - the same vendor can appear twice (e.g. anthropic+api-based and anthropic+claude-cli)
-//   - api_key is NULL for claude-cli rows (subscription auth, no API key)
 //
 // The server collapsed the legacy ``'agno'`` and ``'litellm'`` values
 // into ``'api-based'`` in v0.14. The desktop normalises any stray
 // ``'agno'`` payload at the read boundary in services/api.ts so the
 // rest of the app only sees the canonical names below.
-export type ModelFramework = 'api-based' | 'claude-cli' | 'litellm';
+export type ModelFramework = 'api-based' | 'litellm';
 // ``llm`` covers the existing text-generation rows; ``tts`` covers
 // audio synthesis providers (ElevenLabs in v1). The LLM dispatcher
 // filters to ``kind='llm'`` so a TTS row never gets handed a turn.
@@ -497,7 +495,7 @@ export interface MCPEntry {
 //   provider_id   = FK to providers.id — authoritative.
 //   provider_name = the vendor (anthropic, openai, google, zai, …).
 //                   Denormalised on the response for rendering.
-//   framework     = inherited from the provider row ("api-based" | "claude-cli").
+//   framework     = inherited from the provider row ("api-based").
 //                   Same reason: denormalised for the UI.
 //   model         = bare vendor id (gpt-4o-mini, claude-sonnet-4-6, …).
 //   runtime_id    = derived string used in session pins and classifier
