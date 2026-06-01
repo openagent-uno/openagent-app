@@ -102,7 +102,24 @@ export type ClientMessage =
       type: 'interrupt';
       session_id: string;
       reason?: 'user_speech' | 'user_text' | 'manual';
-    };
+    }
+  // ── Interactive terminals (PTY on the gateway host) ──
+  // The "SSH terminal" surface: a real pseudo-terminal on the machine
+  // running the OpenAgent server, driven live from the System tab. Each
+  // ``terminal_id`` is one shell. ``data`` is base64-encoded raw bytes
+  // so colour/cursor control sequences survive the JSON transport.
+  | {
+      type: 'terminal_open';
+      terminal_id: string;
+      cols: number;
+      rows: number;
+      cwd?: string;
+      shell?: string;
+    }
+  | { type: 'terminal_input'; terminal_id: string; data: string }
+  | { type: 'terminal_resize'; terminal_id: string; cols: number; rows: number }
+  | { type: 'terminal_signal'; terminal_id: string; signal: 'INT' | 'TERM' | 'HUP' | 'QUIT' | 'KILL' }
+  | { type: 'terminal_close'; terminal_id: string };
 
 export type ResourceKind = 'mcp' | 'scheduled_task' | 'workflow' | 'vault' | 'config';
 export type ResourceAction = 'created' | 'updated' | 'deleted' | 'changed';
@@ -167,12 +184,40 @@ export type ServerMessage =
       data: string;
       width?: number;
       height?: number;
-    };
+    }
+  // ── Interactive terminals ──
+  // ``terminal_ready`` confirms the PTY spawned (pid + resolved shell).
+  // ``terminal_output`` carries base64 raw bytes for xterm to render.
+  // ``terminal_exit`` fires when the shell ends (one of exit_code/signal
+  // is set). ``terminal_error`` covers open failures (e.g. unsupported
+  // host OS). All are scoped by ``terminal_id``.
+  | { type: 'terminal_ready'; terminal_id: string; pid: number | null; shell: string; cols: number; rows: number; cwd?: string }
+  | { type: 'terminal_output'; terminal_id: string; data: string }
+  | { type: 'terminal_exit'; terminal_id: string; exit_code: number | null; signal: string | null }
+  | { type: 'terminal_error'; terminal_id: string; error: string };
 
 export interface Attachment {
   type: 'image' | 'file' | 'voice' | 'video';
   path: string;
   filename: string;
+}
+
+// ── Interactive terminal ──
+// One live (or recently-closed) PTY shell on the gateway host. Returned
+// by ``GET /api/terminals`` and tracked in the terminals store so the
+// System tab can list sessions Termius-style.
+export interface TerminalInfo {
+  id: string;
+  title: string;
+  shell?: string;
+  cwd?: string;
+  pid?: number | null;
+  /** ``pending`` = open frame sent, awaiting ready; ``running`` = live;
+   *  ``exited`` = shell ended; ``error`` = failed to open. */
+  status: 'pending' | 'running' | 'exited' | 'error';
+  createdAt: number;
+  /** Short epilogue once closed — e.g. "exited (code 0)" or the error. */
+  detail?: string;
 }
 
 // ── Chat State ──

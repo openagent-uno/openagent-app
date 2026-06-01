@@ -8,9 +8,10 @@ import { colors, font, radius } from '../../theme';
  */
 
 import Feather from '@expo/vector-icons/Feather';
+import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet,
+  View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput,
 } from 'react-native';
 import Card from '../../components/Card';
 import CategorySidebar from '../../components/CategorySidebar';
@@ -18,16 +19,19 @@ import TabStrip from '../../components/TabStrip';
 import ResponsiveSidebar from '../../components/ResponsiveSidebar';
 import { useConnection } from '../../stores/connection';
 import { useSystem } from '../../stores/system';
+import { useTerminals } from '../../stores/terminals';
 import { setBaseUrl } from '../../services/api';
-import type { SystemSnapshot } from '../../../common/types';
+import { openDetached } from '../../services/windows';
+import type { SystemSnapshot, TerminalInfo } from '../../../common/types';
 
-type CategoryId = 'overview' | 'resources' | 'processes' | 'network';
+type CategoryId = 'overview' | 'resources' | 'processes' | 'network' | 'terminal';
 
 const CATEGORIES = [
   { id: 'overview' as const, label: 'Overview', icon: 'activity' as const, description: 'Host snapshot' },
   { id: 'resources' as const, label: 'Resources', icon: 'bar-chart-2' as const, description: 'CPU, RAM, disk' },
   { id: 'processes' as const, label: 'Processes', icon: 'list' as const, description: 'Top consumers' },
   { id: 'network' as const, label: 'Network', icon: 'globe' as const, description: 'Throughput, sockets' },
+  { id: 'terminal' as const, label: 'Terminal', icon: 'terminal' as const, description: 'Shell sessions' },
 ];
 
 type ProcessSort = 'cpu' | 'mem' | 'pid';
@@ -187,6 +191,16 @@ export default function SystemScreen() {
     />
   );
 
+  // Terminals don't depend on telemetry — render the launcher even
+  // before (or without) the first system snapshot.
+  if (activeCategory === 'terminal') {
+    return (
+      <ResponsiveSidebar sidebar={sidebar}>
+        <Terminals />
+      </ResponsiveSidebar>
+    );
+  }
+
   // Loading state — first snapshot hasn't arrived yet.
   if (!snapshot) {
     return (
@@ -215,6 +229,8 @@ export default function SystemScreen() {
         />
       );
       case 'network': return <Network snap={snapshot} />;
+      // 'terminal' is handled by an early return above (it needs no
+      // telemetry snapshot), so it never reaches this switch.
     }
   };
 
@@ -684,5 +700,258 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     padding: 12, fontSize: 12, color: colors.textMuted, textAlign: 'center',
+  },
+});
+
+// ── Terminal launcher (Termius-style sessions list) ───────────────────
+
+function termStatusColor(s: TerminalInfo['status']): string {
+  switch (s) {
+    case 'running': return colors.success;
+    case 'pending': return colors.warning;
+    case 'error': return colors.error;
+    default: return colors.textMuted;
+  }
+}
+
+function Terminals() {
+  const router = useRouter();
+  const terminals = useTerminals((s) => s.terminals);
+  const start = useTerminals((s) => s.start);
+  const create = useTerminals((s) => s.create);
+  const closeTerm = useTerminals((s) => s.close);
+  const removeTerm = useTerminals((s) => s.remove);
+  const [cwd, setCwd] = useState('');
+
+  useEffect(() => {
+    void start();
+  }, [start]);
+
+  const openWindow = (id: string, opts?: { cwd?: string; shell?: string }) => {
+    const params = new URLSearchParams();
+    if (opts?.cwd) params.set('cwd', opts.cwd);
+    if (opts?.shell) params.set('shell', opts.shell);
+    const qs = params.toString();
+    openDetached(router, `terminal/${id}${qs ? `?${qs}` : ''}`);
+  };
+
+  const newTerminal = () => {
+    const dir = cwd.trim() || undefined;
+    const id = create({ cwd: dir });
+    openWindow(id, { cwd: dir });
+    setCwd('');
+  };
+
+  const reopen = (t: TerminalInfo) => {
+    // Live shell → re-attach to the same id; a dead one → fresh shell.
+    if (t.status === 'running' || t.status === 'pending') {
+      openWindow(t.id);
+    } else {
+      const id = create({ cwd: t.cwd, shell: t.shell });
+      openWindow(id, { cwd: t.cwd, shell: t.shell });
+    }
+  };
+
+  const sorted = useMemo(
+    () => [...terminals].sort((a, b) => b.createdAt - a.createdAt),
+    [terminals],
+  );
+
+  return (
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      <Text style={styles.title}>Terminal</Text>
+      <Text style={styles.hint}>
+        Open an interactive shell on the host running the OpenAgent server —
+        like an SSH session. Each terminal opens in its own window on desktop,
+        full screen elsewhere.
+      </Text>
+
+      <View style={termStyles.composer}>
+        <View style={termStyles.cwdWrap}>
+          <Feather name="folder" size={13} color={colors.textMuted} style={{ marginRight: 6 }} />
+          <TextInput
+            style={termStyles.cwdInput}
+            value={cwd}
+            onChangeText={setCwd}
+            placeholder="Working directory (optional)"
+            placeholderTextColor={colors.textMuted}
+            autoCapitalize="none"
+            autoCorrect={false}
+            spellCheck={false}
+            onSubmitEditing={newTerminal}
+            returnKeyType="go"
+          />
+        </View>
+        <TouchableOpacity style={termStyles.newBtn} onPress={newTerminal} activeOpacity={0.85}>
+          <Feather name="plus" size={15} color={colors.textInverse} />
+          <Text style={termStyles.newBtnText}>New Terminal</Text>
+        </TouchableOpacity>
+      </View>
+
+      <Text style={styles.sectionTitle}>Sessions</Text>
+      {sorted.length === 0 ? (
+        <Card>
+          <Text style={styles.emptyText}>
+            No terminals yet. Open one above — it spawns a real PTY on the
+            agent's machine.
+          </Text>
+        </Card>
+      ) : (
+        sorted.map((t) => (
+          <TerminalRow
+            key={t.id}
+            t={t}
+            onOpen={() => reopen(t)}
+            onClose={() => closeTerm(t.id)}
+            onRemove={() => removeTerm(t.id)}
+          />
+        ))
+      )}
+      <View style={{ height: 40 }} />
+    </ScrollView>
+  );
+}
+
+function TerminalRow({
+  t,
+  onOpen,
+  onClose,
+  onRemove,
+}: {
+  t: TerminalInfo;
+  onOpen: () => void;
+  onClose: () => void;
+  onRemove: () => void;
+}) {
+  const live = t.status === 'running' || t.status === 'pending';
+  const shellName = t.shell ? t.shell.split('/').pop() : 'shell';
+  const sub = [
+    shellName,
+    t.cwd,
+    t.pid ? `pid ${t.pid}` : null,
+    t.detail,
+  ]
+    .filter(Boolean)
+    .join(' · ');
+
+  return (
+    <View style={termStyles.row}>
+      <View style={[termStyles.rowDot, { backgroundColor: termStatusColor(t.status) }]} />
+      <Feather name="terminal" size={16} color={colors.textSecondary} style={{ marginHorizontal: 10 }} />
+      <View style={{ flex: 1 }}>
+        <Text style={termStyles.rowTitle} numberOfLines={1}>{t.title}</Text>
+        <Text style={termStyles.rowSub} numberOfLines={1}>{sub}</Text>
+      </View>
+      <TouchableOpacity style={termStyles.rowBtn} onPress={onOpen} activeOpacity={0.8}>
+        <Feather name={live ? 'external-link' : 'rotate-cw'} size={12} color={colors.accent} />
+        <Text style={termStyles.rowBtnText}>{live ? 'Open' : 'Reopen'}</Text>
+      </TouchableOpacity>
+      <TouchableOpacity
+        style={termStyles.rowIconBtn}
+        onPress={live ? onClose : onRemove}
+        accessibilityLabel={live ? 'Kill terminal' : 'Remove'}
+        hitSlop={6}
+      >
+        <Feather
+          name={live ? 'x' : 'trash-2'}
+          size={live ? 16 : 13}
+          color={live ? colors.error : colors.textMuted}
+        />
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+const termStyles = StyleSheet.create({
+  composer: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 6,
+    marginBottom: 18,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+  },
+  cwdWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    minWidth: 180,
+    backgroundColor: colors.inputBg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.md,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  cwdInput: {
+    flex: 1,
+    color: colors.text,
+    fontFamily: font.mono,
+    fontSize: 13,
+    padding: 0,
+  },
+  newBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    backgroundColor: colors.primary,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+    borderRadius: radius.md,
+  },
+  newBtnText: {
+    color: colors.textInverse,
+    fontWeight: '700',
+    fontSize: 13,
+    fontFamily: font.sans,
+  },
+  row: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius.lg,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    marginBottom: 8,
+  },
+  rowDot: { width: 8, height: 8, borderRadius: 4 },
+  rowTitle: {
+    fontSize: 13,
+    color: colors.text,
+    fontWeight: '600',
+    fontFamily: font.mono,
+  },
+  rowSub: {
+    fontSize: 11,
+    color: colors.textMuted,
+    marginTop: 2,
+    fontFamily: font.mono,
+  },
+  rowBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: radius.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.inputBg,
+    marginLeft: 8,
+  },
+  rowBtnText: {
+    fontSize: 12,
+    color: colors.accent,
+    fontWeight: '600',
+    fontFamily: font.sans,
+  },
+  rowIconBtn: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 4,
   },
 });

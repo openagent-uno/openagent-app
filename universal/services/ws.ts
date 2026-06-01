@@ -448,6 +448,48 @@ export class OpenAgentWS {
     this.send({ type: 'interrupt', session_id: sessionId, reason });
   }
 
+  // ── Interactive terminals (PTY on the gateway host) ──
+
+  /** Open a new PTY terminal of the given geometry. The gateway replies
+   *  with ``terminal_ready`` then streams ``terminal_output``. */
+  sendTerminalOpen(
+    terminalId: string,
+    opts: { cols: number; rows: number; cwd?: string; shell?: string },
+  ): void {
+    this.send({
+      type: 'terminal_open',
+      terminal_id: terminalId,
+      cols: opts.cols,
+      rows: opts.rows,
+      ...(opts.cwd ? { cwd: opts.cwd } : {}),
+      ...(opts.shell ? { shell: opts.shell } : {}),
+    });
+  }
+
+  /** Feed keystrokes to a terminal. ``dataBase64`` is base64-encoded
+   *  raw bytes (UTF-8 for normal input). */
+  sendTerminalInput(terminalId: string, dataBase64: string): void {
+    this.send({ type: 'terminal_input', terminal_id: terminalId, data: dataBase64 });
+  }
+
+  /** Reflow a terminal after a window/pane resize. */
+  sendTerminalResize(terminalId: string, cols: number, rows: number): void {
+    this.send({ type: 'terminal_resize', terminal_id: terminalId, cols, rows });
+  }
+
+  /** Deliver a signal (e.g. Ctrl-C → INT) to a terminal's foreground job. */
+  sendTerminalSignal(
+    terminalId: string,
+    signal: 'INT' | 'TERM' | 'HUP' | 'QUIT' | 'KILL' = 'INT',
+  ): void {
+    this.send({ type: 'terminal_signal', terminal_id: terminalId, signal });
+  }
+
+  /** Close a terminal (kills the shell on the host). */
+  sendTerminalClose(terminalId: string): void {
+    this.send({ type: 'terminal_close', terminal_id: terminalId });
+  }
+
   onMessage(handler: MessageHandler): () => void {
     this.handlers.add(handler);
     return () => this.handlers.delete(handler);

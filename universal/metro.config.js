@@ -35,6 +35,17 @@ config.watchFolders = [
 config.resolver.unstable_enablePackageExports = false;
 
 config.resolver.resolveRequest = (context, moduleName, platform) => {
+  // xterm.js is DOM-only — the terminal surface uses it on web/Electron
+  // and a line-mode fallback on native. The web variant pulls xterm via
+  // a dynamic ``import()`` that never executes on native, but Metro
+  // would still bundle it; stub it to an empty module off-web so the
+  // native bundle never has to resolve or carry browser-only code.
+  if (
+    platform !== 'web' &&
+    (moduleName === '@xterm/xterm' || moduleName.startsWith('@xterm/'))
+  ) {
+    return { type: 'empty' };
+  }
   if (
     moduleName === 'shiki' ||
     moduleName.startsWith('shiki/') ||

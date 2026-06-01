@@ -891,6 +891,25 @@ export async function getSystemSnapshot(): Promise<SystemSnapshot> {
   return get<SystemSnapshot>('/api/system');
 }
 
+// ── Interactive terminals ──
+
+export interface RawTerminal {
+  terminal_id: string;
+  pid: number | null;
+  shell: string;
+  cwd: string;
+  cols: number;
+  rows: number;
+  running: boolean;
+}
+
+/** List the live PTY terminals this device already has open on the
+ *  gateway host. Used to seed the System tab's terminal list on mount. */
+export async function getTerminals(): Promise<RawTerminal[]> {
+  const data = await get<{ terminals: RawTerminal[] }>('/api/terminals');
+  return data.terminals ?? [];
+}
+
 // ── Network: users, agents, invitations ──
 
 export interface NetworkUser {

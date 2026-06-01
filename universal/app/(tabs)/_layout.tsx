@@ -104,6 +104,18 @@ export default function TabsLayout() {
           tabBarIcon: ({ color }) => <Feather name="activity" size={18} color={color} />,
         }}
       />
+      {/*
+        Detached terminal route group. Hidden from the dock — terminals
+        are launched from the System tab and open in their own window
+        (desktop) or full screen (web / native) via ``openDetached``.
+      */}
+      <Tabs.Screen
+        name="terminal"
+        options={{
+          href: null,
+          title: 'Terminal',
+        }}
+      />
       <Tabs.Screen
         name="settings"
         options={{

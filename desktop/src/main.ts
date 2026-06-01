@@ -226,6 +226,13 @@ function startStaticServer(): Promise<number> {
 
 // ── Window ──
 
+/** Extract a terminal id from a detached route like ``terminal/<id>?cwd=…``. */
+function terminalIdFromRoute(route?: string): string | null {
+  if (!route) return null;
+  const m = route.match(/^terminal\/([^/?#]+)/);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
 function createWindow(route?: string): BrowserWindow {
   const isMac = process.platform === 'darwin';
   const win = new BrowserWindow({
@@ -243,7 +250,12 @@ function createWindow(route?: string): BrowserWindow {
   });
 
   const baseUrl = isDev ? 'http://localhost:8081' : `http://127.0.0.1:${staticPort}`;
-  const url = route ? `${baseUrl}/${route}?child=1` : baseUrl;
+  // Routes may already carry a query string (e.g. ``terminal/<id>?cwd=…``),
+  // so merge ``child=1`` with the right separator instead of always
+  // appending ``?child=1`` — a second ``?`` would swallow the marker.
+  const url = route
+    ? `${baseUrl}/${route}${route.includes('?') ? '&' : '?'}child=1`
+    : baseUrl;
   win.loadURL(url);
 
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -253,6 +265,20 @@ function createWindow(route?: string): BrowserWindow {
 
   win.on('closed', () => {
     childWindows.delete(win);
+    // Closing an OS window destroys its renderer without running React
+    // cleanup, so a terminal window can't send its own ``terminal_close``.
+    // Relay one through the primary window's gateway socket here so the
+    // PTY on the host is reaped instead of lingering until app exit.
+    const terminalId = terminalIdFromRoute(route);
+    if (terminalId && primaryWindowId) {
+      const primary = BrowserWindow.fromId(primaryWindowId);
+      if (primary && !primary.isDestroyed() && primary.webContents.id !== win.webContents.id) {
+        primary.webContents.send(
+          'ws:relay-from-child',
+          JSON.stringify({ type: 'terminal_close', terminal_id: terminalId }),
+        );
+      }
+    }
   });
 
   childWindows.add(win);
