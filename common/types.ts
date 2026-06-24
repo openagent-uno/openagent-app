@@ -618,6 +618,66 @@ export interface GraphData {
   edges: { source: string; target: string }[];
 }
 
+// ── Vault write / move / history / gate ──
+
+// One validation finding surfaced by the gateway when a note is written.
+// ``fixable`` notes can be auto-corrected by ``runVaultDoctor(true)``.
+export interface VaultWarning {
+  rule: string;
+  severity: string;
+  message: string;
+  fixable?: boolean;
+}
+
+// Response of ``PUT /api/vault/notes/{path}`` — the write is validated
+// and git-committed server-side, so the body carries any warnings plus
+// the commit hash (``null`` when nothing changed).
+export interface VaultWriteResult {
+  ok: boolean;
+  path: string;
+  warnings: VaultWarning[];
+  commit: string | null;
+}
+
+// One entry from the vault git log. ``provenance`` is a free-form map
+// whose keys include origin / session / workflow / task / tool.
+export interface VaultCommit {
+  hash: string;
+  subject: string;
+  date: string;
+  author: string;
+  provenance: Record<string, string>;
+}
+
+// ``GET /api/vault/history`` envelope. ``path`` scopes the log to one
+// note/folder; ``null`` for the vault-wide log.
+export interface VaultHistory {
+  commits: VaultCommit[];
+  path: string | null;
+}
+
+// ``GET /api/vault/gate`` report — quality-gate violations grouped by
+// rule. Loosely typed (``by_rule`` / ``stats``) where the shape is
+// open-ended.
+export interface VaultGateViolation {
+  rule: string;
+  severity: string;
+  path: string;
+  message: string;
+  suggestion?: string;
+}
+
+export interface VaultGateReport {
+  ok: boolean;
+  error_count: number;
+  warn_count: number;
+  info_count: number;
+  note_count: number;
+  violations: VaultGateViolation[];
+  by_rule: Record<string, VaultGateViolation[]>;
+  stats: Record<string, unknown>;
+}
+
 export interface HealthResponse {
   status: 'ok';
   agent: string;

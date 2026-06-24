@@ -9,7 +9,8 @@
  */
 
 import { useEffect } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import Feather from '@expo/vector-icons/Feather';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useRouter } from 'expo-router';
 import GraphView from '../../../components/GraphView';
 import ResponsiveSidebar from '../../../components/ResponsiveSidebar';
@@ -18,7 +19,7 @@ import { useConnection } from '../../../stores/connection';
 import { useEvents } from '../../../stores/events';
 import { useVault } from '../../../stores/vault';
 import { setBaseUrl } from '../../../services/api';
-import { colors } from '../../../theme';
+import { colors, radius } from '../../../theme';
 
 export default function MemoryGraphScreen() {
   const router = useRouter();
@@ -50,9 +51,17 @@ export default function MemoryGraphScreen() {
     });
   };
 
+  const openHistory = () => router.push('/(tabs)/memory/history');
+
   return (
     <ResponsiveSidebar sidebar={<VaultSidebar selectedPath={null} onSelectNote={openNote} />}>
       <View style={styles.mainArea}>
+        <View style={styles.graphHeader}>
+          <TouchableOpacity style={styles.historyBtn} onPress={openHistory}>
+            <Feather name="clock" size={12} color={colors.textSecondary} />
+            <Text style={styles.historyBtnText}>History</Text>
+          </TouchableOpacity>
+        </View>
         {graph && graph.nodes.length > 0 ? (
           <GraphView data={graph} onSelectNode={openNote} />
         ) : (
@@ -69,6 +78,17 @@ export default function MemoryGraphScreen() {
 
 const styles = StyleSheet.create({
   mainArea: { flex: 1 },
+  graphHeader: {
+    flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center',
+    paddingHorizontal: 14, paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: colors.borderLight,
+  },
+  historyBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.sm,
+    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface,
+  },
+  historyBtnText: { fontSize: 11, color: colors.textSecondary, fontWeight: '500' },
   graphEmpty: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   emptyText: { color: colors.textMuted, fontSize: 12, padding: 14 },
 });

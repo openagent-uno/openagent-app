@@ -44,7 +44,8 @@ export default function MemoryNoteScreen() {
   const config = useConnection((s) => s.config);
   const {
     notes, selectedPath, editorContent, editorDirty,
-    loadNotes, loadGraph, selectNote, updateEditor, saveNote,
+    lastWarnings, lastCommit,
+    loadNotes, loadGraph, selectNote, updateEditor, saveNote, moveNote,
   } = useVault();
 
   const [rawMode, setRawMode] = useState(false);
@@ -106,6 +107,38 @@ export default function MemoryNoteScreen() {
     });
   }, [router, notePath]);
 
+  // Push the per-note git history screen.
+  const openHistory = useCallback(() => {
+    router.push({
+      pathname: '/(tabs)/memory/history/[...path]',
+      params: { path: notePath.split('/') },
+    });
+  }, [router, notePath]);
+
+  // Rename this note. A bare name keeps the current folder; typing a
+  // path moves it. ``moveNote`` rewrites inbound wikilinks server-side;
+  // we then ``router.replace`` to the new path so the editor follows.
+  const handleRename = useCallback(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    const dir = notePath.includes('/') ? notePath.slice(0, notePath.lastIndexOf('/') + 1) : '';
+    const current = notePath.split('/').pop() ?? notePath;
+    const input = window.prompt('Rename note (name or path):', current);
+    if (input == null) return;
+    const next = input.trim();
+    if (!next || next === current) return;
+    // A path (contains ``/``) is used verbatim; a bare name stays in the
+    // current folder. Ensure a ``.md`` extension either way.
+    const withExt = next.endsWith('.md') ? next : `${next}.md`;
+    const target = withExt.includes('/') ? withExt : `${dir}${withExt}`;
+    if (target === notePath) return;
+    moveNote(notePath, target).then(() => {
+      router.replace({
+        pathname: '/(tabs)/memory/[...path]',
+        params: { path: target.split('/') },
+      });
+    });
+  }, [notePath, moveNote, router]);
+
   const selectedNote = notes.find((n) => n.path === notePath);
   const titleFallback = notePath.split('/').pop()?.replace('.md', '') ?? '';
 
@@ -123,6 +156,29 @@ export default function MemoryNoteScreen() {
             {selectedNote?.title || titleFallback}
           </Text>
           <View style={styles.editorActions}>
+            {/* Surface the last save's validation warnings (rule names)
+                and the git commit it produced. Hidden while there's
+                nothing to report. */}
+            {!editorDirty && lastWarnings.length > 0 && (
+              <View style={styles.warnPill}>
+                <Text style={styles.warnPillText} numberOfLines={1}>
+                  ⚠ {lastWarnings.length}: {Array.from(new Set(lastWarnings.map((w) => w.rule))).join(', ')}
+                </Text>
+              </View>
+            )}
+            {!editorDirty && lastCommit && (
+              <View style={styles.commitChip}>
+                <Text style={styles.commitChipText}>committed {lastCommit.slice(0, 7)}</Text>
+              </View>
+            )}
+            <TouchableOpacity style={styles.toggleBtn} onPress={openHistory}>
+              <Text style={styles.toggleBtnText}>History</Text>
+            </TouchableOpacity>
+            {Platform.OS === 'web' && (
+              <TouchableOpacity style={styles.toggleBtn} onPress={handleRename}>
+                <Text style={styles.toggleBtnText}>Rename</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity style={styles.toggleBtn} onPress={() => setRawMode(!rawMode)}>
               <Text style={styles.toggleBtnText}>{rawMode ? 'Preview' : 'Edit'}</Text>
             </TouchableOpacity>
@@ -197,6 +253,16 @@ const styles = StyleSheet.create({
     paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.xs, overflow: 'hidden',
     fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5,
   },
+  warnPill: {
+    maxWidth: 220, paddingHorizontal: 8, paddingVertical: 3,
+    borderRadius: radius.xs, backgroundColor: colors.errorSoft,
+  },
+  warnPillText: { fontSize: 10, color: colors.warning, fontFamily: font.mono, fontWeight: '600' },
+  commitChip: {
+    paddingHorizontal: 8, paddingVertical: 3,
+    borderRadius: radius.xs, backgroundColor: colors.mutedSoft,
+  },
+  commitChipText: { fontSize: 10, color: colors.textSecondary, fontFamily: font.mono },
   editorInput: { padding: 24, fontFamily: font.mono, fontSize: 13, color: colors.text, lineHeight: 22 },
   previewScroll: { flex: 1, backgroundColor: colors.surface },
   previewContent: { padding: 24, maxWidth: 720, width: '100%', alignSelf: 'center' },

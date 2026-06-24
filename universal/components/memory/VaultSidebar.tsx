@@ -11,7 +11,7 @@
  */
 
 import Feather from '@expo/vector-icons/Feather';
-import { ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { useVault } from '../../stores/vault';
 import { colors, font, radius } from '../../theme';
 
@@ -21,9 +21,25 @@ interface Props {
 }
 
 export default function VaultSidebar({ selectedPath, onSelectNote }: Props) {
-  const { notes, searchQuery, searchResults, loading, search, clearSearch } = useVault();
+  const { notes, searchQuery, searchResults, loading, search, clearSearch, moveNote } = useVault();
 
   const displayNotes = searchQuery.trim() ? searchResults : notes;
+
+  // Rename a note in place. A bare name preserves the folder; typing a
+  // path moves it. ``moveNote`` reloads notes + rewrites inbound links.
+  const renameNote = (path: string) => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+    const dir = path.includes('/') ? path.slice(0, path.lastIndexOf('/') + 1) : '';
+    const current = path.split('/').pop() ?? path;
+    const input = window.prompt('Rename note (name or path):', current);
+    if (input == null) return;
+    const next = input.trim();
+    if (!next || next === current) return;
+    const withExt = next.endsWith('.md') ? next : `${next}.md`;
+    const target = withExt.includes('/') ? withExt : `${dir}${withExt}`;
+    if (target === path) return;
+    void moveNote(path, target);
+  };
 
   // Group by top-level folder so the list reads as a tree.
   const folders = new Map<string, typeof notes>();
@@ -57,18 +73,34 @@ export default function VaultSidebar({ selectedPath, onSelectNote }: Props) {
                 key={n.path}
                 style={[styles.fileItem, n.path === selectedPath && styles.fileItemActive]}
                 onPress={() => onSelectNote(n.path)}
+                onLongPress={() => renameNote(n.path)}
               >
-                <Text
-                  style={[styles.fileName, n.path === selectedPath && styles.fileNameActive]}
-                  numberOfLines={1}
-                >
-                  {n.title || n.path.split('/').pop()?.replace('.md', '')}
-                </Text>
-                {n.tags && n.tags.length > 0 && (
-                  <Text style={styles.fileTags} numberOfLines={1}>
-                    {n.tags.slice(0, 3).join(', ')}
-                  </Text>
-                )}
+                <View style={styles.fileRow}>
+                  <View style={styles.fileMain}>
+                    <Text
+                      style={[styles.fileName, n.path === selectedPath && styles.fileNameActive]}
+                      numberOfLines={1}
+                    >
+                      {n.title || n.path.split('/').pop()?.replace('.md', '')}
+                    </Text>
+                    {n.tags && n.tags.length > 0 && (
+                      <Text style={styles.fileTags} numberOfLines={1}>
+                        {n.tags.slice(0, 3).join(', ')}
+                      </Text>
+                    )}
+                  </View>
+                  {/* Rename affordance — a quiet pencil shown on the
+                      active row (web). Long-press renames on native. */}
+                  {Platform.OS === 'web' && n.path === selectedPath && (
+                    <TouchableOpacity
+                      style={styles.renameBtn}
+                      onPress={(e) => { e.stopPropagation?.(); renameNote(n.path); }}
+                      hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                    >
+                      <Feather name="edit-2" size={11} color={colors.textMuted} />
+                    </TouchableOpacity>
+                  )}
+                </View>
               </TouchableOpacity>
             ))}
           </View>
@@ -105,6 +137,9 @@ const styles = StyleSheet.create({
   },
   fileItem: { paddingVertical: 5, paddingHorizontal: 10, borderRadius: radius.sm, marginVertical: 0 },
   fileItemActive: { backgroundColor: colors.hover },
+  fileRow: { flexDirection: 'row', alignItems: 'center' },
+  fileMain: { flex: 1, minWidth: 0 },
+  renameBtn: { paddingHorizontal: 4, paddingVertical: 2, marginLeft: 4 },
   fileName: { fontSize: 12.5, color: colors.textSecondary, fontWeight: '400' },
   fileNameActive: { color: colors.text, fontWeight: '500' },
   fileTags: { fontSize: 10, color: colors.textMuted, marginTop: 1, fontFamily: font.mono },

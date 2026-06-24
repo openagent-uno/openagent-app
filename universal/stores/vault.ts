@@ -3,7 +3,7 @@
  */
 
 import { create } from 'zustand';
-import type { VaultNote, GraphData } from '../../common/types';
+import type { VaultNote, GraphData, VaultWarning } from '../../common/types';
 import * as api from '../services/api';
 
 interface VaultState {
@@ -16,12 +16,17 @@ interface VaultState {
   searchResults: VaultNote[];
   loading: boolean;
   error: string | null;
+  // Result of the most recent ``saveNote`` — the editor header surfaces
+  // these (validation warnings + the git commit hash for the write).
+  lastWarnings: VaultWarning[];
+  lastCommit: string | null;
 
   loadNotes: () => Promise<void>;
   loadGraph: () => Promise<void>;
   selectNote: (path: string) => Promise<void>;
   updateEditor: (content: string) => void;
   saveNote: () => Promise<void>;
+  moveNote: (from: string, to: string) => Promise<void>;
   search: (query: string) => Promise<void>;
   clearSearch: () => void;
 }
@@ -36,6 +41,8 @@ export const useVault = create<VaultState>((set, get) => ({
   searchResults: [],
   loading: false,
   error: null,
+  lastWarnings: [],
+  lastCommit: null,
 
   loadNotes: async () => {
     set({ loading: true, error: null });
@@ -72,10 +79,32 @@ export const useVault = create<VaultState>((set, get) => ({
     const { selectedPath, editorContent } = get();
     if (!selectedPath) return;
     try {
-      await api.writeNote(selectedPath, editorContent);
-      set({ editorDirty: false });
+      const res = await api.writeNote(selectedPath, editorContent);
+      set({
+        editorDirty: false,
+        lastWarnings: res.warnings ?? [],
+        lastCommit: res.commit ?? null,
+      });
       // Reload graph after save (links may have changed)
       get().loadGraph();
+    } catch (e: any) {
+      set({ error: e.message });
+    }
+  },
+
+  // Rename a note or folder. The gateway rewrites inbound wikilinks, so
+  // we reload both the note list and the graph afterwards. If the note
+  // currently open in the editor was the one renamed, follow the move so
+  // a subsequent save targets the new path.
+  moveNote: async (from, to) => {
+    try {
+      const res = await api.moveNote(from, to);
+      const { selectedPath } = get();
+      if (selectedPath === from) {
+        set({ selectedPath: res.moved.to });
+      }
+      await get().loadNotes();
+      await get().loadGraph();
     } catch (e: any) {
       set({ error: e.message });
     }

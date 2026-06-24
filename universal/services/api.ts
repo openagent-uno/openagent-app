@@ -10,6 +10,7 @@ import type {
   WorkflowTask, CreateWorkflowInput, UpdateWorkflowInput, WorkflowRun,
   WorkflowStats, BlockTypeSpec, MCPToolkitDescriptor,
   SystemSnapshot,
+  VaultWriteResult, VaultHistory, VaultGateReport,
 } from '../../common/types';
 
 let baseUrl = '';
@@ -140,12 +141,94 @@ export async function readNote(path: string): Promise<{
   return get(`/api/vault/notes/${path.split('/').map(encodeURIComponent).join('/')}`);
 }
 
-export async function writeNote(path: string, content: string): Promise<void> {
-  await put(`/api/vault/notes/${path.split('/').map(encodeURIComponent).join('/')}`, { content });
+// Returns the gateway's write result: validation warnings + the commit
+// hash for the git-committed write. The UI surfaces both in the editor
+// header so the user sees why a save flagged (or whether it committed).
+export async function writeNote(path: string, content: string): Promise<VaultWriteResult> {
+  return put<VaultWriteResult>(
+    `/api/vault/notes/${path.split('/').map(encodeURIComponent).join('/')}`,
+    { content },
+  );
 }
 
 export async function deleteNote(path: string): Promise<void> {
   await del(`/api/vault/notes/${path.split('/').map(encodeURIComponent).join('/')}`);
+}
+
+// Rename a note OR a folder. Paths travel in the JSON body (not the URL)
+// so no encoding is needed. The server rewrites inbound wikilinks and
+// reports how many notes/links it touched.
+export async function moveNote(
+  from: string,
+  to: string,
+): Promise<{
+  moved: { from: string; to: string };
+  notes_moved: number;
+  notes_updated: number;
+  links_rewritten: number;
+  commit: string | null;
+}> {
+  return post('/api/vault/move', { from, to });
+}
+
+// Vault git log. ``path`` scopes to one note/folder; omit for the
+// vault-wide history. ``limit`` caps the number of commits returned.
+export async function getVaultHistory(path?: string, limit?: number): Promise<VaultHistory> {
+  const params = new URLSearchParams();
+  if (path) params.set('path', path);
+  if (limit) params.set('limit', String(limit));
+  const qs = params.toString();
+  return get<VaultHistory>(`/api/vault/history${qs ? `?${qs}` : ''}`);
+}
+
+// Quality-gate report — violations grouped by rule, with counts.
+export async function getVaultGate(): Promise<VaultGateReport> {
+  return get<VaultGateReport>('/api/vault/gate');
+}
+
+// Aggregate vault stats: note/link counts, broken links, orphans, graph
+// components. Loosely typed — the shape is informational only.
+export async function getVaultStats(): Promise<{
+  notes: number;
+  links: number;
+  broken_links: number;
+  orphans: number;
+  components: number;
+  largest_component: number;
+  notes_by_folder: Record<string, number>;
+}> {
+  return get('/api/vault/stats');
+}
+
+// Run the vault doctor. ``apply=false`` is a dry run (suggestions only);
+// ``apply=true`` writes the auto-fixes and git-commits them.
+export async function runVaultDoctor(apply: boolean): Promise<{
+  before: Record<string, unknown>;
+  fix: {
+    files_changed: number;
+    fixed: { path: string; fixes: string[] }[];
+    suggestions: { path: string; rule: string; message: string; suggestion: string }[];
+  };
+  after: Record<string, unknown> | null;
+}> {
+  return post(`/api/vault/doctor?apply=${apply ? 'true' : 'false'}`);
+}
+
+// Rebuild the derived ``llms.txt`` + showcase artifacts from the vault.
+export async function buildVaultDerived(): Promise<{
+  llms_txt: string;
+  showcase: string;
+  llms_bytes: number;
+  showcase_bytes: number;
+  commit: string | null;
+}> {
+  return post('/api/vault/derived');
+}
+
+// Scaffold a fresh vault (folders + seed notes). Returns the created
+// paths and the seed commit (when one was made).
+export async function initVault(): Promise<{ created: string[]; count: number; commit?: string }> {
+  return post('/api/vault/init');
 }
 
 export async function searchNotes(query: string): Promise<VaultNote[]> {
