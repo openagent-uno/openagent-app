@@ -30,11 +30,12 @@ import type { MCPEntry } from '../../../../common/types';
 import { colors, font, radius, tracking } from '../../../theme';
 import Button from '../../../components/Button';
 import { useConfirm } from '../../../components/ConfirmDialog';
-import { HeaderRight, HeaderIconButton } from '../../../components/screenHeader';
+import { HeaderRight, HeaderIconButton, useHeaderInset } from '../../../components/screenHeader';
 import McpConfigForm, { type McpSubmitPayload } from '../../../components/mcps/McpConfigForm';
 
 export default function EditMcpScreen() {
   const navigation = useNavigation();
+  const headerInset = useHeaderInset();
   const confirm = useConfirm();
   const params = useLocalSearchParams<{ name?: string }>();
   const name = typeof params.name === 'string' ? params.name : '';
@@ -144,7 +145,7 @@ export default function EditMcpScreen() {
 
   return (
     <View style={styles.root}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={[styles.content, { paddingTop: headerInset + 28 }]} showsVerticalScrollIndicator={false}>
         {loading ? (
           <View style={styles.loadingBox}>
             <ActivityIndicator color={colors.primary} />

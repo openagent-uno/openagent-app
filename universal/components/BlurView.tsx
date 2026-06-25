@@ -7,7 +7,7 @@ interface Props extends ViewProps {
   children: React.ReactNode;
 }
 
-export default function BlurView({ intensity = 14, style, children, ...props }: Props) {
+export default function BlurView({ intensity = 2, style, children, ...props }: Props) {
   if (Platform.OS === 'web') {
     return (
       <View

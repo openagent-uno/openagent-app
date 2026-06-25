@@ -17,6 +17,9 @@ import * as api from '../services/api';
 interface TasksState {
   tasks: ScheduledTask[];
   loading: boolean;
+  /** True after the first load attempt resolves (success or error). Lets
+   *  the UI show a skeleton until then instead of flashing "no tasks". */
+  loaded: boolean;
   error: string | null;
   saved: boolean;
 
@@ -31,6 +34,7 @@ interface TasksState {
 export const useTasks = create<TasksState>((set, get) => ({
   tasks: [],
   loading: false,
+  loaded: false,
   error: null,
   saved: false,
 
@@ -38,9 +42,9 @@ export const useTasks = create<TasksState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const tasks = await api.getScheduledTasks();
-      set({ tasks, loading: false });
+      set({ tasks, loading: false, loaded: true });
     } catch (e: any) {
-      set({ error: e.message, loading: false });
+      set({ error: e.message, loading: false, loaded: true });
     }
   },
 

@@ -26,6 +26,8 @@ import MessageComposer, { type PendingFile, type SlashCommand } from '../../comp
 import MessageList from '../../components/MessageList';
 import CommandPalette, { type PaletteEntry } from '../../components/CommandPalette';
 import BrandLogo from '../../components/BrandLogo';
+import { useHeaderInset } from '../../components/screenHeader';
+import { Skeleton, SkeletonLines } from '../../components/Skeleton';
 import { uploadFile, guessMimeType, listDbModels } from '../../services/api';
 import type { ModelEntry } from '../../../common/types';
 
@@ -48,10 +50,11 @@ const log = (event: string, data?: Record<string, unknown>) => {
 };
 
 export default function ChatScreen() {
+  const headerInset = useHeaderInset();
   const ws = useConnection((s) => s.ws);
   const isReconnecting = useConnection((s) => s.isReconnecting);
   const {
-    sessions, activeSessionId,
+    sessions, activeSessionId, sessionsHydrated,
     createSession, setActiveSession, removeSession, renameSession,
     addUserMessage, editUserMessage, setDraftInput, togglePinned,
     setLlmPin, setSystemPrompt,
@@ -823,7 +826,7 @@ export default function ChatScreen() {
     && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
 
   const sidebarContent = (
-    <View style={styles.sidebarInner}>
+    <View style={[styles.sidebarInner, { paddingTop: headerInset + 10 }]}>
       <View style={styles.sidebarHead}>
         <Text style={styles.sidebarKicker}>Sessions</Text>
         <TouchableOpacity
@@ -1013,7 +1016,7 @@ export default function ChatScreen() {
 
   return (
     <ResponsiveSidebar sidebar={sidebarContent}>
-      <View style={styles.chatArea}>
+      <View style={[styles.chatArea, { paddingTop: headerInset }]}>
         {isReconnecting && (
           <View style={styles.reconnectBanner}>
             <View
@@ -1093,8 +1096,11 @@ export default function ChatScreen() {
 
             <ScrollView
               ref={scrollRef}
-              style={styles.messages}
-              contentContainerStyle={styles.messagesContent}
+              // Pull up behind the transparent header (its empty top padding
+              // is transparent, so any banners above still show through) and
+              // pad the content so the first message clears the header.
+              style={[styles.messages, { marginTop: -headerInset }]}
+              contentContainerStyle={[styles.messagesContent, { paddingTop: headerInset + 12 }]}
               onScroll={handleScroll}
               scrollEventThrottle={120}
             >
@@ -1209,6 +1215,26 @@ export default function ChatScreen() {
               onToggleAlwaysListen={toggleAlwaysListen}
             />
           </>
+        ) : !sessionsHydrated ? (
+          // Sessions are still loading from the server — render the
+          // transcript shell with shimmering placeholders so we land on
+          // the page immediately instead of flashing "Standing by".
+          <View style={styles.messages}>
+            <View style={[styles.messagesInner, styles.skeletonInner]}>
+              <View style={styles.skeletonTurn}>
+                <Skeleton width={64} height={11} />
+                <SkeletonLines lines={2} lastWidth="70%" />
+              </View>
+              <View style={styles.skeletonTurn}>
+                <Skeleton width={88} height={11} />
+                <SkeletonLines lines={3} lastWidth="45%" />
+              </View>
+              <View style={styles.skeletonTurn}>
+                <Skeleton width={64} height={11} />
+                <SkeletonLines lines={2} lastWidth="80%" />
+              </View>
+            </View>
+          </View>
         ) : (
           <View style={styles.emptyState}>
             <BrandLogo size={96} />
@@ -1370,6 +1396,10 @@ const styles = StyleSheet.create({
   messages: { flex: 1 },
   messagesContent: { paddingVertical: 12, paddingBottom: 12 },
   messagesInner: { maxWidth: 760, width: '100%', alignSelf: 'center', paddingHorizontal: 20 },
+
+  // Loading placeholder while sessions hydrate from the server.
+  skeletonInner: { paddingTop: 28, gap: 28 },
+  skeletonTurn: { gap: 10 },
 
   // Hero empty state
   heroEmpty: {

@@ -20,6 +20,7 @@ import Button from '../../components/Button';
 import Card from '../../components/Card';
 import MembersPanel from '../../components/MembersPanel';
 import SectionTabs from '../../components/SectionTabs';
+import { useHeaderInset } from '../../components/screenHeader';
 import TabStrip from '../../components/TabStrip';
 import ThemedSwitch from '../../components/ThemedSwitch';
 import ModelScreen from './model';
@@ -75,6 +76,7 @@ const CHANNEL_TABS: ChannelTabSpec[] = [
 
 export default function SettingsScreen() {
   const router = useRouter();
+  const headerInset = useHeaderInset();
   const { agentName, agentVersion, config: connConfig, activeAccountId, accounts, disconnect, removeAccount } = useConnection();
   const { config: agentConfig, loadConfig, updateSection } = useConfig();
   const voiceCfg = useVoiceConfig((s) => s.config);
@@ -544,7 +546,7 @@ export default function SettingsScreen() {
   };
 
   return (
-    <View style={styles.screen}>
+    <View style={[styles.screen, { paddingTop: headerInset }]}>
       <SectionTabs<CategoryId>
         tabs={CATEGORIES}
         active={activeCategory}
@@ -553,11 +555,11 @@ export default function SettingsScreen() {
       {activeCategory === 'models' ? (
         // Models & Providers — the Model screen's merged providers+models
         // panel, embedded inline with its own scroll area.
-        <ModelScreen view="manage" />
+        <ModelScreen view="manage" embedded />
       ) : activeCategory === 'costs' ? (
         // Costs — the Model screen's daily-spend breakdown, promoted to its
         // own top-level Settings pill.
-        <ModelScreen view="costs" />
+        <ModelScreen view="costs" embedded />
       ) : (
         <ScrollView style={styles.container} contentContainerStyle={styles.content}>
           {renderCategory()}

@@ -67,7 +67,7 @@ export default function GlassPanel({
 
   if (!solid && Platform.OS !== 'web') {
     return (
-      <BlurView intensity={14} style={panelStyle as any}>
+      <BlurView intensity={2} style={panelStyle as any}>
         {inner}
       </BlurView>
     );
@@ -78,8 +78,8 @@ export default function GlassPanel({
 
 function webGlassStyle(): any {
   return {
-    backdropFilter: 'blur(14px) saturate(140%)',
-    WebkitBackdropFilter: 'blur(14px) saturate(140%)',
+    backdropFilter: 'blur(2px) saturate(140%)',
+    WebkitBackdropFilter: 'blur(2px) saturate(140%)',
   };
 }
 

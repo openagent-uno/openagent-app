@@ -14,7 +14,7 @@ import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useEffect, useLayoutEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { colors, font, radius } from '../../../theme';
-import { HeaderBack, HeaderRight } from '../../../components/screenHeader';
+import { HeaderBack, HeaderRight, useHeaderInset } from '../../../components/screenHeader';
 import TerminalView, { type TerminalStatus } from '../../../components/terminal/TerminalView';
 import { useConnection } from '../../../stores/connection';
 import { setBaseUrl } from '../../../services/api';
@@ -30,6 +30,7 @@ const STATUS_META: Record<TerminalStatus, { label: string; color: string }> = {
 export default function TerminalScreen() {
   const router = useRouter();
   const navigation = useNavigation();
+  const headerInset = useHeaderInset();
   const { id, cwd, shell } = useLocalSearchParams<{
     id: string;
     cwd?: string;
@@ -70,7 +71,7 @@ export default function TerminalScreen() {
   }, [navigation, shellName, status]);
 
   return (
-    <View style={styles.root}>
+    <View style={[styles.root, { paddingTop: headerInset }]}>
       {!id ? (
         <View style={styles.center}>
           <Text style={styles.err}>Missing terminal id.</Text>

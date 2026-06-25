@@ -14,12 +14,14 @@ import { useEffect, useLayoutEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { colors } from '../../../../theme';
 import { TaskRunHistoryContent } from '../../../../components/TaskRunHistoryContent';
+import { useHeaderInset } from '../../../../components/screenHeader';
 import { useConnection } from '../../../../stores/connection';
 import { setBaseUrl, getScheduledTask } from '../../../../services/api';
 
 export default function TaskRunsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const navigation = useNavigation();
+  const headerInset = useHeaderInset();
   const connConfig = useConnection((s) => s.config);
   const [name, setName] = useState<string | null>(null);
 
@@ -46,7 +48,7 @@ export default function TaskRunsScreen() {
   }, [navigation, name]);
 
   return (
-    <View style={styles.screen}>
+    <View style={[styles.screen, { paddingTop: headerInset }]}>
       {/* Wait for the connection to resume before mounting the content:
           a fresh window's REST base URL isn't set until ``_openWebsocket``
           runs (it calls setBaseUrl right before populating ``config``), and

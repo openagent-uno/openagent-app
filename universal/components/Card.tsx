@@ -31,7 +31,7 @@ export default function Card({
   const cardStyle: any[] = [
     styles.card,
     padded && (tight ? styles.tight : styles.padded),
-    Platform.OS === 'web' && { backdropFilter: 'blur(12px) saturate(140%)', WebkitBackdropFilter: 'blur(12px) saturate(140%)' },
+    Platform.OS === 'web' && { backdropFilter: 'blur(2px) saturate(140%)', WebkitBackdropFilter: 'blur(2px) saturate(140%)' },
     style,
   ].filter(Boolean);
 
@@ -51,7 +51,7 @@ export default function Card({
   );
 
   if (Platform.OS !== 'web') {
-    return <BlurView intensity={12} style={cardStyle as any}>{inner}</BlurView>;
+    return <BlurView intensity={2} style={cardStyle as any}>{inner}</BlurView>;
   }
 
   return <View style={cardStyle}>{inner}</View>;

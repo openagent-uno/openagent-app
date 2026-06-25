@@ -74,6 +74,9 @@ export default function AppDrawerLayout() {
       <Drawer.Screen name="workflows" options={{ headerShown: false }} />
       <Drawer.Screen name="tasks" options={{ headerShown: false }} />
       {/* Hidden / legacy routes — reachable by link, never listed. */}
+      {/* Single-run detail (from the sidebar's Recent feed) — a drawer-root
+          stack so opening a run never highlights a workspace tab. */}
+      <Drawer.Screen name="runs" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
       <Drawer.Screen name="terminal" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
       <Drawer.Screen name="automations" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
       <Drawer.Screen name="members" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />

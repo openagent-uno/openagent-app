@@ -40,7 +40,7 @@ import Animated, {
   Easing,
 } from 'react-native-reanimated';
 import Feather from '@expo/vector-icons/Feather';
-import { useRouter, useSegments } from 'expo-router';
+import { useRouter, useSegments, useGlobalSearchParams } from 'expo-router';
 import { useChat } from '../stores/chat';
 import { useActivity, type ActivityRun } from '../stores/activity';
 import { useConnection } from '../stores/connection';
@@ -263,7 +263,17 @@ function FooterIcon({
 
 function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?: () => void }) {
   const router = useRouter();
+  const segments = useSegments();
+  const params = useGlobalSearchParams<{ id?: string }>();
   const isConnected = useConnection((s) => s.isConnected);
+
+  // A single run detail (``/runs/{id}``) is open: highlight its feed row
+  // (and suppress the chat row's selection, since the active session isn't
+  // what's on screen). ``runs`` isn't a known nav segment, so the rail
+  // stays hidden — selection lives entirely on the row.
+  const onRunsRoute = segments.some((s) => s === 'runs');
+  const activeRunId =
+    onRunsRoute && typeof params.id === 'string' ? params.id : null;
 
   const sessions = useChat((s) => s.sessions);
   const activeSessionId = useChat((s) => s.activeSessionId);
@@ -284,7 +294,7 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
     return () => { off1(); off2(); };
   }, [isConnected, loadActivity]);
 
-  const onChat = activeSeg === 'chat';
+  const onChat = activeSeg === 'chat' && !onRunsRoute;
   const allOn = filters.chat && filters.workflow && filters.task;
 
   const feed = useMemo<FeedItem[]>(() => {
@@ -307,15 +317,15 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
       }
     }
     if (filters.workflow) {
-      for (const r of workflowRuns) items.push(runItem(r, 'w', 'share-2', 'workflows', router, onNavigate));
+      for (const r of workflowRuns) items.push(runItem(r, 'w', 'share-2', 'workflows', router, activeRunId, onNavigate));
     }
     if (filters.task) {
-      for (const r of taskRuns) items.push(runItem(r, 't', 'clock', 'tasks', router, onNavigate));
+      for (const r of taskRuns) items.push(runItem(r, 't', 'clock', 'tasks', router, activeRunId, onNavigate));
     }
     items.sort((a, b) => b.ts - a.ts);
     return items.slice(0, FEED_MAX);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions, workflowRuns, taskRuns, filters, onChat, activeSessionId]);
+  }, [sessions, workflowRuns, taskRuns, filters, onChat, activeSessionId, activeRunId]);
 
   return (
     <View style={styles.recent}>
@@ -403,16 +413,28 @@ function runItem(
   icon: IconName,
   kind: 'workflows' | 'tasks',
   router: ReturnType<typeof useRouter>,
+  activeRunId: string | null,
   onNavigate?: () => void,
 ): FeedItem {
+  // A Recent row points at one specific firing, so open that single run
+  // (``/runs/{id}``) — not the parent's whole history (``/{kind}/runs/{parentId}``).
+  // This route lives at the drawer root, so it neither selects the
+  // Scheduled / Workflows tab nor pushes a back-button onto their stacks.
+  const runKind = kind === 'workflows' ? 'workflow' : 'task';
+  const params = new URLSearchParams({
+    kind: runKind,
+    parentId: r.parentId,
+    name: r.parentName,
+  });
   return {
     key: `${prefix}-${r.id}`,
     icon,
     label: r.parentName,
     ts: toMs(r.startedAt),
+    active: activeRunId === r.id,
     dotColor: runStatusColor(r.status),
     onPress: () => {
-      router.push(`/${kind}/runs/${r.parentId}` as any);
+      router.push(`/runs/${encodeURIComponent(r.id)}?${params.toString()}` as any);
       onNavigate?.();
     },
   };
@@ -451,7 +473,7 @@ function relTime(ms: number): string {
 }
 
 const glassStyle = Platform.OS === 'web'
-  ? ({ backdropFilter: 'blur(16px) saturate(140%)', WebkitBackdropFilter: 'blur(16px) saturate(140%)' } as any)
+  ? ({ backdropFilter: 'blur(2.6px) saturate(140%)', WebkitBackdropFilter: 'blur(2.6px) saturate(140%)' } as any)
   : {};
 
 const styles = StyleSheet.create({

@@ -34,6 +34,7 @@ import {
 import Button from '../../components/Button';
 import Card from '../../components/Card';
 import TabStrip from '../../components/TabStrip';
+import { useHeaderInset } from '../../components/screenHeader';
 import { useConfirm } from '../../components/ConfirmDialog';
 import type {
   UsageData, DailyUsageEntry, ModelEntry, AvailableModel,
@@ -61,9 +62,12 @@ const FALLBACK_PROVIDERS = [
 // form should default the framework to litellm (TTS/STT only).
 const AUDIO_ONLY_VENDORS = new Set(['elevenlabs', 'deepgram']);
 
-export default function ModelScreen({ view = 'manage' }: { view?: ModelView } = {}) {
+export default function ModelScreen({ view = 'manage', embedded = false }: { view?: ModelView; embedded?: boolean } = {}) {
   const connConfig = useConnection((s) => s.config);
   const confirm = useConfirm();
+  // Standalone (Model tab) draws behind the transparent header and offsets
+  // its own content; when embedded in Settings the parent already insets.
+  const headerInset = useHeaderInset();
 
   // Providers (DB, one row per (name, framework) pair)
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
@@ -741,7 +745,10 @@ export default function ModelScreen({ view = 'manage' }: { view?: ModelView } = 
   // owns the section switching: ``manage`` (providers + models merged) and
   // ``costs`` are two of its pills.
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={[styles.content, !embedded && { paddingTop: headerInset + 24 }]}
+    >
       {error && <Text style={styles.error}>{error}</Text>}
       {view === 'costs' ? (
         renderCosts()

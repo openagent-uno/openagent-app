@@ -81,7 +81,7 @@ export default function JarvisDock(props: BottomTabBarProps) {
 
   const dockStyle: any[] = [
     styles.dock,
-    Platform.OS === 'web' && { backdropFilter: 'blur(16px) saturate(140%)', WebkitBackdropFilter: 'blur(16px) saturate(140%)' },
+    Platform.OS === 'web' && { backdropFilter: 'blur(2.6px) saturate(140%)', WebkitBackdropFilter: 'blur(2.6px) saturate(140%)' },
     // @ts-ignore boxShadow web-only
     Platform.OS === 'web' && { boxShadow: `0 0 24px ${colors.accentGlow}, 0 12px 28px rgba(0,0,0,0.4)` },
   ].filter(Boolean);
@@ -180,7 +180,7 @@ export default function JarvisDock(props: BottomTabBarProps) {
     <View style={styles.outer}>
       <TickFrame style={styles.frame} bracketLen={8}>
         {Platform.OS !== 'web' ? (
-          <BlurView intensity={16} style={dockStyle as any}>
+          <BlurView intensity={2.6} style={dockStyle as any}>
             {dockInner}
           </BlurView>
         ) : (

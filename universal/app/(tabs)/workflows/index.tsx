@@ -32,8 +32,10 @@ import { setBaseUrl } from '../../../services/api';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import Button from '../../../components/Button';
 import Card from '../../../components/Card';
+import EmptyState from '../../../components/EmptyState';
+import { SkeletonRow } from '../../../components/Skeleton';
 import ThemedSwitch from '../../../components/ThemedSwitch';
-import { HeaderAction } from '../../../components/screenHeader';
+import { HeaderAction, useHeaderInset } from '../../../components/screenHeader';
 import { openDetached } from '../../../services/windows';
 import type {
   CreateWorkflowInput,
@@ -79,10 +81,11 @@ function initialGraphNodes(): WorkflowNode[] {
 export default function WorkflowsScreen() {
   const router = useRouter();
   const navigation = useNavigation();
+  const headerInset = useHeaderInset();
   const connConfig = useConnection((s) => s.config);
   const {
     workflows,
-    loading,
+    loaded,
     error,
     saved,
     runs,
@@ -191,27 +194,32 @@ export default function WorkflowsScreen() {
     await deleteWorkflow(wf.id);
   };
 
-  return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.hint}>
-        Multi-block pipelines. Blocks can call MCP tools, run AI prompts,
-        branch, loop or wait. Triggered manually, on a schedule, or by
-        the AI itself.
-      </Text>
+  const isEmpty = loaded && workflows.length === 0 && !creating;
 
-      {loading && workflows.length === 0 ? (
-        <View style={styles.loadingPane}>
-          <ActivityIndicator size="small" color={colors.textMuted} />
-        </View>
+  return (
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={[styles.content, { paddingTop: headerInset + 24 }, isEmpty && styles.contentEmpty]}
+    >
+      {isEmpty ? (
+        <EmptyState
+          icon="git-merge"
+          title="No workflows yet"
+          message="Create one to get started, or ask OpenAgent to build one for you."
+          action={{
+            label: 'New workflow',
+            icon: 'plus',
+            onPress: () => { setForm(EMPTY_CREATE); setMaxConcurrentInput(''); setCreating(true); },
+          }}
+        />
+      ) : !loaded && workflows.length === 0 ? (
+        <Card padded={false}>
+          {Array.from({ length: 4 }).map((_, i) => (
+            <SkeletonRow key={i} first={i === 0} />
+          ))}
+        </Card>
       ) : (
         <Card padded={false}>
-          {workflows.length === 0 && !creating && (
-            <Text style={styles.emptyText}>
-              No workflows yet — create one to get started, or ask OpenAgent
-              AI to build one for you.
-            </Text>
-          )}
-
           {workflows.map((wf, i) => {
             const lastRun = runs[wf.id];
             // ``trigger_types`` is server-decorated from the graph — an
@@ -442,6 +450,12 @@ const styles = StyleSheet.create({
     width: '100%',
     alignSelf: 'center',
   },
+  // When there are no workflows, let the content stretch so the empty
+  // state centers vertically in the viewport.
+  contentEmpty: {
+    flexGrow: 1,
+    justifyContent: 'center',
+  },
   title: {
     fontSize: 18,
     fontWeight: '500',
@@ -449,23 +463,6 @@ const styles = StyleSheet.create({
     marginBottom: 4,
     fontFamily: font.display,
     letterSpacing: -0.3,
-  },
-  hint: {
-    fontSize: 12,
-    color: colors.textMuted,
-    marginBottom: 14,
-    lineHeight: 17,
-  },
-  loadingPane: {
-    padding: 40,
-    alignItems: 'center',
-  },
-  emptyText: {
-    padding: 18,
-    fontSize: 12,
-    color: colors.textMuted,
-    textAlign: 'center',
-    lineHeight: 17,
   },
   row: {
     flexDirection: 'row',

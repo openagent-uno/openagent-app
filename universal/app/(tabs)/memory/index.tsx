@@ -14,7 +14,7 @@ import { useRouter, useNavigation } from 'expo-router';
 import GraphView from '../../../components/GraphView';
 import ResponsiveSidebar from '../../../components/ResponsiveSidebar';
 import VaultSidebar from '../../../components/memory/VaultSidebar';
-import { HeaderAction } from '../../../components/screenHeader';
+import { HeaderAction, useHeaderInset } from '../../../components/screenHeader';
 import { useConnection } from '../../../stores/connection';
 import { useEvents } from '../../../stores/events';
 import { useVault } from '../../../stores/vault';
@@ -24,6 +24,7 @@ import { colors } from '../../../theme';
 export default function MemoryGraphScreen() {
   const router = useRouter();
   const navigation = useNavigation();
+  const headerInset = useHeaderInset();
   const config = useConnection((s) => s.config);
   const { graph, loading, loadNotes, loadGraph } = useVault();
 
@@ -64,7 +65,16 @@ export default function MemoryGraphScreen() {
   }, [navigation]);
 
   return (
-    <ResponsiveSidebar sidebar={<VaultSidebar selectedPath={null} onSelectNote={openNote} />}>
+    <ResponsiveSidebar
+      sidebar={(
+        <View style={{ flex: 1, paddingTop: headerInset }}>
+          <VaultSidebar selectedPath={null} onSelectNote={openNote} />
+        </View>
+      )}
+    >
+      {/* The graph fills the whole area, drawing behind the transparent
+          header so it shows through the frosted glass. The empty state is
+          centered, so it never hides under the header. */}
       <View style={styles.mainArea}>
         {graph && graph.nodes.length > 0 ? (
           <GraphView data={graph} onSelectNode={openNote} />

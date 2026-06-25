@@ -15,6 +15,7 @@ import {
 } from 'react-native';
 import Card from '../../components/Card';
 import SectionTabs from '../../components/SectionTabs';
+import { useHeaderInset } from '../../components/screenHeader';
 import TabStrip from '../../components/TabStrip';
 import { useConnection } from '../../stores/connection';
 import { useSystem } from '../../stores/system';
@@ -147,6 +148,7 @@ function StatTile({ label, value, sub, icon, tint }: StatProps) {
 // ── Screen ────────────────────────────────────────────────────────────
 
 export default function SystemScreen() {
+  const headerInset = useHeaderInset();
   const connConfig = useConnection((s) => s.config);
   const snapshot = useSystem((s) => s.snapshot);
   const error = useSystem((s) => s.error);
@@ -165,6 +167,7 @@ export default function SystemScreen() {
   }, [connConfig, startFeed]);
 
   const tabBar = (
+    <View style={{ paddingTop: headerInset }}>
     <SectionTabs<CategoryId>
       tabs={CATEGORIES}
       active={activeCategory}
@@ -181,6 +184,7 @@ export default function SystemScreen() {
         </View>
       }
     />
+    </View>
   );
 
   // Terminals don't depend on telemetry — render the launcher even

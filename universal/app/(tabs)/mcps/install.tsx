@@ -23,7 +23,7 @@ import {
 import Feather from '@expo/vector-icons/Feather';
 import { useLocalSearchParams, useNavigation } from 'expo-router';
 import { StackActions } from '@react-navigation/native';
-import { HeaderRight, HeaderIconButton } from '../../../components/screenHeader';
+import { HeaderRight, HeaderIconButton, useHeaderInset } from '../../../components/screenHeader';
 import { useConnection } from '../../../stores/connection';
 import {
   setBaseUrl,
@@ -47,6 +47,7 @@ function defaultInstallName(registryName: string): string {
 
 export default function InstallMcpScreen() {
   const navigation = useNavigation();
+  const headerInset = useHeaderInset();
   const params = useLocalSearchParams<{ name?: string; version?: string }>();
   const name = typeof params.name === 'string' ? params.name : '';
   const version = typeof params.version === 'string' ? params.version : 'latest';
@@ -200,7 +201,7 @@ export default function InstallMcpScreen() {
 
   return (
     <View style={styles.root}>
-      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingTop: headerInset + 28 }]} showsVerticalScrollIndicator={false}>
         {loading ? (
           <View style={styles.loadingBox}>
             <ActivityIndicator color={colors.primary} />

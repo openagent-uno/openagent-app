@@ -14,7 +14,6 @@ import { StyleSheet, View } from 'react-native';
 import { useLocalSearchParams, useNavigation } from 'expo-router';
 import { HistoryList } from '../history';
 import { colors } from '../../../../theme';
-
 export default function NoteHistoryScreen() {
   const navigation = useNavigation();
   const params = useLocalSearchParams<{ path?: string | string[] }>();

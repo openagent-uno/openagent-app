@@ -169,6 +169,18 @@ function buildColors(): Palette {
 
 export const colors: Palette = buildColors();
 
+/**
+ * Frosted-glass surface — the single recipe shared by the nav header and
+ * every floating panel (dialogs, sheets, command palette) so blur, tint
+ * and saturation read identically across all of them. Apply
+ * `glassSurface.backgroundColor` always and `glassSurface.webFilter`
+ * (backdrop-filter) only on web.
+ */
+export const glassSurface = {
+  backgroundColor: 'rgba(8, 12, 22, 0.42)',
+  webFilter: 'blur(2.6px) saturate(140%)',
+} as const;
+
 /** Inject Geist + Geist Mono + Orbitron + Rajdhani fonts on web.
  *  Orbitron is the JARVIS wordmark / clock face; Rajdhani is the
  *  condensed display font for tracked-out small caps and labels. */
@@ -251,6 +263,15 @@ function ensureGlobalCss(): void {
       vertical-align: text-bottom; margin-left: 2px; animation: oa-caret-blink 1.1s steps(1,end) infinite; }
     /* Spin keyframe wrapper for loader icons. */
     .oa-spin { animation: oa-spin 0.9s linear infinite; display: inline-block; }
+    /* Skeleton placeholder — a shimmering bar shown while a list / screen
+       loads, so the page renders immediately instead of flashing an
+       empty-state message. See [[components/Skeleton.tsx]]. */
+    .oa-skeleton {
+      background-image: linear-gradient(90deg,
+        var(--oa-surface) 25%, var(--oa-hover) 50%, var(--oa-surface) 75%);
+      background-size: 200% 100%;
+      animation: oa-shimmer 1.5s ease-in-out infinite;
+    }
     /* Shiki-rendered code blocks — strip its default background and
        apply our font stack so highlighted code matches the surface. */
     .oa-shiki pre {

@@ -33,7 +33,7 @@ import { useConnection } from '../stores/connection';
 import { useConfirm } from './ConfirmDialog';
 import Button from './Button';
 import Input from './Input';
-import { colors, font, radius, spacing, tracking } from '../theme';
+import { colors, font, radius, spacing, tracking, glassSurface } from '../theme';
 
 type Variant = 'wordmark' | 'icon' | 'compact';
 
@@ -421,25 +421,28 @@ const styles = StyleSheet.create({
   // ── Modal ──
   backdrop: {
     flex: 1,
+    // Dim the scene only — no full-screen blur. The frost is scoped to
+    // the sheet so only the panel's own background is blurred.
     backgroundColor: 'rgba(2, 4, 10, 0.55)',
     alignItems: 'center',
     justifyContent: 'center',
     padding: spacing.lg,
-    // Frost the app behind the sheet.
-    ...(Platform.OS === 'web'
-      ? ({ backdropFilter: 'blur(14px) saturate(120%)', WebkitBackdropFilter: 'blur(14px) saturate(120%)' } as any)
-      : {}),
   },
   sheet: {
     width: '100%',
     maxWidth: 440,
-    backgroundColor: colors.surfaceElevated,
+    // Shared frosted-glass recipe — matches the nav header exactly.
+    backgroundColor: glassSurface.backgroundColor,
     borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
     paddingVertical: spacing.md,
     maxHeight: '85%',
     overflow: 'hidden',
+    // Frost the panel background only.
+    ...(Platform.OS === 'web'
+      ? ({ backdropFilter: glassSurface.webFilter, WebkitBackdropFilter: glassSurface.webFilter } as any)
+      : {}),
     shadowColor: colors.shadowColorStrong,
     shadowOffset: { width: 0, height: 16 },
     shadowOpacity: 1,

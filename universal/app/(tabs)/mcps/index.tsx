@@ -1,7 +1,7 @@
 /**
  * MCPs — dashboard grid.
  *
- * Three-way TabStrip:
+ * Three-way SectionTabs (same pill strip as Settings):
  *
  *   - Builtin: rows where ``kind !== 'custom'`` — MCPs shipped with
  *     OpenAgent. Toggle-only; remove is never offered (deleting a
@@ -36,8 +36,8 @@ import {
 import type { MCPEntry } from '../../../../common/types';
 import { colors, font, radius, tracking } from '../../../theme';
 import Button from '../../../components/Button';
-import TabStrip from '../../../components/TabStrip';
-import { HeaderAction } from '../../../components/screenHeader';
+import SectionTabs from '../../../components/SectionTabs';
+import { HeaderAction, useHeaderInset } from '../../../components/screenHeader';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import McpTile from '../../../components/mcps/McpTile';
 import MarketplaceTile from '../../../components/mcps/MarketplaceTile';
@@ -76,6 +76,7 @@ function registryNameOf(entry: MCPEntry): string {
 export default function McpsScreen() {
   const router = useRouter();
   const navigation = useNavigation();
+  const headerInset = useHeaderInset();
   const config = useConnection((s) => s.config);
   const confirm = useConfirm();
 
@@ -226,11 +227,6 @@ export default function McpsScreen() {
     return s;
   }, [installed]);
 
-  const activeCount = useMemo(
-    () => installed.filter((e) => e.enabled).length,
-    [installed],
-  );
-
   // ── Navigation helpers ──
   const onInstallClick = (card: MarketplaceCard) => {
     router.push({
@@ -273,55 +269,23 @@ export default function McpsScreen() {
   }, [refresh]);
 
   // ── Render ──
-  // Split the screen into:
-  //   - fixed header: title, hint, refresh, tabs (never scrolls). Outer
-  //     band spans full width so its bottom border runs edge-to-edge;
-  //     inner content is centered at the screen's max column width.
-  //   - scrollable body: only the active pane's content, same centered
-  //     column. The body's inner View measures its own width so the grid
-  //     sizes to its real container (not the window, not the ScrollView).
+  //   - SectionTabs pinned under the navigator header (same pill strip as
+  //     Settings). The "New" connector form is reached from the header's
+  //     "New connector" action, not a tab.
+  //   - scrollable body: only the active pane's content, centered at the
+  //     screen's max column width. The body's inner View measures its own
+  //     width so the grid sizes to its real container.
   return (
-    <View style={styles.root}>
-      <View style={styles.fixedHeader}>
-        <View style={styles.headerInner}>
-          <View style={styles.headerTopRow}>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.hint}>
-                Model Context Protocol servers give the agent extra tools.{' '}
-                {installed.length} installed, {activeCount} active. Changes are live on the next message.
-              </Text>
-            </View>
-            <Button
-              variant="ghost"
-              size="sm"
-              icon="refresh-cw"
-              label="Refresh"
-              onPress={refresh}
-            />
-          </View>
-
-          <View style={styles.tabsRow}>
-            <TabStrip<Mode>
-              tabs={[
-                { id: 'builtin', label: `Builtin · ${builtinRows.length}`, icon: 'package' },
-                { id: 'custom', label: `Custom · ${customRows.length}`, icon: 'sliders' },
-                { id: 'browse', label: 'Browse', icon: 'compass' },
-                { id: 'new', label: 'New', icon: 'plus' },
-              ]}
-              active={mode}
-              onChange={setMode}
-              size="md"
-            />
-          </View>
-
-          {error && (
-            <View style={styles.errorBanner}>
-              <Feather name="alert-circle" size={13} color={colors.error} />
-              <Text style={styles.errorText}>{error}</Text>
-            </View>
-          )}
-        </View>
-      </View>
+    <View style={[styles.root, { paddingTop: headerInset }]}>
+      <SectionTabs<Mode>
+        tabs={[
+          { id: 'builtin', label: `Builtin · ${builtinRows.length}`, icon: 'package' },
+          { id: 'custom', label: `Custom · ${customRows.length}`, icon: 'sliders' },
+          { id: 'browse', label: 'Browse', icon: 'compass' },
+        ]}
+        active={mode}
+        onChange={setMode}
+      />
 
       <ScrollView
         style={styles.scroll}
@@ -329,6 +293,12 @@ export default function McpsScreen() {
         showsVerticalScrollIndicator={false}
       >
         <View style={styles.bodyInner} onLayout={onContainerLayout}>
+        {error && (
+          <View style={[styles.errorBanner, { marginBottom: 14 }]}>
+            <Feather name="alert-circle" size={13} color={colors.error} />
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        )}
         {mode === 'builtin' && (
           <InstalledPane
             kind="builtin"
@@ -662,40 +632,6 @@ const CONTENT_MAX_WIDTH = 1120; // same centering as settings.tsx (560) × 2
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-
-  // Fixed header: outer band spans the window so the bottom border runs
-  // edge-to-edge; the ``headerInner`` carries the same max-width column
-  // as the scrolling body so title, tabs and body line up vertically.
-  fixedHeader: {
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
-  },
-  headerInner: {
-    maxWidth: CONTENT_MAX_WIDTH,
-    width: '100%',
-    alignSelf: 'center',
-    paddingHorizontal: 24,
-    paddingTop: 24,
-    paddingBottom: 14,
-    gap: 14,
-  },
-  headerTopRow: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  title: {
-    fontSize: 20, fontWeight: '500', color: colors.text,
-    marginBottom: 4,
-    fontFamily: font.display, letterSpacing: -0.4,
-  },
-  hint: {
-    fontSize: 12.5, color: colors.textMuted, lineHeight: 18,
-    maxWidth: 640,
-  },
-
-  tabsRow: {},
 
   scroll: { flex: 1 },
   scrollContent: {

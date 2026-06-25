@@ -24,6 +24,7 @@ import {
   getVaultCommit, getVaultHistory, resetVault, restoreVault, setBaseUrl,
 } from '../../../services/api';
 import { colors, font, radius } from '../../../theme';
+import { useHeaderInset } from '../../../components/screenHeader';
 
 // Cross-platform confirm: a blocking ``window.confirm`` on web (RN-web's
 // Alert.alert has no usable button callbacks), a native action sheet via
@@ -84,6 +85,7 @@ function provenanceLabel(p: Record<string, string>): string {
 }
 
 export function HistoryList({ path }: { path?: string }) {
+  const headerInset = useHeaderInset();
   const config = useConnection((s) => s.config);
   const [commits, setCommits] = useState<VaultCommit[]>([]);
   const [loading, setLoading] = useState(true);
@@ -139,7 +141,7 @@ export function HistoryList({ path }: { path?: string }) {
   const headHash = commits[0]?.hash;
 
   return (
-    <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
+    <ScrollView style={styles.list} contentContainerStyle={[styles.listContent, { paddingTop: headerInset + 14 }]}>
       {commits.map((c) => (
         <CommitRow
           key={c.hash}

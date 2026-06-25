@@ -10,13 +10,14 @@
  * of the header still drags the window. See DragRegion.
  */
 
-import { Pressable, Text, Platform, View } from 'react-native';
+import { Pressable, Text, Platform, View, StyleSheet } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { useNavigation } from 'expo-router';
 import { DrawerActions } from '@react-navigation/native';
+import { useHeaderHeight } from '@react-navigation/elements';
 import { useLayout } from '../hooks/useLayout';
 import DragRegion, { NO_DRAG } from './DragRegion';
-import { colors, font, radius } from '../theme';
+import { colors, font, radius, glassSurface } from '../theme';
 
 type IconName = keyof typeof Feather.glyphMap;
 
@@ -25,16 +26,52 @@ type IconName = keyof typeof Feather.glyphMap;
 // `no-drag` buttons are never nested inside the drag region — which is what
 // caused the macOS double-click-to-maximize button freeze. See DragRegion.
 
+/**
+ * Frosted-glass header background — a translucent surface tone over the
+ * app canvas with a web `backdrop-filter` blur, plus a hairline bottom
+ * border. The transparent `DragRegion` sits on top so the window still
+ * drags from the empty header space (Electron). The header is
+ * `headerTransparent`, so content scrolls UNDER this glass and is blurred
+ * by it; each screen offsets its top content by `useHeaderInset()`.
+ */
+function HeaderGlassBackground() {
+  return (
+    <View style={[StyleSheet.absoluteFill, headerGlassStyle]}>
+      <DragRegion />
+    </View>
+  );
+}
+
+const headerGlassStyle = {
+  // Shared frosted-glass recipe (see theme `glassSurface`) so the header
+  // matches every floating panel exactly. Low-alpha tint keeps content
+  // scrolling underneath visible; the blur is a faint softening on top.
+  backgroundColor: glassSurface.backgroundColor,
+  borderBottomWidth: 1,
+  borderBottomColor: colors.borderLight,
+  ...(Platform.OS === 'web'
+    ? ({
+        backdropFilter: glassSurface.webFilter,
+        WebkitBackdropFilter: glassSurface.webFilter,
+      } as any)
+    : {}),
+};
+
 /** Themed header options shared by every screen's navigator. */
 export const themedHeader = {
   headerShown: true,
-  headerStyle: { backgroundColor: colors.bg },
+  // Draw screen content BEHIND the header so the frosted glass blurs the
+  // content scrolling under it. Every screen offsets its top content by
+  // `useHeaderInset()` (header height + safe-area top) so nothing hides.
+  headerTransparent: true,
+  // Transparent so the frosted `headerBackground` is what shows.
+  headerStyle: { backgroundColor: 'transparent' },
   headerShadowVisible: false,
   headerTitleAlign: 'center' as const,
   headerTintColor: colors.accent,
-  // Full-width window drag strip behind the title/buttons (Electron only;
-  // paints the header background everywhere else).
-  headerBackground: () => <DragRegion color={colors.bg} />,
+  // Frosted glass strip behind the title/buttons, doubling as the
+  // window drag region (Electron) via the transparent DragRegion.
+  headerBackground: () => <HeaderGlassBackground />,
   headerTitleStyle: {
     fontFamily: font.sans,
     fontSize: 17,
@@ -43,6 +80,17 @@ export const themedHeader = {
     letterSpacing: 0.3,
   },
 };
+
+/**
+ * Top inset for screen content, equal to the (transparent) header height
+ * including the device safe-area top. Add it as `paddingTop` to a
+ * screen's scroll `contentContainerStyle` (so content scrolls behind the
+ * frosted header) or to a pinned top bar's container (so it sits just
+ * below the header). Only valid inside a screen that renders a header.
+ */
+export function useHeaderInset(): number {
+  return useHeaderHeight();
+}
 
 /** Phone-only hamburger for `headerLeft` on top-level screens — toggles
  *  the drawer. Renders nothing on tablet/desktop (sidebar is permanent). */

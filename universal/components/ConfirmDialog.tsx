@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { createContext, useCallback, useContext, useState } from 'react';
 import { Alert, Modal, Pressable, StyleSheet, Text, View, Platform } from 'react-native';
-import { colors, font, radius } from '../theme';
+import { colors, font, radius, glassSurface } from '../theme';
 import Button from './Button';
 
 type ConfirmOptions = {
@@ -115,9 +115,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
+    // Dim the scene only — the blur lives on the dialog itself so the
+    // frost is scoped to the panel, not smeared across the whole screen.
     backgroundColor: 'rgba(2, 4, 10, 0.45)',
-    // @ts-ignore
-    ...(Platform.OS === 'web' ? { backdropFilter: 'blur(14px) saturate(120%)', WebkitBackdropFilter: 'blur(14px) saturate(120%)' } : {}),
   },
   dialog: {
     width: 400,
@@ -125,7 +125,10 @@ const styles = StyleSheet.create({
     borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.surface,
+    // Shared frosted-glass recipe — matches the nav header exactly.
+    backgroundColor: glassSurface.backgroundColor,
+    // @ts-ignore — frost the panel background only.
+    ...(Platform.OS === 'web' ? { backdropFilter: glassSurface.webFilter, WebkitBackdropFilter: glassSurface.webFilter } : {}),
     padding: 20,
     shadowColor: 'rgba(0,0,0,0.18)',
     shadowOffset: { width: 0, height: 24 },

@@ -19,7 +19,7 @@ import {
 } from 'react-native';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import Markdown from '../../../components/Markdown';
-import { HeaderRight, HeaderIconButton, HeaderAction } from '../../../components/screenHeader';
+import { HeaderRight, HeaderIconButton, HeaderAction, useHeaderInset } from '../../../components/screenHeader';
 import { useConnection } from '../../../stores/connection';
 import { useVault } from '../../../stores/vault';
 import { setBaseUrl } from '../../../services/api';
@@ -27,6 +27,7 @@ import { colors, font, radius } from '../../../theme';
 
 export default function MemoryNoteScreen() {
   const navigation = useNavigation();
+  const headerInset = useHeaderInset();
   const router = useRouter();
   const params = useLocalSearchParams<{ path?: string | string[] }>();
   const notePath = Array.isArray(params.path)
@@ -158,7 +159,7 @@ export default function MemoryNoteScreen() {
     || (!editorDirty && (lastWarnings.length > 0 || !!lastCommit));
 
   return (
-    <View style={styles.editorContainer}>
+    <View style={[styles.editorContainer, { paddingTop: headerInset }]}>
       {showStatus && (
         <View style={styles.statusStrip}>
           {/* The quality gate rejected the last save — the note was NOT

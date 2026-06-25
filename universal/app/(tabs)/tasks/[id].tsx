@@ -23,7 +23,7 @@ import { useConnection } from '../../../stores/connection';
 import { useTasks } from '../../../stores/tasks';
 import { setBaseUrl, getScheduledTask } from '../../../services/api';
 import CronPicker from '../../../components/CronPicker';
-import { HeaderAction } from '../../../components/screenHeader';
+import { HeaderAction, useHeaderInset } from '../../../components/screenHeader';
 
 interface TaskForm {
   name: string;
@@ -36,6 +36,7 @@ const EMPTY_FORM: TaskForm = { name: '', cron_expression: '', prompt: '' };
 export default function TaskEditScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const navigation = useNavigation();
+  const headerInset = useHeaderInset();
   const isNew = id === 'new';
   const connConfig = useConnection((s) => s.config);
   const { createTask, updateTask, error: storeError } = useTasks();
@@ -113,7 +114,7 @@ export default function TaskEditScreen() {
   }, [navigation, isNew, form, saving, loading]);
 
   return (
-    <View style={styles.screen}>
+    <View style={[styles.screen, { paddingTop: headerInset }]}>
       {loading ? (
         <View style={styles.statusPane}>
           <ActivityIndicator size="small" color={colors.textMuted} />

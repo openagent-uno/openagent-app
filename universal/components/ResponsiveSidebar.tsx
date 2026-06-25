@@ -26,7 +26,7 @@ const ContentCtx = createContext<{ sidebar: React.ReactNode; children: React.Rea
 
 function SidebarPanel({ children }: { children: React.ReactNode }) {
   return (
-    <BlurView intensity={10} style={styles.sidebarPanel}>
+    <BlurView intensity={1.3} style={styles.sidebarPanel}>
       {children}
     </BlurView>
   );

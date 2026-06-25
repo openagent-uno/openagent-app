@@ -22,6 +22,9 @@ import * as api from '../services/api';
 interface WorkflowsState {
   workflows: WorkflowTask[];
   loading: boolean;
+  /** True once the first load attempt resolves (success or error). Lets
+   *  the UI show a skeleton until then instead of flashing "no workflows". */
+  loaded: boolean;
   error: string | null;
   saved: boolean;
 
@@ -66,6 +69,7 @@ interface WorkflowsState {
 export const useWorkflows = create<WorkflowsState>((set, get) => ({
   workflows: [],
   loading: false,
+  loaded: false,
   error: null,
   saved: false,
   blockTypes: [],
@@ -78,9 +82,9 @@ export const useWorkflows = create<WorkflowsState>((set, get) => ({
     set({ loading: true, error: null });
     try {
       const workflows = await api.getWorkflows();
-      set({ workflows, loading: false });
+      set({ workflows, loading: false, loaded: true });
     } catch (e: any) {
-      set({ error: e?.message ?? String(e), loading: false });
+      set({ error: e?.message ?? String(e), loading: false, loaded: true });
     }
   },
 

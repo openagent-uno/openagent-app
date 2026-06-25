@@ -26,16 +26,17 @@ import {
   View, Text, ScrollView, StyleSheet,
   type LayoutChangeEvent,
 } from 'react-native';
-import { colors, font, radius } from '../../../theme';
+import { colors, radius } from '../../../theme';
 import { useConnection } from '../../../stores/connection';
 import { useEvents } from '../../../stores/events';
 import { useTasks } from '../../../stores/tasks';
 import { setBaseUrl } from '../../../services/api';
 import { openDetached } from '../../../services/windows';
 import { useConfirm } from '../../../components/ConfirmDialog';
-import Button from '../../../components/Button';
-import { HeaderAction } from '../../../components/screenHeader';
+import EmptyState from '../../../components/EmptyState';
+import { HeaderAction, useHeaderInset } from '../../../components/screenHeader';
 import TaskTile from '../../../components/tasks/TaskTile';
+import { Skeleton } from '../../../components/Skeleton';
 import type { ScheduledTask } from '../../../../common/types';
 
 const CONTENT_MAX_WIDTH = 1120;
@@ -53,8 +54,9 @@ function columnsForWidth(width: number, gap: number): number {
 export default function TasksScreen() {
   const router = useRouter();
   const navigation = useNavigation();
+  const headerInset = useHeaderInset();
   const connConfig = useConnection((s) => s.config);
-  const { tasks, error, loadTasks, deleteTask, toggleTask } = useTasks();
+  const { tasks, loaded, error, loadTasks, deleteTask, toggleTask } = useTasks();
   const confirm = useConfirm();
 
   const handleAdd = useCallback(() => {
@@ -98,8 +100,6 @@ export default function TasksScreen() {
     [containerWidth],
   );
 
-  const activeCount = useMemo(() => tasks.filter((t) => t.enabled).length, [tasks]);
-
   const handleRemove = async (id: string) => {
     const t = tasks.find((x) => x.id === id);
     if (!t) return;
@@ -118,53 +118,71 @@ export default function TasksScreen() {
 
   return (
     <View style={styles.root}>
-      <View style={styles.fixedHeader}>
-        <View style={styles.headerInner}>
-          <Text style={styles.hint}>
-            Cron tasks stored in the database. {tasks.length} task{tasks.length === 1 ? '' : 's'},{' '}
-            {activeCount} active. Changes take effect within ~30 seconds.
-          </Text>
-          {error && (
-            <View style={styles.errorBanner}>
-              <Feather name="alert-circle" size={13} color={colors.error} />
-              <Text style={styles.errorText}>{error}</Text>
-            </View>
-          )}
+      {error && (
+        <View style={[styles.errorWrap, { paddingTop: headerInset + 16 }]}>
+          <View style={styles.errorBanner}>
+            <Feather name="alert-circle" size={13} color={colors.error} />
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        </View>
+      )}
+
+      {loaded && tasks.length === 0 ? (
+        <EmptyState
+          icon="clock"
+          title="No scheduled tasks yet"
+          message="Schedule a recurring prompt — or ask OpenAgent to set one up for you."
+          action={{ label: 'New task', icon: 'plus', onPress: handleAdd }}
+        />
+      ) : (
+        <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+          <View style={[styles.bodyInner, { paddingTop: headerInset + 20 }]} onLayout={onContainerLayout}>
+            {!loaded ? (
+              <Grid cols={cols}>
+                {Array.from({ length: Math.max(cols * 2, 4) }).map((_, i) => (
+                  <TaskTileSkeleton key={i} />
+                ))}
+              </Grid>
+            ) : (
+              <Grid cols={cols}>
+                {tasks.map((task) => (
+                  <TaskTile
+                    key={task.id}
+                    task={task}
+                    onToggle={(v) => { void toggleTask(task.id, v); }}
+                    onEdit={() => handleEdit(task)}
+                    onHistory={() => openDetached(router, `tasks/runs/${task.id}`)}
+                    onRemove={() => { void handleRemove(task.id); }}
+                  />
+                ))}
+              </Grid>
+            )}
+            <View style={{ height: 40 }} />
+          </View>
+        </ScrollView>
+      )}
+    </View>
+  );
+}
+
+// Placeholder tile mirroring TaskTile's footprint — shown while the
+// first /api/scheduled-tasks fetch is in flight so the screen renders
+// immediately instead of flashing the empty state.
+function TaskTileSkeleton() {
+  return (
+    <View style={skeletonStyles.tile}>
+      <View style={skeletonStyles.rail} />
+      <View style={skeletonStyles.body}>
+        <View style={skeletonStyles.headRow}>
+          <Skeleton width="55%" height={14} />
+          <Skeleton width={34} height={18} rounded={radius.lg} />
+        </View>
+        <Skeleton width="100%" height={11} />
+        <Skeleton width="80%" height={11} />
+        <View style={skeletonStyles.badgesRow}>
+          <Skeleton width={72} height={16} rounded={radius.sm} />
         </View>
       </View>
-
-      <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
-        <View style={styles.bodyInner} onLayout={onContainerLayout}>
-          {tasks.length === 0 ? (
-            <View style={styles.empty}>
-              <View style={styles.emptyIcon}>
-                <Feather name="clock" size={20} color={colors.textMuted} />
-              </View>
-              <Text style={styles.emptyTitle}>No scheduled tasks yet</Text>
-              <Text style={styles.emptyMessage}>
-                Schedule a recurring prompt — or ask OpenAgent AI to set one up for you.
-              </Text>
-              <View style={styles.emptyActions}>
-                <Button variant="primary" size="sm" label="New task" icon="plus" onPress={handleAdd} />
-              </View>
-            </View>
-          ) : (
-            <Grid cols={cols}>
-              {tasks.map((task) => (
-                <TaskTile
-                  key={task.id}
-                  task={task}
-                  onToggle={(v) => { void toggleTask(task.id, v); }}
-                  onEdit={() => handleEdit(task)}
-                  onHistory={() => openDetached(router, `tasks/runs/${task.id}`)}
-                  onRemove={() => { void handleRemove(task.id); }}
-                />
-              ))}
-            </Grid>
-          )}
-          <View style={{ height: 40 }} />
-        </View>
-      </ScrollView>
     </View>
   );
 }
@@ -197,21 +215,13 @@ function Grid({ cols, children }: { cols: number; children: React.ReactNode }) {
 const styles = StyleSheet.create({
   root: { flex: 1 },
 
-  fixedHeader: {
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderLight,
-  },
-  headerInner: {
+  errorWrap: {
     maxWidth: CONTENT_MAX_WIDTH,
     width: '100%',
     alignSelf: 'center',
     paddingHorizontal: 24,
-    paddingTop: 20,
-    paddingBottom: 14,
-    gap: 12,
+    paddingTop: 16,
   },
-  hint: { fontSize: 12.5, color: colors.textMuted, lineHeight: 18, maxWidth: 640 },
-
   errorBanner: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingHorizontal: 12, paddingVertical: 8,
@@ -229,30 +239,30 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingTop: 20,
   },
-
-  empty: {
-    alignItems: 'center',
-    paddingVertical: 56,
-    gap: 10,
-  },
-  emptyIcon: {
-    width: 44, height: 44, borderRadius: 22,
-    alignItems: 'center', justifyContent: 'center',
-    backgroundColor: colors.sidebar,
-    borderWidth: 1, borderColor: colors.borderLight,
-  },
-  emptyTitle: {
-    fontSize: 15, color: colors.text, fontWeight: '500',
-    fontFamily: font.display, letterSpacing: -0.2, marginTop: 2,
-  },
-  emptyMessage: {
-    fontSize: 12.5, color: colors.textMuted,
-    textAlign: 'center', maxWidth: 420, lineHeight: 18,
-  },
-  emptyActions: { flexDirection: 'row', gap: 8, marginTop: 8 },
 });
 
 const gridStyles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'stretch' },
   cell: { flex: 1, minWidth: 0 },
+});
+
+const skeletonStyles = StyleSheet.create({
+  tile: {
+    flexDirection: 'row',
+    backgroundColor: colors.surface,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: 'hidden',
+    minHeight: 138,
+  },
+  rail: { width: 3, backgroundColor: colors.borderStrong },
+  body: { flex: 1, padding: 14, gap: 8 },
+  headRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  badgesRow: { flexDirection: 'row', gap: 4, marginTop: 2 },
 });

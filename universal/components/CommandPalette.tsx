@@ -13,7 +13,7 @@
 import { memo, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
-import { colors, font, radius } from '../theme';
+import { colors, font, radius, glassSurface } from '../theme';
 
 export interface PaletteEntry {
   id: string;
@@ -186,13 +186,18 @@ const styles = StyleSheet.create({
   },
   panel: {
     width: '92%', maxWidth: 540,
-    backgroundColor: colors.surface,
+    // Shared frosted-glass recipe — matches the nav header exactly.
+    backgroundColor: glassSurface.backgroundColor,
     borderRadius: radius.lg,
     borderWidth: 1, borderColor: colors.border,
     shadowColor: colors.shadowColor,
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 1, shadowRadius: 24,
     overflow: 'hidden',
+    // Frost the panel background only (the scrim just dims the scene).
+    ...(Platform.OS === 'web'
+      ? ({ backdropFilter: glassSurface.webFilter, WebkitBackdropFilter: glassSurface.webFilter } as any)
+      : {}),
   },
   inputRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
