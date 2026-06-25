@@ -11,6 +11,7 @@ import type {
   WorkflowStats, BlockTypeSpec, MCPToolkitDescriptor,
   SystemSnapshot,
   VaultWriteResult, VaultHistory, VaultGateReport,
+  VaultCommitDetail, VaultRestoreResult, VaultResetResult,
 } from '../../common/types';
 
 let baseUrl = '';
@@ -179,6 +180,23 @@ export async function getVaultHistory(path?: string, limit?: number): Promise<Va
   if (limit) params.set('limit', String(limit));
   const qs = params.toString();
   return get<VaultHistory>(`/api/vault/history${qs ? `?${qs}` : ''}`);
+}
+
+// The changes a single commit introduced (files touched + unified diff).
+export async function getVaultCommit(hash: string): Promise<VaultCommitDetail> {
+  return get<VaultCommitDetail>(`/api/vault/commit?hash=${encodeURIComponent(hash)}`);
+}
+
+// Non-destructively roll the vault back to the state at ``hash`` — adds a
+// new commit; every later commit stays in history.
+export async function restoreVault(hash: string): Promise<VaultRestoreResult> {
+  return post<VaultRestoreResult>('/api/vault/restore', { hash });
+}
+
+// DESTRUCTIVELY make ``hash`` the latest commit, deleting every commit
+// after it. The server requires the explicit ``confirm`` flag.
+export async function resetVault(hash: string): Promise<VaultResetResult> {
+  return post<VaultResetResult>('/api/vault/reset', { hash, confirm: true });
 }
 
 // Quality-gate report — violations grouped by rule, with counts.

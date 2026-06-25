@@ -11,16 +11,53 @@
  * scoped to one note via ``getVaultHistory(path)``.
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Feather from '@expo/vector-icons/Feather';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import {
+  ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text,
+  TouchableOpacity, View,
+} from 'react-native';
 import { useNavigation } from 'expo-router';
 import { StackActions } from '@react-navigation/native';
-import type { VaultCommit } from '../../../../common/types';
+import type { VaultCommit, VaultCommitDetail } from '../../../../common/types';
 import { useConnection } from '../../../stores/connection';
 import { useEvents } from '../../../stores/events';
-import { getVaultHistory, setBaseUrl } from '../../../services/api';
+import {
+  getVaultCommit, getVaultHistory, resetVault, restoreVault, setBaseUrl,
+} from '../../../services/api';
 import { colors, font, radius } from '../../../theme';
+
+// Cross-platform confirm: a blocking ``window.confirm`` on web (RN-web's
+// Alert.alert has no usable button callbacks), a native action sheet via
+// Alert.alert elsewhere. Resolves true only on explicit confirmation.
+function confirmAsync(
+  title: string, message: string, confirmLabel: string, destructive = false,
+): Promise<boolean> {
+  if (Platform.OS === 'web') {
+    const ok = typeof window !== 'undefined'
+      && window.confirm(`${title}\n\n${message}`);
+    return Promise.resolve(!!ok);
+  }
+  return new Promise((resolve) => {
+    Alert.alert(title, message, [
+      { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+      {
+        text: confirmLabel,
+        style: destructive ? 'destructive' : 'default',
+        onPress: () => resolve(true),
+      },
+    ]);
+  });
+}
+
+// One line of a unified diff, coloured by its leading marker.
+function DiffLine({ line }: { line: string }) {
+  let color = colors.textMuted;
+  if (line.startsWith('+') && !line.startsWith('+++')) color = colors.success;
+  else if (line.startsWith('-') && !line.startsWith('---')) color = colors.error;
+  else if (line.startsWith('@@')) color = colors.primary;
+  return <Text style={[styles.diffLine, { color }]}>{line || ' '}</Text>;
+}
 
 // Relative-age label from an ISO date string (mirror ``fmtAge`` in
 // MembersPanel, which works off epoch seconds).
@@ -54,31 +91,26 @@ export function HistoryList({ path }: { path?: string }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const load = useCallback(async () => {
+    try {
+      const res = await getVaultHistory(path, 100);
+      setCommits(res.commits ?? []);
+      setError(null);
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setLoading(false);
+    }
+  }, [path]);
+
   useEffect(() => {
     if (!config) return;
     if (config.sidecarPort) setBaseUrl('127.0.0.1', config.sidecarPort);
-    let cancelled = false;
-    const load = async () => {
-      try {
-        const res = await getVaultHistory(path, 100);
-        if (!cancelled) {
-          setCommits(res.commits ?? []);
-          setError(null);
-        }
-      } catch (e: any) {
-        if (!cancelled) setError(e.message);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
     void load();
     // Live-refresh on vault writes — same channel the graph screen uses.
     const unsub = useEvents.getState().subscribe('vault', () => void load());
-    return () => {
-      cancelled = true;
-      unsub();
-    };
-  }, [config, path]);
+    return () => { unsub(); };
+  }, [config, path, load]);
 
   if (loading && commits.length === 0) {
     return (
@@ -104,29 +136,169 @@ export function HistoryList({ path }: { path?: string }) {
     );
   }
 
+  // The newest commit is the current state — there's nothing after it to
+  // restore from or reset to, so its actions are hidden.
+  const headHash = commits[0]?.hash;
+
   return (
     <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
-      {commits.map((c) => {
-        const prov = provenanceLabel(c.provenance ?? {});
-        return (
-          <View key={c.hash} style={styles.row}>
-            <View style={styles.rowHeader}>
-              <Text style={styles.subject} numberOfLines={2}>{c.subject}</Text>
-              <Text style={styles.hash}>{c.hash.slice(0, 7)}</Text>
-            </View>
-            <View style={styles.rowMeta}>
-              <Text style={styles.metaText}>{fmtSince(c.date)}</Text>
-              {c.author ? <Text style={styles.metaText}> · {c.author}</Text> : null}
-              {prov ? (
-                <View style={styles.provChip}>
-                  <Text style={styles.provChipText}>{prov}</Text>
-                </View>
-              ) : null}
-            </View>
-          </View>
-        );
-      })}
+      {commits.map((c) => (
+        <CommitRow
+          key={c.hash}
+          commit={c}
+          isHead={c.hash === headHash}
+          reload={load}
+        />
+      ))}
     </ScrollView>
+  );
+}
+
+// One commit: tap to expand its changes (files + diff), then optionally
+// restore the vault to that state (safe) or reset to it (destructive).
+function CommitRow({
+  commit, isHead, reload,
+}: { commit: VaultCommit; isHead: boolean; reload: () => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [detail, setDetail] = useState<VaultCommitDetail | null>(null);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [busy, setBusy] = useState<null | 'restore' | 'reset'>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const prov = provenanceLabel(commit.provenance ?? {});
+  const short = commit.hash.slice(0, 7);
+
+  const toggle = async () => {
+    const next = !open;
+    setOpen(next);
+    if (next && !detail && !loadingDetail) {
+      setLoadingDetail(true);
+      try {
+        setDetail(await getVaultCommit(commit.hash));
+      } catch (e: any) {
+        setMsg(e.message ?? 'Failed to load changes');
+      } finally {
+        setLoadingDetail(false);
+      }
+    }
+  };
+
+  const onRestore = async () => {
+    const ok = await confirmAsync(
+      'Restore this state',
+      `Bring the whole vault back to how it was at ${short} ("${commit.subject}").\n\n`
+        + 'This adds a new commit — your later history is kept and this is itself undoable.',
+      'Restore');
+    if (!ok) return;
+    setBusy('restore'); setMsg(null);
+    try {
+      const res = await restoreVault(commit.hash);
+      if (res.error) setMsg(res.error);
+      else { setMsg(res.changed ? 'Restored.' : 'Already at that state.'); await reload(); }
+    } catch (e: any) {
+      setMsg(e.message ?? 'Restore failed');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const onReset = async () => {
+    const ok = await confirmAsync(
+      'Reset to this commit',
+      `This PERMANENTLY DELETES every commit after ${short} ("${commit.subject}") and `
+        + 'makes it the latest state. This cannot be undone.',
+      'Delete later commits', true);
+    if (!ok) return;
+    setBusy('reset'); setMsg(null);
+    try {
+      const res = await resetVault(commit.hash);
+      if (res.error) setMsg(res.error);
+      else { setMsg(`Reset — deleted ${res.deleted ?? 0} later commit(s).`); await reload(); }
+    } catch (e: any) {
+      setMsg(e.message ?? 'Reset failed');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <View style={styles.row}>
+      <TouchableOpacity onPress={toggle} activeOpacity={0.6}>
+        <View style={styles.rowHeader}>
+          <Feather
+            name={open ? 'chevron-down' : 'chevron-right'}
+            size={14} color={colors.textMuted} style={styles.chevron}
+          />
+          <Text style={styles.subject} numberOfLines={open ? undefined : 2}>{commit.subject}</Text>
+          <Text style={styles.hash}>{short}</Text>
+        </View>
+        <View style={styles.rowMeta}>
+          <Text style={styles.metaText}>{fmtSince(commit.date)}</Text>
+          {commit.author ? <Text style={styles.metaText}> · {commit.author}</Text> : null}
+          {isHead ? (
+            <View style={[styles.provChip, styles.headChip]}>
+              <Text style={styles.provChipText}>current</Text>
+            </View>
+          ) : null}
+          {prov ? (
+            <View style={styles.provChip}>
+              <Text style={styles.provChipText}>{prov}</Text>
+            </View>
+          ) : null}
+        </View>
+      </TouchableOpacity>
+
+      {open ? (
+        <View style={styles.detail}>
+          {loadingDetail ? (
+            <ActivityIndicator size="small" color={colors.textMuted} />
+          ) : detail ? (
+            <>
+              {detail.files.map((f) => (
+                <Text key={f.path} style={styles.fileLine}>
+                  <Text style={styles.fileStatus}>{f.status}</Text>
+                  {`  ${f.path}`}
+                </Text>
+              ))}
+              {detail.diff ? (
+                <ScrollView horizontal style={styles.diffBox} contentContainerStyle={styles.diffContent}>
+                  <View>
+                    {detail.diff.split('\n').map((ln, i) => <DiffLine key={i} line={ln} />)}
+                  </View>
+                </ScrollView>
+              ) : null}
+              {detail.diff_truncated ? (
+                <Text style={styles.truncated}>… diff truncated</Text>
+              ) : null}
+            </>
+          ) : null}
+
+          {!isHead ? (
+            <View style={styles.actions}>
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.restoreBtn]}
+                onPress={onRestore} disabled={busy !== null} activeOpacity={0.7}
+              >
+                {busy === 'restore'
+                  ? <ActivityIndicator size="small" color={colors.primary} />
+                  : <Text style={styles.restoreText}>Restore this state</Text>}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.actionBtn, styles.resetBtn]}
+                onPress={onReset} disabled={busy !== null} activeOpacity={0.7}
+              >
+                {busy === 'reset'
+                  ? <ActivityIndicator size="small" color={colors.error} />
+                  : <Text style={styles.resetText}>Reset to here</Text>}
+              </TouchableOpacity>
+            </View>
+          ) : (
+            <Text style={styles.headNote}>This is the current state of the vault.</Text>
+          )}
+          {msg ? <Text style={styles.actionMsg}>{msg}</Text> : null}
+        </View>
+      ) : null}
+    </View>
   );
 }
 
@@ -189,4 +361,29 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
   emptyText: { color: colors.textMuted, fontSize: 12 },
   errorText: { color: colors.error, fontSize: 12, textAlign: 'center' },
+  chevron: { marginTop: 2 },
+  headChip: { backgroundColor: colors.primarySoft },
+  // expanded detail
+  detail: { marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: colors.borderLight },
+  fileLine: { fontSize: 11, color: colors.textSecondary, fontFamily: font.mono, marginBottom: 2 },
+  fileStatus: { color: colors.warning, fontWeight: '700' },
+  diffBox: {
+    marginTop: 8, maxHeight: 320, backgroundColor: colors.codeBg,
+    borderRadius: radius.xs, borderWidth: 1, borderColor: colors.borderLight,
+  },
+  diffContent: { padding: 10 },
+  diffLine: { fontSize: 10.5, lineHeight: 15, fontFamily: font.mono },
+  truncated: { fontSize: 10, color: colors.textMuted, marginTop: 4, fontStyle: 'italic' },
+  // actions
+  actions: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  actionBtn: {
+    flex: 1, paddingVertical: 9, borderRadius: radius.sm, alignItems: 'center',
+    justifyContent: 'center', borderWidth: 1, minHeight: 36,
+  },
+  restoreBtn: { backgroundColor: colors.primaryLight, borderColor: colors.border },
+  restoreText: { fontSize: 12, color: colors.primary, fontWeight: '600' },
+  resetBtn: { backgroundColor: colors.errorSoft, borderColor: colors.errorBorder },
+  resetText: { fontSize: 12, color: colors.error, fontWeight: '600' },
+  headNote: { fontSize: 11, color: colors.textMuted, marginTop: 8, fontStyle: 'italic' },
+  actionMsg: { fontSize: 11, color: colors.textSecondary, marginTop: 8 },
 });

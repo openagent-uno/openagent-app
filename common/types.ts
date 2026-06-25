@@ -656,6 +656,41 @@ export interface VaultHistory {
   path: string | null;
 }
 
+// A file touched by a commit: ``status`` is the git short status
+// (A/M/D/R), ``path`` the vault-relative note path.
+export interface VaultCommitFile {
+  status: string;
+  path: string;
+}
+
+// ``GET /api/vault/commit?hash=`` — the changes a single commit
+// introduced: metadata + the files it touched + the unified diff
+// (capped server-side; ``diff_truncated`` flags when it was cut).
+export interface VaultCommitDetail extends VaultCommit {
+  full_hash: string;
+  files: VaultCommitFile[];
+  diff: string;
+  diff_truncated: boolean;
+}
+
+// ``POST /api/vault/restore`` — non-destructive roll-back to a state.
+export interface VaultRestoreResult {
+  ok: boolean;
+  commit: string | null;
+  restored_from: string;
+  changed: boolean;
+  error?: string;
+}
+
+// ``POST /api/vault/reset`` — destructive reset; ``deleted`` is how many
+// later commits were removed.
+export interface VaultResetResult {
+  ok?: boolean;
+  head?: string;
+  deleted?: number;
+  error?: string;
+}
+
 // ``GET /api/vault/gate`` report — quality-gate violations grouped by
 // rule. Loosely typed (``by_rule`` / ``stats``) where the shape is
 // open-ended.
