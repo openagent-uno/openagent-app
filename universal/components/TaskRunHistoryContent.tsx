@@ -9,7 +9,8 @@
  * the ``error`` that aborted it — not a per-block trace.
  *
  * Chrome-less so it drops straight into the run-history *screen*
- * (``app/(tabs)/tasks/runs/[id].tsx``) under a ``DetachedHeader``.
+ * (``app/(tabs)/tasks/runs/[id].tsx``) under that screen's
+ * react-navigation header.
  */
 
 import Feather from '@expo/vector-icons/Feather';

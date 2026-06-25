@@ -33,23 +33,21 @@ import {
 } from '../../services/api';
 import Button from '../../components/Button';
 import Card from '../../components/Card';
-import CategorySidebar from '../../components/CategorySidebar';
 import TabStrip from '../../components/TabStrip';
-import ResponsiveSidebar from '../../components/ResponsiveSidebar';
 import { useConfirm } from '../../components/ConfirmDialog';
 import type {
   UsageData, DailyUsageEntry, ModelEntry, AvailableModel,
   ProviderConfig, ModelFramework,
 } from '../../../common/types';
 
-type CategoryId = 'overview' | 'providers' | 'models' | 'costs';
-
-const CATEGORIES = [
-  { id: 'overview' as const, label: 'Overview', icon: 'dollar-sign' as const, description: 'Usage summary' },
-  { id: 'providers' as const, label: 'Providers', icon: 'key' as const, description: 'API keys' },
-  { id: 'models' as const, label: 'Models', icon: 'cpu' as const, description: 'LLM, TTS, STT' },
-  { id: 'costs' as const, label: 'Costs', icon: 'bar-chart-2' as const, description: 'Daily breakdown' },
-];
+/**
+ * Which slice of the model screen to render. The screen is no longer a
+ * standalone tabbed page — it's embedded under Settings as two of its
+ * section pills:
+ *   - ``manage`` — providers + models merged into one panel.
+ *   - ``costs``  — the daily-spend breakdown (its own Settings pill).
+ */
+type ModelView = 'manage' | 'costs';
 
 const FALLBACK_PROVIDERS = [
   'anthropic', 'openai', 'google', 'zai', 'groq', 'mistral',
@@ -63,11 +61,9 @@ const FALLBACK_PROVIDERS = [
 // form should default the framework to litellm (TTS/STT only).
 const AUDIO_ONLY_VENDORS = new Set(['elevenlabs', 'deepgram']);
 
-export default function ModelScreen() {
+export default function ModelScreen({ view = 'manage' }: { view?: ModelView } = {}) {
   const connConfig = useConnection((s) => s.config);
   const confirm = useConfirm();
-
-  const [activeCategory, setActiveCategory] = useState<CategoryId>('overview');
 
   // Providers (DB, one row per (name, framework) pair)
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
@@ -289,42 +285,6 @@ export default function ModelScreen() {
 
   // ── Renders ──
 
-  const sidebar = (
-    <CategorySidebar<CategoryId>
-      title="Models"
-      active={activeCategory}
-      onChange={setActiveCategory}
-      categories={CATEGORIES}
-      footer={
-        usage ? (
-          <View style={styles.sidebarFooter}>
-            <Text style={styles.sidebarFooterLabel}>This Month</Text>
-            <Text style={styles.sidebarFooterValue}>
-              ${usage.monthly_spend.toFixed(2)}
-            </Text>
-          </View>
-        ) : null
-      }
-    />
-  );
-
-  const renderOverview = () => (
-    <>
-      <Text style={styles.title}>Overview</Text>
-      <Text style={styles.hint}>
-        The smart router picks a model per incoming message based on a cheap classifier. Models live in the database
-        (add them under Models). Provider credentials live there too (add them under Providers).
-      </Text>
-
-      <Card>
-        <Text style={styles.label}>This month</Text>
-        <Text style={styles.overviewValue}>
-          {usage ? `$${usage.monthly_spend.toFixed(3)}` : '—'}
-        </Text>
-      </Card>
-    </>
-  );
-
   const renderProviders = () => {
     const existingKeys = new Set(providers.map((p) => `${p.name}:${p.framework}`));
     const duplicate = newProvName
@@ -484,22 +444,15 @@ export default function ModelScreen() {
           it to the matching provider's API.
         </Text>
 
-        {/* Empty-state CTA: no providers → no models possible. */}
+        {/* Empty-state hint: no providers → no models possible. The
+            Providers section with its add form sits directly above. */}
         {noProviders && noModels && (
           <Card>
             <Text style={styles.emptyStateTitle}>No providers configured</Text>
             <Text style={styles.emptyStateBody}>
-              Add a provider row first with framework=api-based and supply
-              the API key.
+              Add a provider row above first (framework=api-based) and supply
+              its API key — then register models against it here.
             </Text>
-            <View style={{ height: 10 }} />
-            <Button
-              variant="primary"
-              size="md"
-              label="Add a provider"
-              icon="key"
-              onPress={() => setActiveCategory('providers')}
-            />
           </Card>
         )}
 
@@ -784,46 +737,30 @@ export default function ModelScreen() {
     </>
   );
 
-  const renderCategory = () => {
-    switch (activeCategory) {
-      case 'overview': return renderOverview();
-      case 'providers': return renderProviders();
-      case 'models': return renderModels();
-      case 'costs': return renderCosts();
-    }
-  };
-
+  // The screen renders as a single panel — no internal tab strip. Settings
+  // owns the section switching: ``manage`` (providers + models merged) and
+  // ``costs`` are two of its pills.
   return (
-    <ResponsiveSidebar sidebar={sidebar}>
-      <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-        {error && <Text style={styles.error}>{error}</Text>}
-        {renderCategory()}
-        <View style={{ height: 40 }} />
-      </ScrollView>
-    </ResponsiveSidebar>
+    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+      {error && <Text style={styles.error}>{error}</Text>}
+      {view === 'costs' ? (
+        renderCosts()
+      ) : (
+        <>
+          {renderProviders()}
+          <View style={{ height: 28 }} />
+          {renderModels()}
+        </>
+      )}
+      <View style={{ height: 40 }} />
+    </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
-  sidebarFooter: {
-    borderTopWidth: 1, borderTopColor: colors.borderLight,
-    paddingVertical: 10, paddingHorizontal: 10, marginTop: 8,
-  },
-  sidebarFooterLabel: {
-    fontSize: 9, color: colors.textMuted,
-    textTransform: 'uppercase', letterSpacing: 1, fontWeight: '600',
-  },
-  sidebarFooterValue: {
-    fontSize: 12, color: colors.text, fontWeight: '600', marginTop: 2, fontFamily: font.mono,
-  },
-
   container: { flex: 1 },
   content: { padding: 24, maxWidth: 640, width: '100%', alignSelf: 'center' },
 
-  title: {
-    fontSize: 20, fontWeight: '500', color: colors.text, marginBottom: 4,
-    fontFamily: font.display, letterSpacing: -0.4,
-  },
   sectionTitle: {
     fontSize: 18, fontWeight: '500', color: colors.text, marginBottom: 4,
     fontFamily: font.display, letterSpacing: -0.3,
@@ -950,7 +887,6 @@ const styles = StyleSheet.create({
   pickerItemText: { fontSize: 12, color: colors.text, fontFamily: font.mono },
   pickerItemMeta: { fontSize: 11, color: colors.textMuted, fontFamily: font.mono },
 
-  overviewValue: { fontSize: 20, fontWeight: '600', color: colors.text, fontFamily: font.mono },
   overviewMuted: { fontSize: 13, color: colors.textMuted, fontWeight: '400' },
 
   costSummary: { flexDirection: 'row', marginBottom: 14 },

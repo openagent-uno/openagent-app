@@ -1,15 +1,15 @@
 /**
- * Members panel — Users / Agents / Invitations / Peers in four TabStrip tabs.
+ * Members panel — Users / Agents / Invitations in three TabStrip tabs.
  *
- * Lives inside the Settings screen's "Members" category.
- * - Users / Agents / Invitations talk to coordinator-only ``/api/network/*``.
- * - Peers talks to ``/api/peers/*`` (works on any agent — federation).
+ * Lives inside the Settings screen's "Members" category. All three talk to
+ * the coordinator-only ``/api/network/*`` endpoints. (A former "Peers"
+ * federation tab was removed when its ``/api/peers/*`` backend went away.)
  */
 
 import Feather from '@expo/vector-icons/Feather';
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet, Platform, ScrollView,
+  View, Text, TextInput, TouchableOpacity, StyleSheet, Platform,
 } from 'react-native';
 import { colors, font, radius } from '../theme';
 import { useConnection } from '../stores/connection';
@@ -22,10 +22,8 @@ import {
   mintNetworkInvitation, revokeNetworkInvitation,
   patchNetworkUser, deleteNetworkUser,
   patchNetworkAgent, deleteNetworkAgent,
-  listPeerNetworks, joinPeerNetwork, removePeerNetwork,
-  refreshPeerCert, listPeerAgents, chatWithPeer,
   type NetworkUser, type NetworkAgent, type NetworkInvitation,
-  type MintInvitationResult, type PeerNetwork, type PeerChatResult,
+  type MintInvitationResult,
 } from '../services/api';
 
 async function copyToClipboard(text: string): Promise<void> {
@@ -34,13 +32,12 @@ async function copyToClipboard(text: string): Promise<void> {
   }
 }
 
-type SubTab = 'users' | 'agents' | 'invitations' | 'peers';
+type SubTab = 'users' | 'agents' | 'invitations';
 
 const SUB_TABS = [
   { id: 'users' as const, label: 'Users', icon: 'user' as const },
   { id: 'agents' as const, label: 'Agents', icon: 'cpu' as const },
   { id: 'invitations' as const, label: 'Invitations', icon: 'mail' as const },
-  { id: 'peers' as const, label: 'Peers', icon: 'link' as const },
 ];
 
 function fmtAge(s: number | null | undefined): string {
@@ -76,14 +73,11 @@ export default function MembersPanel() {
   const [users, setUsers] = useState<NetworkUser[]>([]);
   const [agents, setAgents] = useState<NetworkAgent[]>([]);
   const [invitations, setInvitations] = useState<NetworkInvitation[]>([]);
-  const [peers, setPeers] = useState<PeerNetwork[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [memberMode, setMemberMode] = useState(false);
 
   const refresh = useCallback(async () => {
     if (!connConfig?.sidecarPort) return;
-    // Peers are available on all agents — always fetch.
-    void listPeerNetworks().then(setPeers).catch(() => {});
     try {
       const u = await listNetworkUsers();
       const [a, inv] = await Promise.all([
@@ -114,15 +108,12 @@ export default function MembersPanel() {
     <>
       <Text style={styles.sectionTitle}>Members</Text>
 
-      {error && tab !== 'peers' && (
+      {error && (
         <Card>
           <Text style={styles.fieldHint}>
             This agent is a member, not a coordinator. User and invite
-            management lives on the network's coordinator. Switch to the{' '}
-            <Text style={{ color: colors.accent }} onPress={() => setTab('peers')}>
-              Peers
-            </Text>{' '}
-            tab to manage federated agents.
+            management lives on the network's coordinator, so there's nothing
+            to manage here.
           </Text>
         </Card>
       )}
@@ -145,9 +136,6 @@ export default function MembersPanel() {
         <InvitationsPanel
           invitations={invitations} refresh={refresh} setError={setError}
         />
-      )}
-      {tab === 'peers' && (
-        <PeersPanel peers={peers} refresh={refresh} setError={setError} />
       )}
     </>
   );
@@ -532,199 +520,6 @@ function TicketBox({
 }
 
 
-// ── PeersPanel ─────────────────────────────────────────────────────────────
-
-function PeersPanel({
-  peers, refresh, setError,
-}: {
-  peers: PeerNetwork[];
-  refresh: () => void;
-  setError: (e: string | null) => void;
-}) {
-  const confirm = useConfirm();
-  const [ticketInput, setTicketInput] = useState('');
-  const [joining, setJoining] = useState(false);
-  const [chatTarget, setChatTarget] = useState<PeerNetwork | null>(null);
-  const [chatMsg, setChatMsg] = useState('');
-  const [chatting, setChatting] = useState(false);
-  const [chatResult, setChatResult] = useState<PeerChatResult | null>(null);
-  const [chatError, setChatError] = useState<string | null>(null);
-
-  async function handleJoin() {
-    const t = ticketInput.trim();
-    if (!t) return;
-    setJoining(true); setError(null);
-    try {
-      await joinPeerNetwork({ ticket: t });
-      setTicketInput('');
-      refresh();
-    } catch (e: any) {
-      setError(String(e?.message || e));
-    } finally {
-      setJoining(false);
-    }
-  }
-
-  async function handleRemove(peer: PeerNetwork) {
-    const ok = await confirm(
-      `Remove peer "${peer.name}"? This only removes the local membership — the remote agent still knows you.`,
-      { confirmLabel: 'Remove', danger: true },
-    );
-    if (!ok) return;
-    try {
-      await removePeerNetwork(peer.network_id);
-      refresh();
-    } catch (e: any) {
-      setError(String(e?.message || e));
-    }
-  }
-
-  async function handleRefreshCert(peer: PeerNetwork) {
-    try {
-      await refreshPeerCert(peer.network_id);
-      refresh();
-    } catch (e: any) {
-      setError(String(e?.message || e));
-    }
-  }
-
-  async function handleChat() {
-    if (!chatTarget || !chatMsg.trim()) return;
-    setChatting(true); setChatError(null); setChatResult(null);
-    try {
-      const result = await chatWithPeer(chatTarget.network_id, {
-        message: chatMsg.trim(),
-        session_id: `app-peer-${chatTarget.network_id.slice(0, 8)}`,
-      });
-      setChatResult(result);
-    } catch (e: any) {
-      setChatError(String(e?.message || e));
-    } finally {
-      setChatting(false);
-    }
-  }
-
-  return (
-    <View>
-      {/* Add Peer */}
-      <Card>
-        <Text style={styles.cardTitle}>Add Peer Agent</Text>
-        <Text style={styles.fieldHint}>
-          Paste an agent invite ticket (oa1…) received from another OpenAgent instance.
-        </Text>
-        <TextInput
-          style={[styles.input, { marginTop: 8 }]}
-          placeholder="oa1…"
-          placeholderTextColor={colors.textMuted}
-          value={ticketInput}
-          onChangeText={setTicketInput}
-          autoCapitalize="none"
-          autoCorrect={false}
-          multiline
-        />
-        <Button
-          label={joining ? 'Joining…' : 'Join Peer'}
-          onPress={handleJoin}
-          disabled={joining || !ticketInput.trim()}
-          style={{ marginTop: 8 }}
-        />
-      </Card>
-
-      {/* Peer list */}
-      <Card style={{ marginTop: 12 }}>
-        <Text style={styles.cardTitle}>Peer Networks ({peers.length})</Text>
-        {peers.length === 0 ? (
-          <Text style={styles.fieldHint}>
-            No peer networks joined yet. Paste an agent invite ticket above to get started.
-          </Text>
-        ) : (
-          peers.map((p) => {
-            const certOk = p.cert_expires_at && p.cert_expires_at > Date.now() / 1000;
-            const isChatOpen = chatTarget?.network_id === p.network_id;
-            return (
-              <View key={p.network_id} style={styles.row}>
-                <View style={styles.rowMain}>
-                  <Text style={styles.rowHandle}>{p.name}</Text>
-                  <Text style={styles.rowMeta}>
-                    {p.our_handle} · {p.join_type}
-                    {certOk
-                      ? ` · cert ${fmtUntil(p.cert_expires_at ?? undefined)}`
-                      : ' · cert expired'}
-                  </Text>
-                </View>
-                <View style={styles.rowActions}>
-                  <TouchableOpacity
-                    onPress={() => {
-                      setChatTarget(isChatOpen ? null : p);
-                      setChatResult(null); setChatError(null); setChatMsg('');
-                    }}
-                    style={styles.iconBtn}
-                  >
-                    <Feather
-                      name="message-circle"
-                      size={16}
-                      color={isChatOpen ? colors.accent : colors.textMuted}
-                    />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => handleRefreshCert(p)}
-                    style={styles.iconBtn}
-                  >
-                    <Feather name="refresh-cw" size={16} color={colors.textMuted} />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() => handleRemove(p)}
-                    style={styles.iconBtn}
-                  >
-                    <Feather name="trash-2" size={16} color={colors.error} />
-                  </TouchableOpacity>
-                </View>
-
-                {/* Inline chat panel */}
-                {isChatOpen && (
-                  <View style={styles.chatPane}>
-                    {chatResult && (
-                      <View style={styles.chatBubble}>
-                        <Text style={styles.chatBubbleLabel}>
-                          {chatResult.agent_handle ?? p.name}
-                        </Text>
-                        <Text style={styles.chatBubbleText}>{chatResult.response}</Text>
-                        {chatResult.model ? (
-                          <Text style={styles.chatBubbleMeta}>{chatResult.model}</Text>
-                        ) : null}
-                      </View>
-                    )}
-                    {chatError && (
-                      <Text style={[styles.fieldHint, { color: colors.error, marginBottom: 6 }]}>
-                        {chatError}
-                      </Text>
-                    )}
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Message…"
-                      placeholderTextColor={colors.textMuted}
-                      value={chatMsg}
-                      onChangeText={setChatMsg}
-                      multiline
-                    />
-                    <Button
-                      label={chatting ? 'Sending…' : 'Send'}
-                      onPress={handleChat}
-                      disabled={chatting || !chatMsg.trim()}
-                      style={{ marginTop: 6 }}
-                    />
-                  </View>
-                )}
-              </View>
-            );
-          })
-        )}
-      </Card>
-    </View>
-  );
-}
-
-
 const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 14, fontWeight: '700', fontFamily: font.sans,
@@ -795,29 +590,5 @@ const styles = StyleSheet.create({
   },
   errorText: {
     color: colors.error, fontFamily: font.sans, fontSize: 12, flex: 1,
-  },
-  // Peer-specific styles
-  rowMain: { flex: 1 },
-  rowHandle: { fontSize: 13, color: colors.text, fontFamily: font.mono, fontWeight: '600' },
-  rowMeta: { fontSize: 11, color: colors.textSecondary, fontFamily: font.sans, marginTop: 2 },
-  rowActions: { flexDirection: 'row', gap: 4, alignItems: 'center' },
-  iconBtn: { padding: 6, borderRadius: radius.sm },
-  chatPane: {
-    width: '100%', marginTop: 10, paddingTop: 10,
-    borderTopColor: colors.border, borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  chatBubble: {
-    backgroundColor: colors.surfaceElevated, borderRadius: radius.md,
-    padding: 10, marginBottom: 8,
-  },
-  chatBubbleLabel: {
-    fontSize: 11, color: colors.accent, fontFamily: font.sans,
-    fontWeight: '600', marginBottom: 4,
-  },
-  chatBubbleText: {
-    fontSize: 13, color: colors.text, fontFamily: font.sans, lineHeight: 19,
-  },
-  chatBubbleMeta: {
-    fontSize: 10, color: colors.textMuted, fontFamily: font.mono, marginTop: 4,
   },
 });

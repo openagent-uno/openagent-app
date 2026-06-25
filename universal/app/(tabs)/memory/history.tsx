@@ -17,8 +17,6 @@ import {
   ActivityIndicator, Alert, Platform, ScrollView, StyleSheet, Text,
   TouchableOpacity, View,
 } from 'react-native';
-import { useNavigation } from 'expo-router';
-import { StackActions } from '@react-navigation/native';
 import type { VaultCommit, VaultCommitDetail } from '../../../../common/types';
 import { useConnection } from '../../../stores/connection';
 import { useEvents } from '../../../stores/events';
@@ -303,23 +301,10 @@ function CommitRow({
 }
 
 export default function VaultHistoryScreen() {
-  const navigation = useNavigation();
-
-  // Back to the graph root — same ``popTo('index')`` pattern as the
-  // editor (``router.back()`` would bubble to the Tabs navigator).
-  const backToGraph = () => navigation.dispatch(StackActions.popTo('index'));
-
+  // The header (back + "Vault history" title) is the react-navigation
+  // header from memory/_layout.tsx — this screen is just the list body.
   return (
     <View style={styles.screen}>
-      <View style={styles.header}>
-        <TouchableOpacity onPress={backToGraph} style={styles.backBtn}>
-          <View style={styles.backBtnContent}>
-            <Feather name="arrow-left" size={14} color={colors.primary} />
-            <Text style={styles.backBtnText}>Graph</Text>
-          </View>
-        </TouchableOpacity>
-        <Text style={styles.title} numberOfLines={1}>Vault history</Text>
-      </View>
       <HistoryList />
     </View>
   );
@@ -327,18 +312,6 @@ export default function VaultHistoryScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.surface },
-  header: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 14, paddingVertical: 8,
-    borderBottomWidth: 1, borderBottomColor: colors.borderLight,
-  },
-  backBtn: { paddingVertical: 4, paddingHorizontal: 6, marginRight: 10 },
-  backBtnContent: { flexDirection: 'row', alignItems: 'center' },
-  backBtnText: { fontSize: 12, color: colors.textSecondary, fontWeight: '500', marginLeft: 5 },
-  title: {
-    fontSize: 14, fontWeight: '500', color: colors.text, flex: 1,
-    fontFamily: font.display, letterSpacing: -0.2,
-  },
   list: { flex: 1 },
   listContent: { padding: 14, maxWidth: 720, width: '100%', alignSelf: 'center' },
   row: {

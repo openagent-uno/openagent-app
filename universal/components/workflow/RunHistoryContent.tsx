@@ -7,8 +7,8 @@
  * (one row per block with status dot, input, output, error).
  *
  * Carries no chrome of its own so it drops straight into the run-history
- * *screen* (``app/(tabs)/workflows/runs/[id].tsx``) under a
- * ``DetachedHeader``. Run history used to be an in-editor slide-over
+ * *screen* (``app/(tabs)/workflows/runs/[id].tsx``) under that screen's
+ * react-navigation header. Run history used to be an in-editor slide-over
  * drawer; it now opens as its own window/screen everywhere (the list
  * rows and the editor's History button both ``openDetached`` to that
  * route), so the drawer shell was retired and only this body remains.

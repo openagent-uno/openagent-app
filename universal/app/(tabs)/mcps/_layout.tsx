@@ -12,19 +12,27 @@
  *
  * Expo Router is layered on react-navigation; the ``<Stack />`` below
  * is the same native stack navigator, so native back gestures and
- * screen transitions work out of the box. Headers are suppressed —
- * each screen renders its own so we can style the title typography.
+ * screen transitions work out of the box. The navigator owns every
+ * header: the dashboard gets the drawer toggle, sub-screens get a back
+ * button + title (set per-screen via setOptions).
  */
 
 import { Stack } from 'expo-router';
-import { themedHeader, HeaderMenu } from '../../../components/screenHeader';
+import { themedHeader, HeaderMenu, HeaderBack } from '../../../components/screenHeader';
 
 export default function MCPsStackLayout() {
   return (
-    <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
-      <Stack.Screen name="index" options={{ ...themedHeader, title: 'Connectors', headerLeft: () => <HeaderMenu /> }} />
-      <Stack.Screen name="install" />
-      <Stack.Screen name="[name]" />
+    <Stack
+      screenOptions={{
+        ...themedHeader,
+        headerLeft: () => <HeaderBack />,
+        animation: 'slide_from_right',
+      }}
+    >
+      <Stack.Screen name="index" options={{ title: 'Connectors', headerLeft: () => <HeaderMenu /> }} />
+      {/* Sub-screens set their own (dynamic) titles + actions. */}
+      <Stack.Screen name="install" options={{ title: 'Install' }} />
+      <Stack.Screen name="[name]" options={{ title: 'Connector' }} />
     </Stack>
   );
 }

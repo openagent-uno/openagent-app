@@ -8,10 +8,14 @@
  */
 
 import { Stack } from 'expo-router';
+import { themedHeader } from '../../../components/screenHeader';
 
 export default function TerminalStackLayout() {
+  // The terminal screen sets its own title / back / status via
+  // navigation.setOptions (its back closes the window, and the live status
+  // badge rides in headerRight).
   return (
-    <Stack screenOptions={{ headerShown: false, animation: 'fade' }}>
+    <Stack screenOptions={{ ...themedHeader, animation: 'fade' }}>
       <Stack.Screen name="[id]" />
     </Stack>
   );

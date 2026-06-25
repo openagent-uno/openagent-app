@@ -14,9 +14,8 @@ import {
   View, Text, ScrollView, StyleSheet, TouchableOpacity, TextInput,
 } from 'react-native';
 import Card from '../../components/Card';
-import CategorySidebar from '../../components/CategorySidebar';
+import SectionTabs from '../../components/SectionTabs';
 import TabStrip from '../../components/TabStrip';
-import ResponsiveSidebar from '../../components/ResponsiveSidebar';
 import { useConnection } from '../../stores/connection';
 import { useSystem } from '../../stores/system';
 import { useTerminals } from '../../stores/terminals';
@@ -165,27 +164,20 @@ export default function SystemScreen() {
     // tears down the WS when the user disconnects or switches accounts.
   }, [connConfig, startFeed]);
 
-  const sidebar = (
-    <CategorySidebar<CategoryId>
-      title="System"
+  const tabBar = (
+    <SectionTabs<CategoryId>
+      tabs={CATEGORIES}
       active={activeCategory}
       onChange={setActiveCategory}
-      categories={CATEGORIES}
-      footer={
-        <View style={styles.sidebarFooter}>
-          <Text style={styles.sidebarFooterLabel}>Uptime</Text>
-          <Text style={styles.sidebarFooterValue}>
-            {snapshot ? fmtUptime(snapshot.host.uptime_seconds) : '—'}
+      trailing={
+        <View style={styles.liveBadge}>
+          <View style={[
+            styles.liveDot,
+            { backgroundColor: snapshot ? colors.success : colors.textMuted },
+          ]} />
+          <Text style={styles.liveBadgeText}>
+            {snapshot ? 'live' : (error ? 'offline' : '…')}
           </Text>
-          <View style={styles.liveDotRow}>
-            <View style={[
-              styles.liveDot,
-              { backgroundColor: snapshot ? colors.success : colors.textMuted },
-            ]} />
-            <Text style={styles.liveDotLabel}>
-              {snapshot ? 'live' : (error ? 'offline' : 'connecting…')}
-            </Text>
-          </View>
         </View>
       }
     />
@@ -195,16 +187,18 @@ export default function SystemScreen() {
   // before (or without) the first system snapshot.
   if (activeCategory === 'terminal') {
     return (
-      <ResponsiveSidebar sidebar={sidebar}>
+      <View style={styles.screen}>
+        {tabBar}
         <Terminals />
-      </ResponsiveSidebar>
+      </View>
     );
   }
 
   // Loading state — first snapshot hasn't arrived yet.
   if (!snapshot) {
     return (
-      <ResponsiveSidebar sidebar={sidebar}>
+      <View style={styles.screen}>
+        {tabBar}
         <ScrollView style={styles.container} contentContainerStyle={styles.content}>
           <Text style={styles.title}>System</Text>
           <Text style={styles.hint}>
@@ -213,7 +207,7 @@ export default function SystemScreen() {
               : 'Waiting for the first telemetry tick from the gateway…'}
           </Text>
         </ScrollView>
-      </ResponsiveSidebar>
+      </View>
     );
   }
 
@@ -235,13 +229,14 @@ export default function SystemScreen() {
   };
 
   return (
-    <ResponsiveSidebar sidebar={sidebar}>
+    <View style={styles.screen}>
+      {tabBar}
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
         {error && <Text style={styles.error}>{error}</Text>}
         {renderCategory()}
         <View style={{ height: 40 }} />
       </ScrollView>
-    </ResponsiveSidebar>
+    </View>
   );
 }
 
@@ -545,30 +540,22 @@ function KvRow({ k, v, last }: { k: string; v: string; last?: boolean }) {
 }
 
 const styles = StyleSheet.create({
-  sidebarFooter: {
-    borderTopWidth: 1, borderTopColor: colors.borderLight,
-    paddingVertical: 10, paddingHorizontal: 10, marginTop: 8,
+  // Live/uptime badge pinned to the right of the section tab strip.
+  liveBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 10, paddingVertical: 5,
+    backgroundColor: colors.inputBg,
+    borderRadius: radius.pill,
+    borderWidth: 1, borderColor: colors.borderLight,
   },
-  sidebarFooterLabel: {
-    fontSize: 9, color: colors.textMuted,
-    textTransform: 'uppercase', letterSpacing: 1, fontWeight: '600',
-  },
-  sidebarFooterValue: {
-    fontSize: 12, color: colors.text, fontWeight: '600',
-    marginTop: 2, fontFamily: font.mono,
-  },
-  liveDotRow: {
-    flexDirection: 'row', alignItems: 'center',
-    marginTop: 8, gap: 6,
-  },
-  liveDot: {
-    width: 6, height: 6, borderRadius: 3,
-  },
-  liveDotLabel: {
-    fontSize: 9, color: colors.textMuted,
-    textTransform: 'uppercase', letterSpacing: 1, fontWeight: '600',
+  liveDot: { width: 6, height: 6, borderRadius: 3 },
+  liveBadgeText: {
+    fontSize: 9, color: colors.textSecondary,
+    textTransform: 'uppercase', letterSpacing: 1, fontWeight: '700',
+    fontFamily: font.mono,
   },
 
+  screen: { flex: 1 },
   container: { flex: 1 },
   content: { padding: 24, maxWidth: 720, width: '100%', alignSelf: 'center' },
 

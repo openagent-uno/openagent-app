@@ -6,19 +6,27 @@
  * (``runs/[id]``) push onto this stack on web / native, and open as
  * separate desktop windows via ``openDetached``.
  *
- * Mirrors ``workflows/_layout.tsx`` — headers suppressed because each
- * screen renders its own ``DetachedHeader``.
+ * Mirrors ``workflows/_layout.tsx`` — the navigator owns every header:
+ * the list gets the drawer toggle, the editor and run history get a back
+ * button + title (the editor adds a Save action via setOptions).
  */
 
 import { Stack } from 'expo-router';
-import { themedHeader, HeaderMenu } from '../../../components/screenHeader';
+import { themedHeader, HeaderMenu, HeaderBack } from '../../../components/screenHeader';
 
 export default function TasksStackLayout() {
   return (
-    <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
-      <Stack.Screen name="index" options={{ ...themedHeader, title: 'Scheduled', headerLeft: () => <HeaderMenu /> }} />
-      <Stack.Screen name="[id]" />
-      <Stack.Screen name="runs/[id]" />
+    <Stack
+      screenOptions={{
+        ...themedHeader,
+        headerLeft: () => <HeaderBack />,
+        animation: 'slide_from_right',
+      }}
+    >
+      <Stack.Screen name="index" options={{ title: 'Scheduled', headerLeft: () => <HeaderMenu /> }} />
+      {/* Editor sets its own title (New Task / the task name) + Save action. */}
+      <Stack.Screen name="[id]" options={{ title: 'Task' }} />
+      <Stack.Screen name="runs/[id]" options={{ title: 'Run history' }} />
     </Stack>
   );
 }

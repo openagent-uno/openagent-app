@@ -47,13 +47,16 @@ export function openDetached(router: RouterLike, route: string): void {
 
 /**
  * Dismiss an inline detail/editor: pop the navigation stack, falling back
- * to the app root when there's nothing to pop (e.g. a deep-linked tab).
+ * to the authenticated home when there's nothing to pop (e.g. a
+ * deep-linked tab). The fallback is the chat tab — NOT ``/`` (the login
+ * screen), which would look like a logout when a sub-screen's back has an
+ * empty history.
  */
 export function closeDetached(router: RouterLike): void {
   if (router.canGoBack?.()) {
     router.back();
   } else {
-    router.replace('/' as any);
+    router.replace('/(tabs)/chat' as any);
   }
 }
 

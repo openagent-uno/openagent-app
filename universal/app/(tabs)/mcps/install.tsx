@@ -15,7 +15,7 @@
  * before they click Install.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TextInput, TouchableOpacity,
   ActivityIndicator, Platform,
@@ -23,6 +23,7 @@ import {
 import Feather from '@expo/vector-icons/Feather';
 import { useLocalSearchParams, useNavigation } from 'expo-router';
 import { StackActions } from '@react-navigation/native';
+import { HeaderRight, HeaderIconButton } from '../../../components/screenHeader';
 import { useConnection } from '../../../stores/connection';
 import {
   setBaseUrl,
@@ -184,20 +185,21 @@ export default function InstallMcpScreen() {
 
   const server = detail?.server as any;
 
+  // Title (the marketplace server) + reload in the nav header; back is the
+  // stack's header back button.
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      title: server?.title || server?.name || 'Install',
+      headerRight: () => (
+        <HeaderRight>
+          <HeaderIconButton icon="refresh-cw" accessibilityLabel="Reload" onPress={load} disabled={loading} />
+        </HeaderRight>
+      ),
+    });
+  }, [navigation, server?.title, server?.name, load, loading]);
+
   return (
     <View style={styles.root}>
-      {/* Breadcrumb + close */}
-      <View style={styles.topBar}>
-        <TouchableOpacity onPress={backToList} style={styles.topBarBtn} hitSlop={8}>
-          <Feather name="arrow-left" size={14} color={colors.textSecondary} />
-          <Text style={styles.topBarText}>Marketplace</Text>
-        </TouchableOpacity>
-        <View style={{ flex: 1 }} />
-        <TouchableOpacity onPress={load} style={styles.topBarBtn} hitSlop={8} disabled={loading}>
-          <Feather name="refresh-cw" size={13} color={colors.textMuted} />
-        </TouchableOpacity>
-      </View>
-
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {loading ? (
           <View style={styles.loadingBox}>
@@ -527,18 +529,6 @@ function ErrorInline({ message }: { message: string }) {
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-
-  topBar: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 18, paddingVertical: 12,
-    borderBottomWidth: 1, borderBottomColor: colors.borderLight,
-    backgroundColor: colors.surface,
-  },
-  topBarBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 6, paddingVertical: 4,
-  },
-  topBarText: { fontSize: 12, color: colors.textSecondary, fontWeight: '500' },
 
   scrollContent: {
     paddingHorizontal: 28,

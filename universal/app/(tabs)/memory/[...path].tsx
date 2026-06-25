@@ -4,31 +4,25 @@
  * The path is a catch-all so folder segments (``docs/ideas.md``) come
  * through intact. The editor reads ``selectedPath`` from the vault
  * store — we call ``selectNote`` on mount (and whenever the route's
- * path changes, e.g. the sidebar picked a sibling) to pull the note.
+ * path changes) to pull the note.
  *
- * Back/save/delete navigate via ``StackActions.popTo('index')`` — see
- * ``mcps/[name].tsx`` for the full rationale on why ``router.back()``
- * is unsafe here (bubbles to the Tabs navigator, jumps to chat).
- *
- * Sidebar note taps use ``router.replace`` instead of ``push`` so the
- * stack doesn't grow as the user browses the vault.
+ * Chrome is the react-navigation header (back + note title) from
+ * memory/_layout.tsx; the History / Rename / Edit-Preview / Save controls
+ * live in ``headerRight``. The vault's last-save feedback (validation
+ * errors / warnings / commit hash) shows in a slim status strip above the
+ * body. No inner file-tree sidebar — note navigation is the graph screen.
  */
 
-import { useCallback, useEffect, useState } from 'react';
-import Feather from '@expo/vector-icons/Feather';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
-  Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View,
+  Platform, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { StackActions } from '@react-navigation/native';
-import Button from '../../../components/Button';
 import Markdown from '../../../components/Markdown';
-import ResponsiveSidebar from '../../../components/ResponsiveSidebar';
-import VaultSidebar from '../../../components/memory/VaultSidebar';
+import { HeaderRight, HeaderIconButton, HeaderAction } from '../../../components/screenHeader';
 import { useConnection } from '../../../stores/connection';
 import { useVault } from '../../../stores/vault';
 import { setBaseUrl } from '../../../services/api';
-import { useIsWideScreen } from '../../../hooks/useLayout';
 import { colors, font, radius } from '../../../theme';
 
 export default function MemoryNoteScreen() {
@@ -43,13 +37,12 @@ export default function MemoryNoteScreen() {
 
   const config = useConnection((s) => s.config);
   const {
-    notes, selectedPath, editorContent, editorDirty,
+    notes, editorContent, editorDirty,
     lastWarnings, lastCommit, lastErrors,
     loadNotes, loadGraph, selectNote, updateEditor, saveNote, moveNote,
   } = useVault();
 
   const [rawMode, setRawMode] = useState(false);
-  const isWide = useIsWideScreen();
 
   // Initial data — same set the graph screen loads, in case the user
   // deep-linked straight to a note.
@@ -61,13 +54,19 @@ export default function MemoryNoteScreen() {
     }
   }, [config]);
 
-  // Keep the vault store's ``selectedPath`` in sync with the route so
-  // ``saveNote`` writes to the right path.
+  // Load the note into the vault store once per distinct route path —
+  // ``selectNote`` also sets the store's ``selectedPath`` so ``saveNote``
+  // writes to the right path. We gate on a ref keyed by ``notePath`` rather
+  // than reading ``selectedPath`` from the store: ``selectNote`` mutates
+  // ``selectedPath`` / ``loading`` / content, so depending on store values
+  // here created a setState feedback loop ("Maximum update depth exceeded").
+  const requestedPathRef = useRef<string | null>(null);
   useEffect(() => {
-    if (notePath && selectedPath !== notePath) {
+    if (notePath && requestedPathRef.current !== notePath) {
+      requestedPathRef.current = notePath;
       selectNote(notePath);
     }
-  }, [notePath, selectedPath, selectNote]);
+  }, [notePath, selectNote]);
 
   // Every new note starts in preview mode.
   useEffect(() => { setRawMode(false); }, [notePath]);
@@ -89,24 +88,6 @@ export default function MemoryNoteScreen() {
     return () => window.removeEventListener('keydown', handler);
   }, [handleSave]);
 
-  // Back to the graph. ``popTo`` on the Memory Stack directly — can't
-  // bubble to the Tabs navigator. Clear the vault's editor state first
-  // so a future tap on the same note starts from a clean slate.
-  const backToGraph = useCallback(() => {
-    useVault.setState({ selectedPath: null, editorContent: '', editorDirty: false });
-    navigation.dispatch(StackActions.popTo('index'));
-  }, [navigation]);
-
-  // Sidebar tap while already on a note: swap in place rather than
-  // growing the stack.
-  const openNote = useCallback((next: string) => {
-    if (next === notePath) return;
-    router.replace({
-      pathname: '/(tabs)/memory/[...path]',
-      params: { path: next.split('/') },
-    });
-  }, [router, notePath]);
-
   // Push the per-note git history screen.
   const openHistory = useCallback(() => {
     router.push({
@@ -126,8 +107,6 @@ export default function MemoryNoteScreen() {
     if (input == null) return;
     const next = input.trim();
     if (!next || next === current) return;
-    // A path (contains ``/``) is used verbatim; a bare name stays in the
-    // current folder. Ensure a ``.md`` extension either way.
     const withExt = next.endsWith('.md') ? next : `${next}.md`;
     const target = withExt.includes('/') ? withExt : `${dir}${withExt}`;
     if (target === notePath) return;
@@ -142,133 +121,117 @@ export default function MemoryNoteScreen() {
   const selectedNote = notes.find((n) => n.path === notePath);
   const titleFallback = notePath.split('/').pop()?.replace('.md', '') ?? '';
 
+  // Note title in the nav header.
+  useLayoutEffect(() => {
+    navigation.setOptions({ title: selectedNote?.title || titleFallback || 'Note' });
+  }, [navigation, selectedNote?.title, titleFallback]);
+
+  // History / Rename / Edit-Preview / Save in the nav header's right slot.
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <HeaderRight>
+          <HeaderIconButton icon="clock" accessibilityLabel="History" onPress={openHistory} />
+          {Platform.OS === 'web' && (
+            <HeaderIconButton icon="type" accessibilityLabel="Rename" onPress={handleRename} />
+          )}
+          <HeaderIconButton
+            icon={rawMode ? 'eye' : 'edit-3'}
+            active={rawMode}
+            accessibilityLabel={rawMode ? 'Preview' : 'Edit'}
+            onPress={() => setRawMode((v) => !v)}
+          />
+          {rawMode && (
+            <HeaderAction icon="check" label="Save" onPress={handleSave} disabled={!editorDirty} />
+          )}
+        </HeaderRight>
+      ),
+    });
+    // Depend only on the primitives that change the header's appearance.
+    // The handlers (openHistory / handleRename / handleSave) close over
+    // ``notePath``; including the callbacks themselves would loop, because
+    // ``useRouter()`` hands back a fresh reference each render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigation, rawMode, editorDirty, notePath]);
+
+  const showStatus = lastErrors.length > 0
+    || (!editorDirty && (lastWarnings.length > 0 || !!lastCommit));
+
   return (
-    <ResponsiveSidebar sidebar={<VaultSidebar selectedPath={notePath} onSelectNote={openNote} />}>
-      <View style={[styles.editorContainer, isWide && { paddingLeft: 248 }]}>
-        <View style={styles.editorHeader}>
-          <TouchableOpacity onPress={backToGraph} style={styles.backBtn}>
-            <View style={styles.backBtnContent}>
-              <Feather name="arrow-left" size={14} color={colors.primary} />
-              <Text style={styles.backBtnText}>Graph</Text>
+    <View style={styles.editorContainer}>
+      {showStatus && (
+        <View style={styles.statusStrip}>
+          {/* The quality gate rejected the last save — the note was NOT
+              written. Show why so the user can fix and re-save. */}
+          {lastErrors.length > 0 && (
+            <View style={styles.errorPill}>
+              <Text style={styles.errorPillText} numberOfLines={1}>
+                ✕ blocked: {lastErrors.map((e) => e.message).join('; ')}
+              </Text>
             </View>
-          </TouchableOpacity>
-          <Text style={styles.editorTitle} numberOfLines={1}>
-            {selectedNote?.title || titleFallback}
-          </Text>
-          <View style={styles.editorActions}>
-            {/* The quality gate rejected the last save — the note was NOT
-                written. Show why so the user can fix and re-save. */}
-            {lastErrors.length > 0 && (
-              <View style={styles.errorPill}>
-                <Text style={styles.errorPillText} numberOfLines={1}>
-                  ✕ blocked: {lastErrors.map((e) => e.message).join('; ')}
-                </Text>
-              </View>
-            )}
-            {/* Surface the last save's validation warnings (rule names)
-                and the git commit it produced. Hidden while there's
-                nothing to report. */}
-            {!editorDirty && lastWarnings.length > 0 && (
-              <View style={styles.warnPill}>
-                <Text style={styles.warnPillText} numberOfLines={1}>
-                  ⚠ {lastWarnings.length}: {Array.from(new Set(lastWarnings.map((w) => w.rule))).join(', ')}
-                </Text>
-              </View>
-            )}
-            {!editorDirty && lastCommit && (
-              <View style={styles.commitChip}>
-                <Text style={styles.commitChipText}>committed {lastCommit.slice(0, 7)}</Text>
-              </View>
-            )}
-            <TouchableOpacity style={styles.toggleBtn} onPress={openHistory}>
-              <Text style={styles.toggleBtnText}>History</Text>
-            </TouchableOpacity>
-            {Platform.OS === 'web' && (
-              <TouchableOpacity style={styles.toggleBtn} onPress={handleRename}>
-                <Text style={styles.toggleBtnText}>Rename</Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity style={styles.toggleBtn} onPress={() => setRawMode(!rawMode)}>
-              <Text style={styles.toggleBtnText}>{rawMode ? 'Preview' : 'Edit'}</Text>
-            </TouchableOpacity>
-            {rawMode && editorDirty && <Text style={styles.unsavedBadge}>unsaved</Text>}
-            {rawMode && (
-              <Button
-                variant="primary"
-                size="sm"
-                label="Save"
-                onPress={handleSave}
-                disabled={!editorDirty}
-              />
-            )}
-          </View>
+          )}
+          {!editorDirty && lastWarnings.length > 0 && (
+            <View style={styles.warnPill}>
+              <Text style={styles.warnPillText} numberOfLines={1}>
+                ⚠ {lastWarnings.length}: {Array.from(new Set(lastWarnings.map((w) => w.rule))).join(', ')}
+              </Text>
+            </View>
+          )}
+          {!editorDirty && lastCommit && (
+            <View style={styles.commitChip}>
+              <Text style={styles.commitChipText}>committed {lastCommit.slice(0, 7)}</Text>
+            </View>
+          )}
         </View>
-        {rawMode ? (
-          Platform.OS === 'web' ? (
-            <textarea
-              value={editorContent}
-              onChange={(e: any) => updateEditor(e.target.value)}
-              style={{
-                flex: 1, width: '100%', height: '100%',
-                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-                fontSize: 13, lineHeight: '1.7', padding: 24,
-                border: 'none', outline: 'none', resize: 'none',
-                backgroundColor: colors.surface, color: colors.text,
-                boxSizing: 'border-box',
-              } as any}
-              spellCheck={false}
-            />
-          ) : (
-            <ScrollView style={{ flex: 1, backgroundColor: colors.surface }}>
-              <TextInput
-                style={styles.editorInput}
-                value={editorContent} onChangeText={updateEditor}
-                multiline textAlignVertical="top"
-              />
-            </ScrollView>
-          )
+      )}
+
+      {rawMode ? (
+        Platform.OS === 'web' ? (
+          <textarea
+            value={editorContent}
+            onChange={(e: any) => updateEditor(e.target.value)}
+            style={{
+              flex: 1, width: '100%', height: '100%',
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              fontSize: 13, lineHeight: '1.7', padding: 24,
+              border: 'none', outline: 'none', resize: 'none',
+              backgroundColor: colors.surface, color: colors.text,
+              boxSizing: 'border-box',
+            } as any}
+            spellCheck={false}
+          />
         ) : (
-          <ScrollView style={styles.previewScroll} contentContainerStyle={styles.previewContent}>
-            <Markdown text={editorContent} />
+          <ScrollView style={{ flex: 1, backgroundColor: colors.surface }}>
+            <TextInput
+              style={styles.editorInput}
+              value={editorContent} onChangeText={updateEditor}
+              multiline textAlignVertical="top"
+            />
           </ScrollView>
-        )}
-      </View>
-    </ResponsiveSidebar>
+        )
+      ) : (
+        <ScrollView style={styles.previewScroll} contentContainerStyle={styles.previewContent}>
+          <Markdown text={editorContent} />
+        </ScrollView>
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   editorContainer: { flex: 1, flexDirection: 'column', backgroundColor: colors.surface },
-  editorHeader: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 14, paddingVertical: 8,
+  statusStrip: {
+    flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6,
+    paddingHorizontal: 24, paddingVertical: 8,
     borderBottomWidth: 1, borderBottomColor: colors.borderLight,
   },
-  backBtn: { paddingVertical: 4, paddingHorizontal: 6, marginRight: 10 },
-  backBtnContent: { flexDirection: 'row', alignItems: 'center' },
-  backBtnText: { fontSize: 12, color: colors.textSecondary, fontWeight: '500', marginLeft: 5 },
-  editorTitle: {
-    fontSize: 14, fontWeight: '500', color: colors.text, flex: 1,
-    fontFamily: font.display, letterSpacing: -0.2,
-  },
-  editorActions: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-  toggleBtn: {
-    paddingHorizontal: 10, paddingVertical: 4, borderRadius: radius.sm,
-    borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surface,
-  },
-  toggleBtnText: { fontSize: 11, color: colors.textSecondary, fontWeight: '500' },
-  unsavedBadge: {
-    fontSize: 9, color: colors.primary, backgroundColor: colors.primaryLight,
-    paddingHorizontal: 6, paddingVertical: 2, borderRadius: radius.xs, overflow: 'hidden',
-    fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5,
-  },
   warnPill: {
-    maxWidth: 220, paddingHorizontal: 8, paddingVertical: 3,
+    maxWidth: 320, paddingHorizontal: 8, paddingVertical: 3,
     borderRadius: radius.xs, backgroundColor: colors.errorSoft,
   },
   warnPillText: { fontSize: 10, color: colors.warning, fontFamily: font.mono, fontWeight: '600' },
   errorPill: {
-    maxWidth: 320, paddingHorizontal: 8, paddingVertical: 3,
+    maxWidth: 480, paddingHorizontal: 8, paddingVertical: 3,
     borderRadius: radius.xs, backgroundColor: colors.errorSoft,
     borderWidth: 1, borderColor: colors.errorBorder,
   },

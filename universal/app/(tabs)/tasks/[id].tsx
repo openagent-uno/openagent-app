@@ -13,8 +13,8 @@
  * dismisses — the list window refetches off that broadcast.
  */
 
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useLocalSearchParams, useNavigation } from 'expo-router';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import {
   ActivityIndicator, Platform, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
@@ -22,10 +22,8 @@ import { colors, font, radius } from '../../../theme';
 import { useConnection } from '../../../stores/connection';
 import { useTasks } from '../../../stores/tasks';
 import { setBaseUrl, getScheduledTask } from '../../../services/api';
-import { closeDetached } from '../../../services/windows';
-import Button from '../../../components/Button';
 import CronPicker from '../../../components/CronPicker';
-import DetachedHeader from '../../../components/DetachedHeader';
+import { HeaderAction } from '../../../components/screenHeader';
 
 interface TaskForm {
   name: string;
@@ -37,7 +35,7 @@ const EMPTY_FORM: TaskForm = { name: '', cron_expression: '', prompt: '' };
 
 export default function TaskEditScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const router = useRouter();
+  const navigation = useNavigation();
   const isNew = id === 'new';
   const connConfig = useConnection((s) => s.config);
   const { createTask, updateTask, error: storeError } = useTasks();
@@ -79,7 +77,7 @@ export default function TaskEditScreen() {
     };
   }, [connConfig, id, isNew]);
 
-  const close = () => closeDetached(router);
+  const close = () => { if (navigation.canGoBack()) navigation.goBack(); };
 
   const handleSave = async () => {
     setLocalError(null);
@@ -98,14 +96,24 @@ export default function TaskEditScreen() {
     if (ok) close();
   };
 
+  // Title + Save action in the nav header (back is provided by the stack).
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      title: isNew ? 'New Task' : (form.name || 'Edit Task'),
+      headerRight: () => (
+        <HeaderAction
+          icon="check"
+          label={saving ? 'Saving…' : isNew ? 'Add' : 'Save'}
+          onPress={handleSave}
+          disabled={saving || loading}
+        />
+      ),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigation, isNew, form, saving, loading]);
+
   return (
     <View style={styles.screen}>
-      <DetachedHeader
-        title={isNew ? 'New Task' : 'Edit Task'}
-        subtitle={isNew ? undefined : form.name || undefined}
-        onClose={close}
-      />
-
       {loading ? (
         <View style={styles.statusPane}>
           <ActivityIndicator size="small" color={colors.textMuted} />
@@ -160,16 +168,6 @@ export default function TaskEditScreen() {
           {(localError || storeError) && (
             <Text style={styles.errorMsg}>{localError || storeError}</Text>
           )}
-
-          <View style={styles.footerActions}>
-            <Button variant="ghost" size="sm" label="Cancel" onPress={close} />
-            <Button
-              variant="primary"
-              size="sm"
-              label={saving ? 'Saving…' : isNew ? 'Add Task' : 'Update'}
-              onPress={handleSave}
-            />
-          </View>
         </ScrollView>
       )}
     </View>
@@ -192,6 +190,5 @@ const styles = StyleSheet.create({
     color: colors.text, fontSize: 12, marginBottom: 14, fontFamily: font.mono,
   },
   cronSlot: { marginBottom: 14 },
-  footerActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8, marginTop: 18 },
   errorMsg: { marginTop: 12, fontSize: 12, color: colors.error },
 });

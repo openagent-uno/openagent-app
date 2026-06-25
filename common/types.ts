@@ -597,10 +597,6 @@ export interface AgentConfig {
   name?: string;
   system_prompt?: string;
   dream_mode?: { enabled: boolean; time: string };
-  // Weekly self-review built-in. Cron defaults to "0 9 * * MON" — the
-  // settings panel can override it; toggle ``enabled`` to suppress
-  // the scheduled run without removing the row from the database.
-  manager_review?: { enabled: boolean; cron: string };
   auto_update?: { enabled: boolean; mode: string; check_interval: string };
   channels?: Record<string, any>;
   services?: Record<string, any>;

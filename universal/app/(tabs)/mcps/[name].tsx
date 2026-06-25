@@ -15,9 +15,9 @@
  * deleting a builtin row is rejected by the backend regardless.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, TouchableOpacity, ActivityIndicator,
+  View, Text, ScrollView, StyleSheet, ActivityIndicator,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { useLocalSearchParams, useNavigation } from 'expo-router';
@@ -30,6 +30,7 @@ import type { MCPEntry } from '../../../../common/types';
 import { colors, font, radius, tracking } from '../../../theme';
 import Button from '../../../components/Button';
 import { useConfirm } from '../../../components/ConfirmDialog';
+import { HeaderRight, HeaderIconButton } from '../../../components/screenHeader';
 import McpConfigForm, { type McpSubmitPayload } from '../../../components/mcps/McpConfigForm';
 
 export default function EditMcpScreen() {
@@ -128,19 +129,21 @@ export default function EditMcpScreen() {
 
   const isBuiltin = entry ? entry.kind !== 'custom' : false;
 
+  // Title (the connector name) + reload in the nav header; back is the
+  // stack's header back button.
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      title: entry?.name || 'Connector',
+      headerRight: () => (
+        <HeaderRight>
+          <HeaderIconButton icon="refresh-cw" accessibilityLabel="Reload" onPress={load} disabled={loading} />
+        </HeaderRight>
+      ),
+    });
+  }, [navigation, entry?.name, load, loading]);
+
   return (
     <View style={styles.root}>
-      <View style={styles.topBar}>
-        <TouchableOpacity onPress={backToList} style={styles.topBarBtn} hitSlop={8}>
-          <Feather name="arrow-left" size={14} color={colors.textSecondary} />
-          <Text style={styles.topBarText}>MCPs</Text>
-        </TouchableOpacity>
-        <View style={{ flex: 1 }} />
-        <TouchableOpacity onPress={load} style={styles.topBarBtn} hitSlop={8} disabled={loading}>
-          <Feather name="refresh-cw" size={13} color={colors.textMuted} />
-        </TouchableOpacity>
-      </View>
-
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         {loading ? (
           <View style={styles.loadingBox}>
@@ -211,18 +214,6 @@ function ErrorBlock({ message, onRetry }: { message: string; onRetry: () => void
 
 const styles = StyleSheet.create({
   root: { flex: 1 },
-
-  topBar: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 18, paddingVertical: 12,
-    borderBottomWidth: 1, borderBottomColor: colors.borderLight,
-    backgroundColor: colors.surface,
-  },
-  topBarBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 6, paddingVertical: 4,
-  },
-  topBarText: { fontSize: 12, color: colors.textSecondary, fontWeight: '500' },
 
   content: {
     paddingHorizontal: 28, paddingVertical: 28,

@@ -10,11 +10,11 @@
  * what to spawn.
  */
 
-import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { colors, font, radius } from '../../../theme';
-import DetachedHeader from '../../../components/DetachedHeader';
+import { HeaderBack, HeaderRight } from '../../../components/screenHeader';
 import TerminalView, { type TerminalStatus } from '../../../components/terminal/TerminalView';
 import { useConnection } from '../../../stores/connection';
 import { setBaseUrl } from '../../../services/api';
@@ -29,6 +29,7 @@ const STATUS_META: Record<TerminalStatus, { label: string; color: string }> = {
 
 export default function TerminalScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const { id, cwd, shell } = useLocalSearchParams<{
     id: string;
     cwd?: string;
@@ -37,7 +38,7 @@ export default function TerminalScreen() {
   const connConfig = useConnection((s) => s.config);
   const isConnected = useConnection((s) => s.isConnected);
   const [status, setStatus] = useState<TerminalStatus>('connecting');
-  const [detail, setDetail] = useState<string | undefined>();
+  const [, setDetail] = useState<string | undefined>();
 
   useEffect(() => {
     if (connConfig?.sidecarPort) setBaseUrl('127.0.0.1', connConfig.sidecarPort);
@@ -46,19 +47,30 @@ export default function TerminalScreen() {
   const meta = STATUS_META[status];
   const shellName = shell ? shell.split('/').pop() : undefined;
 
-  return (
-    <View style={styles.root}>
-      <DetachedHeader
-        title={shellName ? `Terminal — ${shellName}` : 'Terminal'}
-        subtitle={detail || cwd || `${meta.label} · ${id?.slice(0, 8) ?? ''}`}
-        onClose={() => closeDetached(router)}
-        right={
+  // Title + live status badge in the nav header. The terminal stack has no
+  // ``index`` to pop to, so the back button closes the window / returns to
+  // where it was opened from (System) via closeDetached.
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      title: shellName ? `Terminal — ${shellName}` : 'Terminal',
+      headerLeft: () => <HeaderBack onPress={() => closeDetached(router)} />,
+      headerRight: () => (
+        <HeaderRight>
           <View style={styles.badge}>
             <View style={[styles.dot, { backgroundColor: meta.color }]} />
             <Text style={styles.badgeText}>{meta.label}</Text>
           </View>
-        }
-      />
+        </HeaderRight>
+      ),
+    });
+    // Only re-run when the status / shell changes; ``router`` is referenced
+    // inside but kept out of deps (useRouter returns a fresh ref each render,
+    // which would loop setOptions).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigation, shellName, status]);
+
+  return (
+    <View style={styles.root}>
       {!id ? (
         <View style={styles.center}>
           <Text style={styles.err}>Missing terminal id.</Text>
