@@ -11,11 +11,12 @@
  */
 
 import { Stack } from 'expo-router';
+import { themedHeader, HeaderMenu } from '../../../components/screenHeader';
 
 export default function TasksStackLayout() {
   return (
     <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
-      <Stack.Screen name="index" />
+      <Stack.Screen name="index" options={{ ...themedHeader, title: 'Scheduled', headerLeft: () => <HeaderMenu /> }} />
       <Stack.Screen name="[id]" />
       <Stack.Screen name="runs/[id]" />
     </Stack>

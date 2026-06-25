@@ -16,6 +16,7 @@
 import Feather from '@expo/vector-icons/Feather';
 import { ReactNode } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import DragRegion, { NO_DRAG } from './DragRegion';
 import { colors, font, radius } from '../theme';
 
 interface Props {
@@ -28,9 +29,11 @@ interface Props {
 export default function DetachedHeader({ title, subtitle, onClose, right }: Props) {
   return (
     <View style={styles.bar}>
+      {/* Window drag strip behind the bar's controls (Electron only). */}
+      <DragRegion />
       <TouchableOpacity
         onPress={onClose}
-        style={styles.backBtn}
+        style={[styles.backBtn, NO_DRAG]}
         accessibilityLabel="Back"
       >
         <Feather name="chevron-left" size={20} color={colors.textSecondary} />
@@ -45,7 +48,7 @@ export default function DetachedHeader({ title, subtitle, onClose, right }: Prop
           </Text>
         ) : null}
       </View>
-      {right ? <View style={styles.right}>{right}</View> : null}
+      {right ? <View style={[styles.right, NO_DRAG]}>{right}</View> : null}
     </View>
   );
 }

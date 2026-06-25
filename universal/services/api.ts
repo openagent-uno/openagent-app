@@ -146,10 +146,25 @@ export async function readNote(path: string): Promise<{
 // hash for the git-committed write. The UI surfaces both in the editor
 // header so the user sees why a save flagged (or whether it committed).
 export async function writeNote(path: string, content: string): Promise<VaultWriteResult> {
-  return put<VaultWriteResult>(
-    `/api/vault/notes/${path.split('/').map(encodeURIComponent).join('/')}`,
-    { content },
-  );
+  const url = `${baseUrl}/api/vault/notes/${path.split('/').map(encodeURIComponent).join('/')}`;
+  const init = withTimeout({
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  }, `PUT ${path}`);
+  try {
+    const res = await fetch(url, init);
+    // 422 = the quality gate rejected the note. Return it as a structured
+    // result (don't throw) so the editor can show the errors and keep the
+    // user's text. Any other non-2xx is a real failure.
+    if (res.status === 422) {
+      return (await res.json()) as VaultWriteResult;
+    }
+    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    return res.json();
+  } finally {
+    clearTimer(init);
+  }
 }
 
 export async function deleteNote(path: string): Promise<void> {

@@ -181,6 +181,7 @@ export const useChat = create<ChatState>((set, get) => ({
         title: e.title || 'New Chat',
         messages: [],
         isProcessing: false,
+        lastActiveAt: e.last_active_at ?? e.created_at ?? undefined,
       });
     }
     if (imported.length === 0) return;
@@ -232,6 +233,9 @@ export const useChat = create<ChatState>((set, get) => ({
           ...se,
           isProcessing: true,
           statusText: 'Thinking...',
+          // Stamp recency (epoch seconds) so the sidebar floats this
+          // conversation to the top of its unified feed immediately.
+          lastActiveAt: Math.floor(Date.now() / 1000),
           messages: [...se.messages, {
             id: genId(),
             role: 'user' as const,
@@ -418,6 +422,7 @@ export const useChat = create<ChatState>((set, get) => ({
               ...ses,
               messages: msgs,
               statusText: undefined,
+              lastActiveAt: Math.floor(Date.now() / 1000),
               hasUnread: cur.activeSessionId === ses.id ? ses.hasUnread : true,
             };
           }),

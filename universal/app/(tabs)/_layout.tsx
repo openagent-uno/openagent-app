@@ -1,141 +1,82 @@
-import { useMemo } from 'react';
-import { colors, font } from '../../theme';
-import Feather from '@expo/vector-icons/Feather';
-import { Tabs } from 'expo-router';
-import { JarvisDock } from '../../components/jarvis';
+/**
+ * Authenticated app shell — a react-navigation Drawer.
+ *
+ * One navigator drives both form factors (no collapsed middle stage):
+ *   - tablet / desktop (≥768): `drawerType: 'permanent'` — the full Sidebar
+ *     is a fixed column beside the content.
+ *   - phone (<768): `drawerType: 'back'` — the same full Sidebar rides in a
+ *     drawer; the content slides right to reveal it (Claude-style), toggled
+ *     by the menu button in each screen's header.
+ *
+ * The Sidebar is the drawer content. Navigation is plain expo-router
+ * (`router.push` from the Sidebar); each route renders the real
+ * react-navigation header with its own title + actions (see the per-tab
+ * stacks and `components/screenHeader.tsx`). Detached editors / run
+ * history / terminals are ordinary pushed routes inside their stacks.
+ */
 
-export default function TabsLayout() {
-  const isDesktopChild = useMemo(() => {
-    if (typeof window === 'undefined') return false;
-    if (!window.desktop?.isDesktop) return false;
-    const params = new URLSearchParams(window.location.search);
-    return params.get('child') === '1';
-  }, []);
+import { createDrawerNavigator } from '@react-navigation/drawer';
+import { withLayoutContext } from 'expo-router';
+import Sidebar from '../../components/Sidebar';
+import { HeaderMenu, themedHeader } from '../../components/screenHeader';
+import { useLayout } from '../../hooks/useLayout';
+import { colors } from '../../theme';
+
+const { Navigator } = createDrawerNavigator();
+const Drawer = withLayoutContext(Navigator);
+
+export default function AppDrawerLayout() {
+  const layout = useLayout();
+  // Two states only: a permanent full column on tablet+ , a toggleable full
+  // drawer on phones. No collapsed icon-only middle stage.
+  const permanent = !layout.isPhone;
+  const width = permanent ? 244 : 296;
+
+  // Top-level (drawer-root) screens get the menu button as headerLeft on
+  // phones; stack sub-screens keep their native back button.
+  const leaf = (title: string) => ({
+    ...themedHeader,
+    title,
+    headerLeft: () => <HeaderMenu />,
+  });
 
   return (
-    <Tabs
-      tabBar={isDesktopChild ? () => null : (props) => <JarvisDock {...props} />}
+    <Drawer
+      drawerContent={(props: any) => (
+        <Sidebar
+          onNavigate={permanent ? undefined : () => props.navigation.closeDrawer()}
+        />
+      )}
       screenOptions={{
         headerShown: false,
-        sceneStyle: { backgroundColor: 'transparent' },
-        // Position the tab-bar wrapper absolutely so screen content
-        // fills the full viewport and flows *under* the floating
-        // JarvisDock (rather than the navigator reserving a slot
-        // that would otherwise paint a default white surface).
-        tabBarStyle: {
-          position: 'absolute',
-          left: 0,
-          right: 0,
-          bottom: 0,
-          backgroundColor: 'transparent',
-          borderTopWidth: 0,
-          elevation: 0,
-          shadowOpacity: 0,
-        },
-        tabBarActiveTintColor: colors.accent,
-        tabBarInactiveTintColor: colors.textSecondary,
-        tabBarLabelStyle: {
-          fontSize: 9.5,
-          fontWeight: '600',
-          fontFamily: font.sans,
-          letterSpacing: 1.5,
+        drawerType: permanent ? 'permanent' : 'back',
+        drawerStyle: { width, backgroundColor: 'transparent', borderRightWidth: 0 },
+        overlayColor: 'transparent',
+        swipeEnabled: !permanent,
+        // The divider lives on the content's left edge (not the sidebar's
+        // right) so it always sits at the true sidebar↔content boundary,
+        // regardless of the drawer width.
+        sceneStyle: {
+          backgroundColor: colors.bg,
+          borderLeftWidth: 1,
+          borderLeftColor: colors.borderLight,
         },
       }}
     >
-      <Tabs.Screen
-        name="chat"
-        options={{
-          title: 'Chat',
-          tabBarIcon: ({ color }) => <Feather name="message-circle" size={18} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="memory"
-        options={{
-          title: 'Memory',
-          tabBarIcon: ({ color }) => <Feather name="book-open" size={18} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="mcps"
-        options={{
-          title: 'MCPs',
-          tabBarIcon: ({ color }) => <Feather name="tool" size={18} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="workflows"
-        options={{
-          title: 'Workflows',
-          tabBarIcon: ({ color }) => <Feather name="git-branch" size={18} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="tasks"
-        options={{
-          title: 'Scheduled',
-          tabBarIcon: ({ color }) => <Feather name="clock" size={18} color={color} />,
-        }}
-      />
-      {/*
-        Route stub for the old /automations path. Hidden from the tab
-        bar but still present so a saved link, an opened deep link, or
-        an Expo-Router sibling navigation keeps working — it redirects
-        to /workflows inside the screen. Remove after one release.
-      */}
-      <Tabs.Screen
-        name="automations"
-        options={{
-          href: null,
-          title: 'Automations',
-        }}
-      />
-      <Tabs.Screen
-        name="model"
-        options={{
-          title: 'Model',
-          tabBarIcon: ({ color }) => <Feather name="cpu" size={18} color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="system"
-        options={{
-          title: 'System',
-          tabBarIcon: ({ color }) => <Feather name="activity" size={18} color={color} />,
-        }}
-      />
-      {/*
-        Detached terminal route group. Hidden from the dock — terminals
-        are launched from the System tab and open in their own window
-        (desktop) or full screen (web / native) via ``openDetached``.
-      */}
-      <Tabs.Screen
-        name="terminal"
-        options={{
-          href: null,
-          title: 'Terminal',
-        }}
-      />
-      <Tabs.Screen
-        name="settings"
-        options={{
-          title: 'Settings',
-          tabBarIcon: ({ color }) => <Feather name="settings" size={18} color={color} />,
-        }}
-      />
-      {/*
-        Route stub for the old /members standalone tab. The Members
-        screen now lives inside Settings → Members; this entry keeps
-        any cached deep links from 404ing, and the inner redirect
-        sends the user to /settings.
-      */}
-      <Tabs.Screen
-        name="members"
-        options={{
-          href: null,
-          title: 'Members',
-        }}
-      />
-    </Tabs>
+      {/* Leaf screens render the drawer header directly. */}
+      <Drawer.Screen name="chat" options={leaf('Chat')} />
+      <Drawer.Screen name="model" options={leaf('Model')} />
+      <Drawer.Screen name="system" options={leaf('System')} />
+      <Drawer.Screen name="settings" options={leaf('Settings')} />
+      {/* Stacks own their own headers (per-screen titles + back). */}
+      <Drawer.Screen name="memory" options={{ headerShown: false }} />
+      <Drawer.Screen name="mcps" options={{ headerShown: false }} />
+      <Drawer.Screen name="workflows" options={{ headerShown: false }} />
+      <Drawer.Screen name="tasks" options={{ headerShown: false }} />
+      {/* Hidden / legacy routes — reachable by link, never listed. */}
+      <Drawer.Screen name="terminal" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
+      <Drawer.Screen name="automations" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
+      <Drawer.Screen name="members" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
+    </Drawer>
   );
 }

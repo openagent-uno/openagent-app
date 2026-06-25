@@ -44,7 +44,7 @@ export default function MemoryNoteScreen() {
   const config = useConnection((s) => s.config);
   const {
     notes, selectedPath, editorContent, editorDirty,
-    lastWarnings, lastCommit,
+    lastWarnings, lastCommit, lastErrors,
     loadNotes, loadGraph, selectNote, updateEditor, saveNote, moveNote,
   } = useVault();
 
@@ -156,6 +156,15 @@ export default function MemoryNoteScreen() {
             {selectedNote?.title || titleFallback}
           </Text>
           <View style={styles.editorActions}>
+            {/* The quality gate rejected the last save — the note was NOT
+                written. Show why so the user can fix and re-save. */}
+            {lastErrors.length > 0 && (
+              <View style={styles.errorPill}>
+                <Text style={styles.errorPillText} numberOfLines={1}>
+                  ✕ blocked: {lastErrors.map((e) => e.message).join('; ')}
+                </Text>
+              </View>
+            )}
             {/* Surface the last save's validation warnings (rule names)
                 and the git commit it produced. Hidden while there's
                 nothing to report. */}
@@ -258,6 +267,12 @@ const styles = StyleSheet.create({
     borderRadius: radius.xs, backgroundColor: colors.errorSoft,
   },
   warnPillText: { fontSize: 10, color: colors.warning, fontFamily: font.mono, fontWeight: '600' },
+  errorPill: {
+    maxWidth: 320, paddingHorizontal: 8, paddingVertical: 3,
+    borderRadius: radius.xs, backgroundColor: colors.errorSoft,
+    borderWidth: 1, borderColor: colors.errorBorder,
+  },
+  errorPillText: { fontSize: 10, color: colors.error, fontFamily: font.mono, fontWeight: '700' },
   commitChip: {
     paddingHorizontal: 8, paddingVertical: 3,
     borderRadius: radius.xs, backgroundColor: colors.mutedSoft,

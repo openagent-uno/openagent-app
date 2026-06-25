@@ -17,11 +17,12 @@
  */
 
 import { Stack } from 'expo-router';
+import { themedHeader, HeaderMenu } from '../../../components/screenHeader';
 
 export default function MCPsStackLayout() {
   return (
     <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
-      <Stack.Screen name="index" />
+      <Stack.Screen name="index" options={{ ...themedHeader, title: 'Connectors', headerLeft: () => <HeaderMenu /> }} />
       <Stack.Screen name="install" />
       <Stack.Screen name="[name]" />
     </Stack>

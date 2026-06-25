@@ -1,27 +1,18 @@
 /**
- * Detached-view navigation.
+ * In-app navigation for "detached" views.
  *
- * Some views (the workflow editor, the scheduled-task editor, run
- * history) are better off "detached" from the main shell. On the
- * Electron desktop app that means a real second OS window; on plain
- * web and on native there's only one window, so it means a pushed
- * full-screen route instead.
+ * Editors, run history, and terminals used to open in their own desktop
+ * OS window. They now render inline as ordinary pushed routes in every
+ * environment — one window, one content area — so `openDetached` is just
+ * a `router.push` and `closeDetached` pops the stack. The desktop
+ * multi-window story is handled separately: `openNewMainWindow` opens a
+ * second *full* app window that shares this one's live connection through
+ * the primary window's WS relay (see desktop/src/main.ts).
  *
- * ``openDetached`` papers over that difference: callers pass a relative
- * route (no leading slash, e.g. ``workflows/abc`` or ``tasks/runs/abc``)
- * and get a new window on desktop / a full screen everywhere else. The
- * desktop shell loads the route in a fresh ``BrowserWindow`` with
- * ``?child=1`` (see ``desktop/src/main.ts``), which the tab layout
- * renders chrome-less.
- *
- * ``closeDetached`` is the inverse for a detached screen's back/close
- * control: it closes the OS window when we're in a desktop child
- * window, and otherwise pops the navigation stack.
+ * Callers pass a relative route (no leading slash, e.g. ``workflows/abc``
+ * or ``tasks/runs/abc``).
  */
 
-// Minimal shape of the expo-router ``Router`` we depend on. Typed
-// loosely so this module doesn't couple to expo-router's exported
-// types (which vary across versions).
 type RouterLike = {
   push: (href: any) => void;
   back: () => void;
@@ -34,46 +25,47 @@ function desktop(): any {
   return (window as any).desktop;
 }
 
-/** Running inside the Electron desktop shell (main or child window). */
+/** Running inside the Electron desktop shell. */
 export function isDesktop(): boolean {
   return desktop()?.isDesktop === true;
 }
 
-/** This renderer is a detached desktop child window (``?child=1``). */
+/** A secondary desktop window that relays its WS through the primary. */
 export function isDesktopChild(): boolean {
   return desktop()?.isChild === true;
 }
 
 /**
- * Open ``route`` detached: a new OS window on desktop, a pushed
- * full-screen route on web / native. ``route`` is relative with no
- * leading slash — e.g. ``workflows/abc``, ``tasks/new``,
+ * Navigate to ``route`` inline (a pushed full-screen route). ``route`` is
+ * relative with no leading slash — e.g. ``workflows/abc``, ``tasks/new``,
  * ``tasks/runs/abc``.
  */
 export function openDetached(router: RouterLike, route: string): void {
   const normalized = route.replace(/^\/+/, '');
-  const d = desktop();
-  if (d?.isDesktop && typeof d.openWindow === 'function') {
-    void d.openWindow(normalized);
-    return;
-  }
   router.push(`/${normalized}` as any);
 }
 
 /**
- * Dismiss a detached screen. Closes the OS window when this is a
- * desktop child window; otherwise pops the stack (falling back to the
- * root when there's nothing to pop — e.g. a deep-linked web tab).
+ * Dismiss an inline detail/editor: pop the navigation stack, falling back
+ * to the app root when there's nothing to pop (e.g. a deep-linked tab).
  */
 export function closeDetached(router: RouterLike): void {
-  const d = desktop();
-  if (d?.isChild && typeof d.close === 'function') {
-    void d.close();
-    return;
-  }
   if (router.canGoBack?.()) {
     router.back();
   } else {
     router.replace('/' as any);
+  }
+}
+
+/**
+ * Desktop only: open another full app window. It loads the app shell with
+ * the ``child`` marker so the connection store tunnels its WebSocket
+ * through the primary window's live socket (shared connection) rather than
+ * opening a second one. A no-op on web / native, where there is one window.
+ */
+export function openNewMainWindow(): void {
+  const d = desktop();
+  if (d?.isDesktop && typeof d.openWindow === 'function') {
+    void d.openWindow('chat');
   }
 }

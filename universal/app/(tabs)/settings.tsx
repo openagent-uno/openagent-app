@@ -34,7 +34,8 @@ type CategoryId =
   | 'manager_review'
   | 'auto_update'
   | 'controls'
-  | 'connection';
+  | 'connection'
+  | 'models';
 
 interface Category {
   id: CategoryId;
@@ -45,6 +46,7 @@ interface Category {
 
 const CATEGORIES: Category[] = [
   { id: 'identity', label: 'Agent Identity', icon: 'user', description: 'Name and system prompt' },
+  { id: 'models', label: 'Models & Providers', icon: 'cpu', description: 'LLMs, providers, and cost tracking' },
   { id: 'members', label: 'Members', icon: 'users', description: 'Users, agents, invitations' },
   { id: 'voice', label: 'Voice', icon: 'mic', description: 'VAD sensitivity for the Voice tab' },
   { id: 'channels', label: 'Channels', icon: 'message-square', description: 'Gateway, Telegram, Discord, WhatsApp' },
@@ -225,7 +227,12 @@ export default function SettingsScreen() {
     <CategorySidebar<CategoryId>
       title="Settings"
       active={activeCategory}
-      onChange={setActiveCategory}
+      onChange={(id) => {
+        // Model/provider management is its own screen; selecting it
+        // routes there rather than switching an in-page section.
+        if (id === 'models') router.push('/model');
+        else setActiveCategory(id);
+      }}
       categories={CATEGORIES}
     />
   );
@@ -582,6 +589,8 @@ export default function SettingsScreen() {
       case 'auto_update': return renderAutoUpdate();
       case 'controls': return renderControls();
       case 'connection': return renderConnection();
+      // 'models' routes away to /model on select, so it never renders here.
+      case 'models': return null;
     }
   };
 

@@ -20,7 +20,6 @@ import { colors, font } from '../../../theme';
 import WorkflowEditor from '../../../components/workflow/WorkflowEditor';
 import { useConnection } from '../../../stores/connection';
 import { setBaseUrl, getWorkflow } from '../../../services/api';
-import { isDesktopChild } from '../../../services/windows';
 import type { WorkflowTask } from '../../../../common/types';
 
 export default function WorkflowEditorScreen() {
@@ -30,16 +29,11 @@ export default function WorkflowEditorScreen() {
   const [workflow, setWorkflow] = useState<WorkflowTask | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Detached on desktop: the editor is its own window, so "back" closes
-  // it. On web / native it was pushed onto the workflows stack, so pop
+  // The editor is a pushed route inside the workflows stack — "back" pops
   // to the list. (``router.back()`` would bubble to the Tabs navigator
   // and jump to chat when this stack holds only one screen — ``POP_TO``
   // pops to ``index`` or replaces this screen with it.)
   const backToList = useCallback(() => {
-    if (isDesktopChild()) {
-      (window as any).desktop?.close?.();
-      return;
-    }
     navigation.dispatch(StackActions.popTo('index'));
   }, [navigation]);
 

@@ -115,9 +115,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,
-    backgroundColor: 'rgba(14, 13, 11, 0.30)',
+    backgroundColor: 'rgba(2, 4, 10, 0.45)',
     // @ts-ignore
-    ...(Platform.OS === 'web' ? { backdropFilter: 'blur(6px)' } : {}),
+    ...(Platform.OS === 'web' ? { backdropFilter: 'blur(14px) saturate(120%)', WebkitBackdropFilter: 'blur(14px) saturate(120%)' } : {}),
   },
   dialog: {
     width: 400,

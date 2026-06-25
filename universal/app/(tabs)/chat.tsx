@@ -25,7 +25,7 @@ import ResponsiveSidebar from '../../components/ResponsiveSidebar';
 import MessageComposer, { type PendingFile, type SlashCommand } from '../../components/MessageComposer';
 import MessageList from '../../components/MessageList';
 import CommandPalette, { type PaletteEntry } from '../../components/CommandPalette';
-import { JarvisOrb } from '../../components/jarvis';
+import BrandLogo from '../../components/BrandLogo';
 import { uploadFile, guessMimeType, listDbModels } from '../../services/api';
 import type { ModelEntry } from '../../../common/types';
 
@@ -1101,7 +1101,7 @@ export default function ChatScreen() {
               <View style={styles.messagesInner}>
                 {activeSession.messages.length === 0 && (
                   <View style={styles.heroEmpty}>
-                    <JarvisOrb size={160} label="OPENAGENT" />
+                    <BrandLogo size={84} />
                     <Text style={styles.heroTitle}>At your service</Text>
                     <Text style={styles.heroSub}>
                       Ask a question, request a task, or attach a file.
@@ -1211,7 +1211,7 @@ export default function ChatScreen() {
           </>
         ) : (
           <View style={styles.emptyState}>
-            <JarvisOrb size={180} label="OPENAGENT" />
+            <BrandLogo size={96} />
             <Text style={styles.emptyTitle}>Standing by</Text>
             <Text style={styles.emptySub}>Select a session on the left, or open a new one.</Text>
             <TouchableOpacity style={styles.emptyBtn} onPress={createSession}>

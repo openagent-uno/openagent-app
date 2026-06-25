@@ -20,6 +20,9 @@ interface VaultState {
   // these (validation warnings + the git commit hash for the write).
   lastWarnings: VaultWarning[];
   lastCommit: string | null;
+  // Set when the last save was REJECTED by the quality gate (nothing
+  // written). The editor shows these and keeps the text so the user can fix.
+  lastErrors: VaultWarning[];
 
   loadNotes: () => Promise<void>;
   loadGraph: () => Promise<void>;
@@ -43,6 +46,7 @@ export const useVault = create<VaultState>((set, get) => ({
   error: null,
   lastWarnings: [],
   lastCommit: null,
+  lastErrors: [],
 
   loadNotes: async () => {
     set({ loading: true, error: null });
@@ -80,8 +84,19 @@ export const useVault = create<VaultState>((set, get) => ({
     if (!selectedPath) return;
     try {
       const res = await api.writeNote(selectedPath, editorContent);
+      if (res.ok === false) {
+        // Rejected by the quality gate — nothing was saved. Keep the text
+        // dirty and surface the errors so the user can fix and re-save.
+        set({
+          editorDirty: true,
+          lastErrors: res.errors ?? [],
+          lastWarnings: res.warnings ?? [],
+        });
+        return;
+      }
       set({
         editorDirty: false,
+        lastErrors: [],
         lastWarnings: res.warnings ?? [],
         lastCommit: res.commit ?? null,
       });

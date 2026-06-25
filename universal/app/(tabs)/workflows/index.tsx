@@ -12,8 +12,8 @@
  */
 
 import Feather from '@expo/vector-icons/Feather';
-import { useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useRouter, useNavigation } from 'expo-router';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -33,6 +33,7 @@ import { useConfirm } from '../../../components/ConfirmDialog';
 import Button from '../../../components/Button';
 import Card from '../../../components/Card';
 import ThemedSwitch from '../../../components/ThemedSwitch';
+import { HeaderAction } from '../../../components/screenHeader';
 import { openDetached } from '../../../services/windows';
 import type {
   CreateWorkflowInput,
@@ -77,6 +78,7 @@ function initialGraphNodes(): WorkflowNode[] {
 
 export default function WorkflowsScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const connConfig = useConnection((s) => s.config);
   const {
     workflows,
@@ -101,6 +103,21 @@ export default function WorkflowsScreen() {
   const [maxConcurrentInput, setMaxConcurrentInput] = useState<string>('');
   const [createError, setCreateError] = useState<string | null>(null);
   const confirm = useConfirm();
+
+  // Unified "create" control in the navigator header (same position as
+  // Scheduled / Connectors). Opens the inline create form.
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () => (
+        <HeaderAction
+          icon="plus"
+          label="New workflow"
+          onPress={() => { setForm(EMPTY_CREATE); setMaxConcurrentInput(''); setCreating(true); }}
+        />
+      ),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigation]);
 
   useEffect(() => {
     if (connConfig) {
@@ -176,7 +193,6 @@ export default function WorkflowsScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>Workflows</Text>
       <Text style={styles.hint}>
         Multi-block pipelines. Blocks can call MCP tools, run AI prompts,
         branch, loop or wait. Triggered manually, on a schedule, or by
@@ -408,20 +424,7 @@ export default function WorkflowsScreen() {
                 />
               </View>
             </View>
-          ) : (
-            <View style={styles.addBar}>
-              <Button
-                variant="primary"
-                label="New Workflow"
-                icon="plus"
-                fullWidth
-                onPress={() => {
-                  setCreating(true);
-                  setForm(EMPTY_CREATE);
-                }}
-              />
-            </View>
-          )}
+          ) : null}
         </Card>
       )}
 

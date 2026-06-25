@@ -14,11 +14,12 @@
  */
 
 import { Stack } from 'expo-router';
+import { themedHeader, HeaderMenu } from '../../../components/screenHeader';
 
 export default function WorkflowsStackLayout() {
   return (
     <Stack screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
-      <Stack.Screen name="index" />
+      <Stack.Screen name="index" options={{ ...themedHeader, title: 'Workflows', headerLeft: () => <HeaderMenu /> }} />
       <Stack.Screen name="[id]" />
       <Stack.Screen name="runs/[id]" />
     </Stack>

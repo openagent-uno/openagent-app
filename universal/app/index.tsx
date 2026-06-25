@@ -22,7 +22,10 @@ import { useConfirm } from '../components/ConfirmDialog';
 import Button from '../components/Button';
 import Card from '../components/Card';
 import Input from '../components/Input';
-import { JarvisOrb, JarvisClock } from '../components/jarvis';
+import WindowControls from '../components/WindowControls';
+import DragRegion from '../components/DragRegion';
+import { JarvisClock } from '../components/jarvis';
+import BrandLogo from '../components/BrandLogo';
 
 type Mode = 'signin' | 'join';
 
@@ -35,6 +38,12 @@ function extractAgentName(acc: { name: string; handle: string }): string {
 
 export default function LoginScreen() {
   const router = useRouter();
+  // The login screen has no sidebar, so on macOS it carries its own window
+  // controls + drag strip (the sidebar hosts them everywhere else; Win/Linux
+  // get them from the global chrome Header).
+  const isMacDesktop = typeof window !== 'undefined'
+    && (window as any).desktop?.isDesktop === true
+    && (window as any).desktop?.platform === 'darwin';
   const {
     accounts, isConnected, isConnecting, error, agentName,
     joinNetwork, connectAccount, removeAccount,
@@ -185,14 +194,22 @@ export default function LoginScreen() {
   };
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
+    <View style={styles.screen}>
+      {isMacDesktop && (
+        <View style={styles.macStrip}>
+          {/* Drag layer behind the controls (sibling, never their parent). */}
+          <DragRegion />
+          <WindowControls />
+        </View>
+      )}
+      <ScrollView contentContainerStyle={styles.container}>
       <View
         style={styles.inner}
         // @ts-ignore
         {...(Platform.OS === 'web' ? { className: 'oa-slide-up' } : {})}
       >
         <View style={styles.wakeScene}>
-          <JarvisOrb size={180} label="OPENAGENT" />
+          <BrandLogo size={108} />
           <View style={styles.clockWrap}>
             <JarvisClock size="md" />
           </View>
@@ -372,11 +389,23 @@ export default function LoginScreen() {
           </Card>
         )}
       </View>
-    </ScrollView>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: { flex: 1 },
+  // macOS: a transparent full-width drag strip at the very top, hosting the
+  // custom window controls (top-left). Overlays the content, reserves no space.
+  macStrip: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: 36,
+    zIndex: 100,
+  },
   container: {
     flexGrow: 1,
     justifyContent: 'center',

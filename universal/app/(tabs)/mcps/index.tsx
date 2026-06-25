@@ -18,14 +18,14 @@
  * edges) reduces content width below the window width.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   View, Text, ScrollView, StyleSheet, TextInput, TouchableOpacity,
   ActivityIndicator, Platform,
   type LayoutChangeEvent,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { useRouter, useFocusEffect, useNavigation } from 'expo-router';
 import { useConnection } from '../../../stores/connection';
 import { useEvents } from '../../../stores/events';
 import {
@@ -37,6 +37,7 @@ import type { MCPEntry } from '../../../../common/types';
 import { colors, font, radius, tracking } from '../../../theme';
 import Button from '../../../components/Button';
 import TabStrip from '../../../components/TabStrip';
+import { HeaderAction } from '../../../components/screenHeader';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import McpTile from '../../../components/mcps/McpTile';
 import MarketplaceTile from '../../../components/mcps/MarketplaceTile';
@@ -74,10 +75,21 @@ function registryNameOf(entry: MCPEntry): string {
 
 export default function McpsScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const config = useConnection((s) => s.config);
   const confirm = useConfirm();
 
   const [mode, setMode] = useState<Mode>('builtin');
+
+  // Unified "create" control in the navigator header (same position as
+  // Workflows / Scheduled) — jumps to the "New" connector form.
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerRight: () => <HeaderAction icon="plus" label="New connector" onPress={() => setMode('new')} />,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigation]);
+
   const [installed, setInstalled] = useState<MCPEntry[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [installedQuery, setInstalledQuery] = useState('');
@@ -274,7 +286,6 @@ export default function McpsScreen() {
         <View style={styles.headerInner}>
           <View style={styles.headerTopRow}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.title}>MCPs</Text>
               <Text style={styles.hint}>
                 Model Context Protocol servers give the agent extra tools.{' '}
                 {installed.length} installed, {activeCount} active. Changes are live on the next message.

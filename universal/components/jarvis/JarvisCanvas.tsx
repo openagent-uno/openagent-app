@@ -10,6 +10,8 @@ interface Props {
   showBrackets?: boolean;
   /** Show edge ruler ticks. Default true. */
   showEdgeTicks?: boolean;
+  /** Paint the dotted blueprint grid. Default true. */
+  showGrid?: boolean;
   style?: ViewStyle;
 }
 
@@ -27,11 +29,14 @@ export default function JarvisCanvas({
   children,
   showBrackets = true,
   showEdgeTicks = true,
+  showGrid = true,
   style,
 }: Props) {
-  const webGridStyle = Platform.OS === 'web' ? webBgStyle() : null;
+  const webBg = Platform.OS === 'web'
+    ? (showGrid ? webBgStyle() : { backgroundColor: raw.bg })
+    : null;
   const bgStyle = Platform.OS === 'web'
-    ? [styles.bg, webGridStyle]
+    ? [styles.bg, webBg]
     : [styles.bg, styles.nativeBg];
   return (
     <View style={[styles.root, style]}>

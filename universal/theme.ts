@@ -207,6 +207,7 @@ function ensureGlobalCss(): void {
     ::-webkit-scrollbar-thumb:hover { background: var(--oa-borderStrong); background-clip: padding-box; border: 2px solid transparent; }
     @keyframes oa-fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
     @keyframes oa-slide-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    @keyframes oa-slide-in-x { from { transform: translateX(-100%); } to { transform: translateX(0); } }
     @keyframes oa-pulse-soft { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
     @keyframes oa-shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
     @keyframes oa-spin { to { transform: rotate(360deg); } }
@@ -231,9 +232,14 @@ function ensureGlobalCss(): void {
     }
     .oa-fade-in { animation: oa-fade-in 0.24s cubic-bezier(0.16, 1, 0.3, 1) both; }
     .oa-slide-up { animation: oa-slide-up 0.32s cubic-bezier(0.16, 1, 0.3, 1) both; }
+    .oa-slide-in-x { animation: oa-slide-in-x 0.26s cubic-bezier(0.16, 1, 0.3, 1) both; }
     .oa-pulse { animation: oa-pulse-soft 1.6s ease-in-out infinite; }
     .oa-hover-lift { transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.18s, border-color 0.18s; }
     .oa-hover-lift:hover { transform: translateY(-1px); }
+    /* Sidebar / list rows: a soft cyan wash on hover, with a quick
+       color transition so nav and recent rows feel responsive. */
+    .oa-side-row { transition: background-color 0.16s ease, color 0.16s ease; border-radius: 8px; }
+    .oa-side-row:hover { background-color: var(--oa-hover); }
     /* Show on hover: any child with inline opacity:0 inside an
        .oa-row-hover container becomes visible when the row is hovered.
        Used by message actions (Copy / Edit / Regenerate / etc). */

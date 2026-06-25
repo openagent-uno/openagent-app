@@ -273,6 +273,10 @@ export interface ChatSession {
   messages: ChatMessage[];
   isProcessing: boolean;
   statusText?: string;
+  /** Server-reported last-activity epoch (seconds). Preserved through
+   *  hydration so the sidebar can sort sessions by recency; falls back to
+   *  the newest message timestamp when absent. */
+  lastActiveAt?: number;
   /** Sticky session — sorted to the top of the sidebar regardless of recency. */
   pinned?: boolean;
   /** Per-session composer draft (text). Survives session switches but
@@ -637,6 +641,12 @@ export interface VaultWriteResult {
   path: string;
   warnings: VaultWarning[];
   commit: string | null;
+  // Set when the quality gate REJECTED the write (nothing was saved). The
+  // editor surfaces ``errors`` so the user can fix and re-save.
+  blocked?: boolean;
+  errors?: VaultWarning[];
+  // What the gate auto-fixed on the way in (e.g. scaffolded frontmatter).
+  applied?: string[];
 }
 
 // One entry from the vault git log. ``provenance`` is a free-form map

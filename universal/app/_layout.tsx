@@ -33,6 +33,9 @@ export default function RootLayout() {
   const resumeConnection = useConnection((s) => s.resumeConnection);
   const isDesktop = desktop()?.isDesktop === true;
   const isChild = desktop()?.isChild === true;
+  // macOS shows native traffic lights in the sidebar's top-left, so it
+  // needs no chrome strip; Win/Linux keep the custom controls Header.
+  const isMac = desktop()?.platform === 'darwin';
 
   const fadeAnim = useRef(new Animated.Value(isChild ? 0 : 1)).current;
 
@@ -91,8 +94,11 @@ export default function RootLayout() {
 
   return (
     <ConfirmProvider>
-      <JarvisCanvas style={styles.root}>
-        {Platform.OS === 'web' && <Header />}
+      <JarvisCanvas style={styles.root} showBrackets={false} showEdgeTicks={false} showGrid={false}>
+        {/* Window chrome (drag strip + custom traffic-light controls) for
+            frameless Win/Linux only. macOS uses native traffic lights in
+            the sidebar; plain web / native render no chrome. */}
+        {isDesktop && !isMac && <Header />}
         <Animated.View style={[styles.content, { opacity: fadeAnim }]}>
           <ThemeProvider value={navDarkTheme}>
             <Stack

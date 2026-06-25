@@ -237,8 +237,12 @@ function createWindow(route?: string): BrowserWindow {
   const isMac = process.platform === 'darwin';
   const win = new BrowserWindow({
     title: 'OpenAgent',
+    // Frameless on every desktop OS: the renderer draws its own
+    // WindowControls (in the sidebar's top-left on macOS, in the chrome
+    // Header on Win/Linux). Native macOS traffic lights are pushed
+    // off-screen so they don't double up with the custom ones.
     ...(isMac
-      ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: -80, y: 0 } }
+      ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: -200, y: 0 } }
       : { frame: false }),
     show: true,
     backgroundColor: '#050810',  // match JARVIS dark theme bg
