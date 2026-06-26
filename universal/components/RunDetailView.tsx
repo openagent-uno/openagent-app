@@ -27,14 +27,142 @@ import {
   View,
 } from 'react-native';
 import { colors, font, radius } from '../theme';
-import { getWorkflowRun, getScheduledTaskRuns } from '../services/api';
+import {
+  getWorkflowRun, getScheduledTaskRuns, fetchSessionRuns, runMsgToChat,
+} from '../services/api';
+import { runRoutePath } from '../../common/types';
 import { openDetached } from '../services/windows';
+import { useChat } from '../stores/chat';
 import Markdown from './Markdown';
+import MessageList from './MessageList';
 import type {
+  ChatMessage,
   TaskRun,
   WorkflowRun,
   WorkflowTraceEntry,
 } from '../../common/types';
+
+// The full transcript of a run-backed child session (a scheduled firing, an
+// ai-prompt node), rendered inline with MessageList right under the run header
+// — the run screen IS the session, no redirect. Nested delegations within it
+// still link onward to their own child sessions in a detached chat window; a
+// nested run-now opens its own run screen in a detached window.
+//
+// The fetch self-heals rather than showing a one-shot empty state: it keeps
+// polling while the run is ``live`` (so the transcript fills in as the agent
+// works), and retries a few times if the very first read comes back empty
+// (covering the brief window after a firing finishes but before its runs JSON
+// has flushed). A genuine fetch failure surfaces as an error with Retry — not
+// silently as "no transcript".
+const EMPTY_RETRY_MAX = 4;      // ~6s of retries for a just-finished flush race
+const LIVE_POLL_MAX = 150;      // ~5min ceiling so a stuck run can't poll forever
+const POLL_MS = 2000;
+
+function SessionTranscript({ sessionId, live }: {
+  sessionId: string;
+  /** The owning run is still in flight — keep polling so the transcript grows. */
+  live?: boolean;
+}) {
+  const router = useRouter();
+  const [messages, setMessages] = useState<ChatMessage[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // The run IS a session: while it's in flight the server broadcasts its deltas
+  // tagged with this sid, and the app's normal frame routing accumulates them
+  // into the chat store — exactly like an interactive session. Prefer that live
+  // copy so the transcript renders token-by-token; the polled DB read below is
+  // the seed for a completed run that isn't in the store (or an older server).
+  const liveSession = useChat((s) => s.sessions.find((x) => x.id === sessionId));
+  const liveMessages = liveSession?.messages;
+  const liveProcessing = liveSession?.isProcessing;
+  const hasLive = !!liveMessages?.length;
+
+  // Hard reset only when the session itself changes (or on an explicit Retry).
+  // A ``live`` flip (running → done) must NOT blank the already-loaded
+  // transcript — the poll effect below just refetches in place.
+  useEffect(() => {
+    setMessages(null);
+    setError(null);
+  }, [sessionId, reloadKey]);
+
+  useEffect(() => {
+    // Once the live store copy has content the DB poll is pure waste — the
+    // broadcast stream drives the transcript. Poll only as the seed/fallback
+    // (a completed run not in the store, or a server without live streaming).
+    if (hasLive) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let attempts = 0;
+    const tick = async () => {
+      try {
+        const raw = await fetchSessionRuns(sessionId);
+        if (cancelled) return;
+        const mapped = raw.map(runMsgToChat);
+        setMessages(mapped);
+        setError(null);
+        attempts += 1;
+        // Keep going while the run is live (transcript still growing) or while
+        // it's empty and we haven't exhausted the post-finish retry budget.
+        const keepPolling = live
+          ? attempts < LIVE_POLL_MAX
+          : mapped.length === 0 && attempts < EMPTY_RETRY_MAX;
+        if (keepPolling) timer = setTimeout(tick, POLL_MS);
+      } catch (e: any) {
+        if (cancelled) return;
+        setError(e?.message ?? String(e));
+        setMessages((m) => m ?? []);  // leave the loading state either way
+        attempts += 1;
+        // Same ceiling as the success path so a persistently-failing fetch on
+        // a live run can't re-poll forever (LIVE_POLL_MAX ~ 5min).
+        const keepRetrying = live ? attempts < LIVE_POLL_MAX : attempts < EMPTY_RETRY_MAX;
+        if (keepRetrying) timer = setTimeout(tick, POLL_MS);
+      }
+    };
+    tick();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [sessionId, live, reloadKey, hasLive]);
+
+  // Prefer the live streamed copy whenever it has content; otherwise fall back
+  // to the polled DB transcript. A live run with no deltas yet shows the
+  // streaming indicator rather than a stale "no transcript".
+  const display = hasLive ? liveMessages : messages;
+  // The run-status poll (``live``) drives the streaming indicator — a detached
+  // child's broadcast stub never flips the store's ``isProcessing``, and
+  // keeping that false is what lets ``reconcileSession`` snap to the canonical
+  // transcript on turn_complete.
+  const streaming = !!live || !!liveProcessing;
+
+  if (display == null && !error) {
+    return (
+      <ActivityIndicator size="small" color={colors.textMuted} style={{ marginVertical: 12 }} />
+    );
+  }
+  if (error && (display == null || display.length === 0) && !streaming) {
+    return (
+      <TouchableOpacity onPress={() => setReloadKey((k) => k + 1)} style={styles.transcriptRetry}>
+        <Feather name="refresh-cw" size={11} color={colors.textMuted} />
+        <Text style={styles.transcriptRetryText}>Couldn't load the transcript — tap to retry</Text>
+      </TouchableOpacity>
+    );
+  }
+  if (!display || display.length === 0) {
+    return streaming
+      ? <EmptyNote text="Waiting for the run to produce output…" />
+      : <EmptyNote text="This run produced no transcript." />;
+  }
+  return (
+    <MessageList
+      messages={display}
+      isProcessing={streaming}
+      onOpenChild={(id) => openDetached(router, `chat?session=${encodeURIComponent(id)}`)}
+      onOpenRun={(target) => {
+        const path = runRoutePath(target);
+        if (path) openDetached(router, path);
+      }}
+    />
+  );
+}
 
 type IconName = keyof typeof Feather.glyphMap;
 type RunKind = 'workflow' | 'task';
@@ -72,35 +200,59 @@ export function RunDetailView({
   const openParent = () =>
     openDetached(router, `${kind === 'workflow' ? 'workflows' : 'tasks'}/${parentId}`);
 
+  // Re-poll the run summary while the firing is still in flight, so the header
+  // status pill settles, the duration finalises, and — for workflows — steps
+  // that start after mount (and their inline per-step transcripts) appear. The
+  // SessionTranscript bodies key their own ``live`` flag off the status this
+  // refreshes, so without it a run opened mid-flight would stay frozen.
   useEffect(() => {
     let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let polls = 0;
+    let gotData = false;
     setLoading(true);
     setError(null);
     setWfRun(null);
     setTaskRun(null);
-    (async () => {
+    const load = async () => {
       try {
+        let status: string | undefined;
         if (kind === 'workflow') {
           const run = await getWorkflowRun(runId);
-          if (!cancelled) setWfRun(run);
+          if (cancelled) return;
+          setWfRun(run);
+          gotData = !!run;
+          status = run?.status;
         } else {
           // No single-firing endpoint for tasks — pull the recent window
           // and narrow to the requested run.
           const runs = await getScheduledTaskRuns(parentId, { limit: 50 });
+          if (cancelled) return;
           const found = runs.find((r) => r.id === runId) ?? null;
-          if (!cancelled) {
-            setTaskRun(found);
-            if (!found) setError('This run could not be found.');
-          }
+          setTaskRun(found);
+          gotData = !!found;
+          if (!found) { setError('This run could not be found.'); return; }
+          status = found.status;
+        }
+        setError(null);
+        polls += 1;
+        if (status === 'running' && polls < LIVE_POLL_MAX && !cancelled) {
+          timer = setTimeout(load, POLL_MS);
         }
       } catch (e: any) {
-        if (!cancelled) setError(e?.message ?? String(e));
+        if (cancelled) return;
+        // Fail hard only before the first successful read; a transient failure
+        // mid-poll keeps the last good snapshot and retries.
+        if (!gotData) setError(e?.message ?? String(e));
+        else if (polls < LIVE_POLL_MAX) timer = setTimeout(load, POLL_MS);
       } finally {
         if (!cancelled) setLoading(false);
       }
-    })();
+    };
+    load();
     return () => {
       cancelled = true;
+      if (timer) clearTimeout(timer);
     };
   }, [kind, parentId, runId]);
 
@@ -207,6 +359,16 @@ function MetaItem({ icon, text }: { icon: IconName; text: string }) {
 // ── Task firing body ─────────────────────────────────────────────────
 
 function TaskBody({ run }: { run: TaskRun }) {
+  // A durable firing renders as its full child-session transcript (same
+  // surface as a chat). Legacy firings (no session) keep the output preview.
+  if (run.session_id) {
+    return (
+      <>
+        <SessionTranscript sessionId={run.session_id} live={run.status === 'running'} />
+        {run.error ? <ErrorBlock text={run.error} /> : null}
+      </>
+    );
+  }
   return (
     <>
       {run.output ? (
@@ -233,8 +395,19 @@ function WorkflowBody({ run }: { run: WorkflowRun }) {
       {run.trace.length === 0 ? (
         <EmptyNote text="No steps were recorded for this run." />
       ) : (
+        // Each ai-prompt node ran as its own child session — render that
+        // session's transcript inline right under its step card, so the whole
+        // run reads as one page (no redirect out to the chat tab).
         run.trace.map((entry, i) => (
-          <StepCard key={`${entry.node_id}-${i}`} entry={entry} />
+          <View key={`${entry.node_id}-${i}`}>
+            <StepCard entry={entry} />
+            {entry.child_session_id ? (
+              <SessionTranscript
+                sessionId={entry.child_session_id}
+                live={entry.status === 'running'}
+              />
+            ) : null}
+          </View>
         ))
       )}
       {run.error ? <ErrorBlock text={run.error} /> : null}
@@ -482,7 +655,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.8,
     marginBottom: 8,
   },
-
   // Workflow step card
   stepCard: {
     backgroundColor: colors.surface,
@@ -613,5 +785,16 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     fontStyle: 'italic',
     paddingVertical: 8,
+  },
+  transcriptRetry: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 10,
+  },
+  transcriptRetryText: {
+    fontSize: 12,
+    color: colors.textMuted,
+    fontFamily: font.mono,
   },
 });

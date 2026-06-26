@@ -28,6 +28,12 @@ interface TasksState {
   updateTask: (id: string, input: UpdateScheduledTaskInput) => Promise<boolean>;
   deleteTask: (id: string) => Promise<boolean>;
   toggleTask: (id: string, enabled: boolean) => Promise<boolean>;
+  /** Fire a task now, out of band from its cron schedule. Returns true once
+   *  the run is dispatched (does not block on the firing finishing). */
+  runTask: (id: string) => Promise<boolean>;
+  /** Stop the currently-running firing(s) of a task. Returns true once the
+   *  stop is requested (the scheduler hard-stops within ~2s). */
+  stopTask: (id: string) => Promise<boolean>;
   clearSaved: () => void;
 }
 
@@ -91,6 +97,37 @@ export const useTasks = create<TasksState>((set, get) => ({
 
   toggleTask: async (id, enabled) => {
     return get().updateTask(id, { enabled });
+  },
+
+  runTask: async (id) => {
+    try {
+      set({ error: null });
+      // wait=false: return as soon as the run is dispatched. The firing
+      // continues server-side; its start flips ``running`` true and its
+      // completion flips it back — both arrive as ``scheduled_task``
+      // broadcasts the list refetches on. Refetch now too so the tile shows
+      // the Stop control promptly without waiting on the event.
+      await api.runScheduledTask(id, { wait: false });
+      void get().loadTasks();
+      return true;
+    } catch (e: any) {
+      set({ error: e.message });
+      return false;
+    }
+  },
+
+  stopTask: async (id) => {
+    try {
+      set({ error: null });
+      // wait=false: the scheduler hard-stops the firing within ~2s and
+      // broadcasts the cancelled state. Refetch now for immediate feedback.
+      await api.stopScheduledTask(id, { wait: false });
+      void get().loadTasks();
+      return true;
+    } catch (e: any) {
+      set({ error: e.message });
+      return false;
+    }
   },
 
   clearSaved: () => set({ saved: false }),

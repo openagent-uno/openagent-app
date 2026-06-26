@@ -16,13 +16,26 @@ import Feather from '@expo/vector-icons/Feather';
 import { View, Text, TouchableOpacity, StyleSheet, Platform, Image } from 'react-native';
 import {
   toolPhase,
+  runLaunchTarget,
+  effectiveTool,
+  isDelegationTool,
+  delegationTitle,
+  delegationLabel,
   type Attachment,
   type ChatMessage,
+  type MessageAuthor,
+  type RunLaunchTarget,
   type ToolInfo,
 } from '../../common/types';
 import { downloadFile, fileUrl } from '../services/api';
 import Markdown from './Markdown';
+import DelegationCard from './DelegationCard';
+import RunLaunchCard from './RunLaunchCard';
 import { colors, font, radius } from '../theme';
+
+// How many trailing messages to render before "Load earlier". Caps the
+// DOM + per-delta reconciliation on long transcripts to a fixed window.
+const TRANSCRIPT_WINDOW = 60;
 
 export interface MessageListProps {
   messages: ChatMessage[];
@@ -35,39 +48,112 @@ export interface MessageListProps {
   onRegenerate?: () => void;
   /** Fired by the per-bubble Edit button on a user message. Omit to hide. */
   onEditUser?: (msgId: string, newText: string) => void;
+  /** Fired when a delegation card is pressed — navigates into the child
+   *  session. Omit to render delegation cards as non-clickable. */
+  onOpenChild?: (childSessionId: string, meta?: { title?: string; model?: string }) => void;
+  /** Fired when a run-launch card (scheduled task / workflow run) is pressed —
+   *  opens that run's execution screen. Omit to render such cards as
+   *  non-clickable. */
+  onOpenRun?: (target: RunLaunchTarget) => void;
+  /** The current user's handle/display, used as the fallback "You" label
+   *  when a user message carries no explicit author. */
+  currentUserHandle?: string;
 }
 
-export default function MessageList({
+function MessageListBase({
   messages, isProcessing, statusText, maxItems, onRegenerate, onEditUser,
+  onOpenChild, onOpenRun, currentUserHandle,
 }: MessageListProps) {
-  const visible = maxItems != null ? messages.slice(-maxItems) : messages;
+  // Windowing: render only the last `shown` messages. With bottom-pinned
+  // scroll the tail is what the user sees; a long transcript otherwise
+  // materializes thousands of deeply-nested DOM nodes and re-maps + diffs
+  // ALL of them on every streaming delta. "Load earlier" widens the
+  // window. The Voice tab passes maxItems and keeps its own tail-slice.
+  const [shown, setShown] = useState(TRANSCRIPT_WINDOW);
+  const capped = maxItems != null;
+  const visible = useMemo(
+    () => (capped
+      ? messages.slice(-maxItems!)
+      : (shown >= messages.length ? messages : messages.slice(-shown))),
+    [messages, capped, maxItems, shown],
+  );
+  const hiddenCount = capped ? 0 : Math.max(0, messages.length - visible.length);
   // Identify the last assistant message — Regenerate only attaches to
   // it, not to every assistant bubble in the transcript.
-  const lastAssistantId = (() => {
+  const lastAssistantId = useMemo(() => {
     for (let i = visible.length - 1; i >= 0; i -= 1) {
       const m = visible[i];
       if (m.role === 'assistant' && !m.streaming) return m.id;
     }
     return null;
-  })();
+  }, [visible]);
+  const renderMessage = (msg: ChatMessage) => {
+    if (msg.role === 'tool') {
+      // A delegation renders as a card (deep-links into the sub-agent's
+      // child session, OpenCode-style) instead of an inline tool chip —
+      // even while it's still RUNNING (the card is non-clickable until the
+      // child_session_id arrives at completion), so the parent never shows
+      // the raw delegate-tool prompt or the sub-agent's own work inline.
+      if (isDelegationTool(msg.toolInfo)) {
+        const eff = effectiveTool(msg.toolInfo)!;
+        return (
+          <DelegationCard
+            key={msg.id}
+            childSessionId={eff.child_session_id}
+            title={delegationTitle(msg.toolInfo)}
+            model={eff.child_model}
+            label={delegationLabel(msg.toolInfo)}
+            phase={toolPhase(msg.toolInfo!)}
+            onOpen={onOpenChild}
+          />
+        );
+      }
+      // A run-now of a scheduled task / workflow renders as a card that
+      // deep-links into that run's execution screen (not an inline tool chip).
+      const runTarget = runLaunchTarget(msg.toolInfo);
+      if (runTarget) {
+        return <RunLaunchCard key={msg.id} target={runTarget} onOpen={onOpenRun} />;
+      }
+      return <ToolCard key={msg.id} toolInfo={msg.toolInfo} fallbackText={msg.text} />;
+    }
+    if (msg.role === 'user') {
+      // An agent-self seed (a delegated task / scheduled mission / workflow
+      // node prompt the agent gave itself) renders as a Mission block,
+      // not a "You" bubble.
+      if (msg.author?.kind === 'agent') {
+        return <SelfPromptBlock key={msg.id} text={msg.text} label={msg.author.display} />;
+      }
+      return (
+        <UserMessage
+          key={msg.id} id={msg.id} text={msg.text} attachments={msg.attachments}
+          author={msg.author} fallbackLabel={currentUserHandle}
+          onEdit={onEditUser}
+        />
+      );
+    }
+    return (
+      <AssistantMessage
+        key={msg.id} text={msg.text} model={msg.model} attachments={msg.attachments}
+        streaming={msg.streaming} author={msg.author}
+        onRegenerate={msg.id === lastAssistantId && !isProcessing ? onRegenerate : undefined}
+      />
+    );
+  };
   return (
     <>
-      {visible.map((msg) => (
-        msg.role === 'tool' ? (
-          <ToolCard key={msg.id} toolInfo={msg.toolInfo} fallbackText={msg.text} />
-        ) : msg.role === 'user' ? (
-          <UserMessage
-            key={msg.id} id={msg.id} text={msg.text} attachments={msg.attachments}
-            onEdit={onEditUser}
-          />
-        ) : (
-          <AssistantMessage
-            key={msg.id} text={msg.text} model={msg.model} attachments={msg.attachments}
-            streaming={msg.streaming}
-            onRegenerate={msg.id === lastAssistantId && !isProcessing ? onRegenerate : undefined}
-          />
-        )
-      ))}
+      {hiddenCount > 0 && (
+        <TouchableOpacity
+          style={styles.loadEarlier}
+          onPress={() => setShown((n) => n + TRANSCRIPT_WINDOW)}
+          accessibilityLabel="Load earlier messages"
+          // @ts-ignore — web hover/press affordance
+          {...(Platform.OS === 'web' ? { className: 'oa-side-row oa-press' } : {})}
+        >
+          <Feather name="chevron-up" size={12} color={colors.textMuted} />
+          <Text style={styles.loadEarlierText}>Load earlier ({hiddenCount})</Text>
+        </TouchableOpacity>
+      )}
+      {visible.map(renderMessage)}
       {isProcessing && (
         <View style={styles.statusRow}>
           <View
@@ -82,16 +168,25 @@ export default function MessageList({
   );
 }
 
+// Memoized so a parent re-render (e.g. chat.tsx re-rendering for an
+// unrelated reason) doesn't re-map the transcript unless `messages` (or
+// another prop) actually changed.
+const MessageList = memo(MessageListBase);
+export default MessageList;
+
 // ── Atoms ────────────────────────────────────────────────────────────
 
 const UserMessage = memo(function UserMessage({
-  id, text, attachments, onEdit,
+  id, text, attachments, author, fallbackLabel, onEdit,
 }: {
   id: string;
   text: string;
   attachments?: Attachment[];
+  author?: MessageAuthor;
+  fallbackLabel?: string;
   onEdit?: (id: string, newText: string) => void;
 }) {
+  const label = author?.display || author?.handle || fallbackLabel || 'You';
   const inlineImages = attachments?.filter((a) => a.type === 'image') ?? [];
   const otherAttach = attachments?.filter((a) => a.type !== 'image') ?? [];
   const [editing, setEditing] = useState(false);
@@ -100,18 +195,20 @@ const UserMessage = memo(function UserMessage({
     <View
       style={styles.userBlock}
       // @ts-ignore
-      {...(Platform.OS === 'web' ? { className: 'oa-fade-in oa-row-hover' } : {})}
+      {...(Platform.OS === 'web' ? { className: 'oa-msg-in oa-row-hover' } : {})}
     >
       <View style={styles.userRule} />
       <View style={styles.userBody}>
         <View style={styles.userHead}>
-          <Text style={styles.userLabel}>You</Text>
+          <Text style={styles.userLabel}>{label}</Text>
           {!editing && (
             <View style={styles.msgActions}>
               <CopyButton text={text} />
               {onEdit && (
                 <TouchableOpacity
                   style={styles.msgActionBtn}
+                  // @ts-ignore — web hover/press affordance
+                  {...(Platform.OS === 'web' ? { className: 'oa-icon-btn' } : {})}
                   onPress={() => { setDraft(text); setEditing(true); }}
                   accessibilityLabel="Edit message"
                 >
@@ -148,12 +245,16 @@ const UserMessage = memo(function UserMessage({
             <View style={styles.editActionsRow}>
               <TouchableOpacity
                 style={styles.editCancelBtn}
+                // @ts-ignore — web press affordance
+                {...(Platform.OS === 'web' ? { className: 'oa-press' } : {})}
                 onPress={() => { setEditing(false); setDraft(text); }}
               >
                 <Text style={styles.editCancelText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.editSendBtn}
+                // @ts-ignore — web press affordance
+                {...(Platform.OS === 'web' ? { className: 'oa-press' } : {})}
                 onPress={() => {
                   const trimmed = draft.trim();
                   if (!trimmed) return;
@@ -184,25 +285,27 @@ const UserMessage = memo(function UserMessage({
 });
 
 const AssistantMessage = memo(function AssistantMessage({
-  text, model, attachments, streaming, onRegenerate,
+  text, model, attachments, streaming, author, onRegenerate,
 }: {
   text: string;
   model?: string;
   attachments?: Attachment[];
   streaming?: boolean;
+  author?: MessageAuthor;
   onRegenerate?: () => void;
 }) {
+  const label = author?.display || 'OpenAgent';
   const inlineImages = attachments?.filter((a) => a.type === 'image') ?? [];
   const otherAttach = attachments?.filter((a) => a.type !== 'image') ?? [];
   return (
     <View
       style={styles.assistantBlock}
       // @ts-ignore
-      {...(Platform.OS === 'web' ? { className: 'oa-fade-in oa-row-hover' } : {})}
+      {...(Platform.OS === 'web' ? { className: 'oa-msg-in oa-row-hover' } : {})}
     >
       <View style={styles.assistantHead}>
         <View style={styles.assistantDot} />
-        <Text style={styles.assistantLabel}>OpenAgent</Text>
+        <Text style={styles.assistantLabel}>{label}</Text>
         {model && <Text style={styles.modelText}>· {model}</Text>}
         {!streaming && (
           <View style={styles.msgActions}>
@@ -210,6 +313,8 @@ const AssistantMessage = memo(function AssistantMessage({
             {onRegenerate && (
               <TouchableOpacity
                 style={styles.msgActionBtn}
+                // @ts-ignore — web hover/press affordance
+                {...(Platform.OS === 'web' ? { className: 'oa-icon-btn' } : {})}
                 onPress={onRegenerate}
                 accessibilityLabel="Regenerate response"
               >
@@ -252,6 +357,8 @@ function CopyButton({ text }: { text: string }) {
   return (
     <TouchableOpacity
       style={styles.msgActionBtn}
+      // @ts-ignore — web hover/press affordance
+      {...(Platform.OS === 'web' ? { className: 'oa-icon-btn' } : {})}
       onPress={doCopy}
       accessibilityLabel={copied ? 'Copied' : 'Copy message'}
     >
@@ -326,6 +433,30 @@ function AttachmentView({
   );
 }
 
+// The agent-authored seed of a child session — the task/mission/role prompt
+// the agent gave itself. Rendered distinctly so it reads as "the agent set
+// itself this task", not as a human "You" message.
+const SelfPromptBlock = memo(function SelfPromptBlock({
+  text, label,
+}: { text: string; label?: string }) {
+  return (
+    <View
+      style={styles.selfPromptBlock}
+      // @ts-ignore
+      {...(Platform.OS === 'web' ? { className: 'oa-msg-in' } : {})}
+    >
+      <View style={styles.selfPromptRule} />
+      <View style={styles.userBody}>
+        <View style={styles.userHead}>
+          <Feather name="target" size={11} color={colors.accent} />
+          <Text style={styles.selfPromptLabel}>{(label || 'Mission').toUpperCase()}</Text>
+        </View>
+        <Markdown text={text} />
+      </View>
+    </View>
+  );
+});
+
 const ToolCard = memo(function ToolCard({
   toolInfo, fallbackText,
 }: { toolInfo?: ToolInfo; fallbackText: string }) {
@@ -372,7 +503,7 @@ const ToolCard = memo(function ToolCard({
       onPress={() => setExpanded(!expanded)}
       style={[styles.toolCard, isError && styles.toolCardError]}
       // @ts-ignore
-      {...(Platform.OS === 'web' ? { className: 'oa-fade-in' } : {})}
+      {...(Platform.OS === 'web' ? { className: 'oa-msg-in oa-card-hover' } : {})}
     >
       <View style={styles.toolCardHeader}>
         <View style={[styles.toolStatusDot, { backgroundColor: statusColor }]} />
@@ -425,6 +556,15 @@ const ToolCard = memo(function ToolCard({
 });
 
 const styles = StyleSheet.create({
+  // "Load earlier" — widens the rendered transcript window.
+  loadEarlier: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 6, paddingVertical: 8, marginVertical: 4, alignSelf: 'center',
+    paddingHorizontal: 12, borderRadius: radius.sm,
+  },
+  loadEarlierText: {
+    fontSize: 11, color: colors.textMuted, fontFamily: font.mono,
+  },
   // User
   userBlock: {
     flexDirection: 'row', alignItems: 'stretch',
@@ -447,6 +587,21 @@ const styles = StyleSheet.create({
   userText: {
     fontSize: 14, lineHeight: 22, color: colors.text,
     fontWeight: '400',
+  },
+
+  // Agent-self seed prompt (Mission / Role / Task) — an accent-ruled quote.
+  selfPromptBlock: {
+    flexDirection: 'row', alignItems: 'stretch',
+    paddingVertical: 10, paddingLeft: 2,
+  },
+  selfPromptRule: {
+    width: 2, backgroundColor: colors.accent,
+    borderRadius: 1, marginRight: 12, opacity: 0.85,
+  },
+  selfPromptLabel: {
+    flex: 1,
+    fontSize: 10, fontWeight: '600', color: colors.accent,
+    textTransform: 'uppercase', letterSpacing: 0.8, marginLeft: 6,
   },
 
   // Hover action buttons (Copy / Edit / Regenerate) — appear in the

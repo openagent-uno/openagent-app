@@ -49,6 +49,12 @@ export default function AppDrawerLayout() {
       )}
       screenOptions={{
         headerShown: false,
+        // Freeze a screen's React tree while it's not the focused route, so
+        // a backgrounded tab (e.g. Chat) stops re-rendering on every store
+        // mutation — the chat delta storm and any per-screen effects pause
+        // until the user returns. The global store still receives updates;
+        // the screen just defers rendering them until it's focused again.
+        freezeOnBlur: true,
         drawerType: permanent ? 'permanent' : 'back',
         drawerStyle: { width, backgroundColor: 'transparent', borderRightWidth: 0 },
         overlayColor: 'transparent',

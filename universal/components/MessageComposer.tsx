@@ -11,7 +11,7 @@
  * native RN falls back to a ``<TextInput multiline>``.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type Ref } from 'react';
 import Feather from '@expo/vector-icons/Feather';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Platform, Image } from 'react-native';
 import { colors, font, radius } from '../theme';
@@ -100,6 +100,10 @@ export interface MessageComposerProps {
   onToggleAlwaysListen?: () => void;
   placeholder?: string;
   showHint?: boolean;                  // default true (Enter / Shift+Enter)
+  /** Forwarded to the underlying text field so a parent can focus it
+   *  programmatically — used by the chat screen's type-to-focus, which
+   *  routes a stray printable keystroke into the composer. */
+  inputRef?: Ref<any>;
 }
 
 export default function MessageComposer({
@@ -126,6 +130,7 @@ export default function MessageComposer({
   onToggleAlwaysListen,
   placeholder = 'Message OpenAgent...',
   showHint = true,
+  inputRef,
 }: MessageComposerProps) {
   // Slash autocomplete state. We surface the menu when the composer
   // begins with ``/`` and the text contains no whitespace yet — once
@@ -251,6 +256,8 @@ export default function MessageComposer({
             <TouchableOpacity
               key={c.name}
               style={[styles.slashRow, i === slashActive && styles.slashRowActive]}
+              // @ts-ignore — web hover transition
+              {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
               onPress={() => acceptSlash(c)}
               onMouseEnter={() => setSlashActive(i)}
             >
@@ -262,7 +269,11 @@ export default function MessageComposer({
           ))}
         </View>
       )}
-      <View style={styles.composer}>
+      <View
+        style={styles.composer}
+        // @ts-ignore — web focus-within affordance (border brightens on focus)
+        {...(Platform.OS === 'web' ? { className: 'oa-composer' } : {})}
+      >
         {files.length > 0 && (
           <View style={styles.pendingList}>
             {files.map((f, idx) => {
@@ -307,12 +318,18 @@ export default function MessageComposer({
                     <TouchableOpacity
                       onPress={() => onRetryFile(idx)}
                       accessibilityLabel="Retry upload"
+                      // @ts-ignore — web press affordance
+                      {...(Platform.OS === 'web' ? { className: 'oa-press' } : {})}
                     >
                       <Feather name="refresh-cw" size={10} color={colors.primary} />
                     </TouchableOpacity>
                   )}
                   {onRemoveFile && (
-                    <TouchableOpacity onPress={() => onRemoveFile(idx)}>
+                    <TouchableOpacity
+                      onPress={() => onRemoveFile(idx)}
+                      // @ts-ignore — web press affordance
+                      {...(Platform.OS === 'web' ? { className: 'oa-press' } : {})}
+                    >
                       <Feather name="x" size={11} color={failed ? colors.error : colors.textMuted} />
                     </TouchableOpacity>
                   )}
@@ -325,6 +342,7 @@ export default function MessageComposer({
         <View style={styles.inputRow}>
           {Platform.OS === 'web' ? (
             <textarea
+              ref={inputRef as any}
               value={input}
               onChange={(e: any) => onInputChange(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -340,6 +358,7 @@ export default function MessageComposer({
             />
           ) : (
             <TextInput
+              ref={inputRef as any}
               style={styles.textInput}
               value={input} onChangeText={onInputChange}
               placeholder={placeholder} placeholderTextColor={colors.textMuted}
@@ -351,7 +370,12 @@ export default function MessageComposer({
         <View style={styles.composerActions}>
           <View style={styles.composerLeft}>
             {onPickFile && (
-              <TouchableOpacity style={styles.iconBtn} onPress={onPickFile}>
+              <TouchableOpacity
+                style={styles.iconBtn}
+                onPress={onPickFile}
+                // @ts-ignore — web hover/press affordance
+                {...(Platform.OS === 'web' ? { className: 'oa-icon-btn' } : {})}
+              >
                 <Feather name="paperclip" size={13} color={colors.textSecondary} />
               </TouchableOpacity>
             )}
@@ -361,6 +385,8 @@ export default function MessageComposer({
                   style={styles.modelChip}
                   onPress={() => setModelMenuOpen((v) => !v)}
                   accessibilityLabel="Choose model"
+                  // @ts-ignore — web press affordance
+                  {...(Platform.OS === 'web' ? { className: 'oa-press' } : {})}
                 >
                   <Feather name="cpu" size={10} color={colors.textSecondary} />
                   <Text style={styles.modelChipLabel} numberOfLines={1}>
@@ -376,6 +402,8 @@ export default function MessageComposer({
                   <View style={styles.modelMenu}>
                     <TouchableOpacity
                       style={[styles.modelRow, !activeModelId && styles.modelRowActive]}
+                      // @ts-ignore — web hover transition
+                      {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
                       onPress={() => { onSelectModel(undefined); setModelMenuOpen(false); }}
                     >
                       <Feather
@@ -392,6 +420,8 @@ export default function MessageComposer({
                       <TouchableOpacity
                         key={m.id}
                         style={[styles.modelRow, m.id === activeModelId && styles.modelRowActive]}
+                        // @ts-ignore — web hover transition
+                        {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
                         onPress={() => { onSelectModel(m.id); setModelMenuOpen(false); }}
                       >
                         <Feather
@@ -415,6 +445,8 @@ export default function MessageComposer({
               <TouchableOpacity
                 style={[styles.iconBtn, recording && styles.iconBtnActive]}
                 onPress={recording ? onStopRecord : onStartRecord}
+                // @ts-ignore — web hover/press affordance
+                {...(Platform.OS === 'web' ? { className: 'oa-icon-btn' } : {})}
               >
                 <Feather
                   name={recording ? 'stop-circle' : 'mic'}
@@ -430,6 +462,8 @@ export default function MessageComposer({
                 accessibilityLabel={
                   alwaysListening ? 'Stop continuous listening' : 'Start continuous listening'
                 }
+                // @ts-ignore — web hover/press affordance
+                {...(Platform.OS === 'web' ? { className: 'oa-icon-btn' } : {})}
               >
                 <Feather
                   name="headphones"
@@ -444,6 +478,8 @@ export default function MessageComposer({
               style={[styles.sendBtn, styles.stopBtn]}
               onPress={onStop}
               accessibilityLabel="Stop generating"
+              // @ts-ignore — web press affordance
+              {...(Platform.OS === 'web' ? { className: 'oa-press' } : {})}
             >
               <Feather name="square" size={11} color={colors.textInverse} />
             </TouchableOpacity>
@@ -453,6 +489,8 @@ export default function MessageComposer({
               onPress={onSend}
               disabled={!canSend}
               accessibilityLabel="Send message"
+              // @ts-ignore — web press affordance
+              {...(Platform.OS === 'web' ? { className: 'oa-press' } : {})}
             >
               <Feather name="arrow-up" size={13} color={colors.textInverse} />
             </TouchableOpacity>

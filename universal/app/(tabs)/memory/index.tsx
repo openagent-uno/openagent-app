@@ -8,9 +8,9 @@
  * ``StackActions.popTo('index')`` — same pattern as MCPs / Workflows.
  */
 
-import { useEffect, useLayoutEffect } from 'react';
+import { useCallback, useEffect, useLayoutEffect } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
-import { useRouter, useNavigation } from 'expo-router';
+import { useRouter, useNavigation, useFocusEffect } from 'expo-router';
 import GraphView from '../../../components/GraphView';
 import ResponsiveSidebar from '../../../components/ResponsiveSidebar';
 import VaultSidebar from '../../../components/memory/VaultSidebar';
@@ -35,6 +35,17 @@ export default function MemoryGraphScreen() {
       loadGraph();
     }
   }, [config]);
+
+  // Refetch on every screen focus so re-opening the tab always shows
+  // fresh data (same as Connectors). The store keeps the existing notes
+  // and graph visible while the refetch is in flight, so the graph never
+  // blanks out to a loading state after the first load.
+  useFocusEffect(
+    useCallback(() => {
+      void loadNotes();
+      void loadGraph();
+    }, [loadNotes, loadGraph]),
+  );
 
   // Refetch when the agent (or another tab) writes/deletes a vault note.
   useEffect(() => {

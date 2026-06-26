@@ -43,6 +43,10 @@ const RESOURCES: ResourceKind[] = [
   'workflow',
   'vault',
   'config',
+  // Fires when a child session (delegation / scheduled firing / workflow
+  // node) is spawned, so the sidebar refetches and the new session appears
+  // and streams live.
+  'session',
 ];
 
 const DEBOUNCE_MS = 150;

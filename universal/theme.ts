@@ -219,6 +219,9 @@ function ensureGlobalCss(): void {
     ::-webkit-scrollbar-thumb:hover { background: var(--oa-borderStrong); background-clip: padding-box; border: 2px solid transparent; }
     @keyframes oa-fade-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
     @keyframes oa-slide-up { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    /* Message / tool-card entrance — a touch more travel than oa-fade-in
+       so transcript rows visibly slide-and-fade up as they stream in. */
+    @keyframes oa-msg-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
     @keyframes oa-slide-in-x { from { transform: translateX(-100%); } to { transform: translateX(0); } }
     @keyframes oa-pulse-soft { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
     @keyframes oa-shimmer { 0% { background-position: -200% 0; } 100% { background-position: 200% 0; } }
@@ -244,10 +247,31 @@ function ensureGlobalCss(): void {
     }
     .oa-fade-in { animation: oa-fade-in 0.24s cubic-bezier(0.16, 1, 0.3, 1) both; }
     .oa-slide-up { animation: oa-slide-up 0.32s cubic-bezier(0.16, 1, 0.3, 1) both; }
+    .oa-msg-in { animation: oa-msg-in 0.42s cubic-bezier(0.16, 1, 0.3, 1) both; }
     .oa-slide-in-x { animation: oa-slide-in-x 0.26s cubic-bezier(0.16, 1, 0.3, 1) both; }
     .oa-pulse { animation: oa-pulse-soft 1.6s ease-in-out infinite; }
-    .oa-hover-lift { transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.18s, border-color 0.18s; }
+    /* Hover-lift: a 1px float on hover + a subtle press-in on active, so
+       buttons feel tactile. Used app-wide via Button / PrimaryButton. */
+    .oa-hover-lift { transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.18s, border-color 0.18s, background-color 0.18s; }
     .oa-hover-lift:hover { transform: translateY(-1px); }
+    .oa-hover-lift:active { transform: translateY(0) scale(0.97); transition-duration: 0.08s; }
+    /* Icon buttons (paperclip / mic / message actions): a soft cyan wash
+       on hover and a quick squish on press. */
+    .oa-icon-btn { transition: background-color 0.16s ease, color 0.16s ease, transform 0.12s ease; }
+    .oa-icon-btn:hover { background-color: var(--oa-hover); }
+    .oa-icon-btn:active { transform: scale(0.92); }
+    /* Press-only feedback for tappables that shouldn't lift (e.g. Send). */
+    .oa-press { transition: transform 0.12s ease, opacity 0.16s ease, background-color 0.16s ease; }
+    .oa-press:active { transform: scale(0.92); }
+    /* The chat composer reacts to focus from any child input via
+       :focus-within — border brightens and the bar lifts a hair. Crisp,
+       no blur glow. */
+    .oa-composer { transition: border-color 0.22s ease, transform 0.22s ease; }
+    .oa-composer:focus-within { border-color: var(--oa-primary); transform: translateY(-1px); }
+    /* Expandable cards (tool calls, delegations): a gentle border/bg lift
+       on hover so they read as interactive. */
+    .oa-card-hover { transition: border-color 0.18s ease, background-color 0.18s ease, transform 0.18s ease; }
+    .oa-card-hover:hover { border-color: var(--oa-borderStrong); background-color: var(--oa-hover); }
     /* Sidebar / list rows: a soft cyan wash on hover, with a quick
        color transition so nav and recent rows feel responsive. */
     .oa-side-row { transition: background-color 0.16s ease, color 0.16s ease; border-radius: 8px; }
@@ -257,10 +281,6 @@ function ensureGlobalCss(): void {
        Used by message actions (Copy / Edit / Regenerate / etc). */
     .oa-row-hover:hover > div > div > div[style*="opacity: 0"],
     .oa-row-hover:hover div[style*="opacity: 0"] { opacity: 1 !important; }
-    /* Blinking caret used to mark a streaming assistant bubble. */
-    @keyframes oa-caret-blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
-    .oa-caret { display: inline-block; width: 2px; height: 1em; background: currentColor;
-      vertical-align: text-bottom; margin-left: 2px; animation: oa-caret-blink 1.1s steps(1,end) infinite; }
     /* Spin keyframe wrapper for loader icons. */
     .oa-spin { animation: oa-spin 0.9s linear infinite; display: inline-block; }
     /* Skeleton placeholder — a shimmering bar shown while a list / screen
@@ -289,11 +309,20 @@ function ensureGlobalCss(): void {
     .oa-katex-block .katex-display { margin: 0 !important; }
     .oa-katex-inline { color: var(--oa-text); }
     input:focus, textarea:focus, button:focus { outline: none; }
-    input:focus-visible, textarea:focus-visible { box-shadow: 0 0 0 2px var(--oa-primarySoft), 0 0 16px var(--oa-accentGlow); border-color: var(--oa-primary) !important; }
+    /* Focused fields get a clean, crisp border highlight — no blurry glow
+       ring. The border transition is owned by each field's inline style. */
+    input:focus-visible, textarea:focus-visible { box-shadow: none; border-color: var(--oa-primary) !important; }
     button { font-family: inherit; }
     a { color: var(--oa-primary); text-decoration: none; }
     a:hover { text-decoration: underline; text-shadow: 0 0 6px var(--oa-accentGlow); }
     ::selection { background: var(--oa-primarySoft); color: var(--oa-text); }
+    /* Respect users who ask for less motion — drop entrance animations
+       and interaction transforms, keep functional state changes. */
+    @media (prefers-reduced-motion: reduce) {
+      .oa-fade-in, .oa-slide-up, .oa-msg-in, .oa-slide-in-x { animation: none !important; }
+      .oa-hover-lift:hover, .oa-hover-lift:active, .oa-icon-btn:active,
+      .oa-press:active, .oa-composer:focus-within { transform: none !important; }
+    }
   `;
 }
 

@@ -240,22 +240,33 @@ export default function GraphView({ data, onSelectNode, width, height }: Props) 
     if (!canvas || Platform.OS !== 'web') return;
 
     const ctx = canvas.getContext('2d')!;
+    const W = containerSize.w, H = containerSize.h;
+    const dpr = window.devicePixelRatio || 1;
+    // Size the backing store ONCE per size change. Assigning canvas.width/
+    // height reallocates AND clears the bitmap — previously this ran on
+    // EVERY frame (~60x/s forever), one of the most expensive canvas ops.
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
     let running = true;
 
     const render = () => {
       if (!running) return;
+      // Cheap-out when the graph is off-screen: the drawer keeps the Memory
+      // screen mounted (inactive → display:none → offsetParent null) and the
+      // tab/window may be hidden. Skip all canvas work but keep the rAF alive
+      // so drawing resumes automatically on return — this stops the loop
+      // pegging a core in the background after Memory is opened once.
+      if ((typeof document !== 'undefined' && document.hidden) || canvas.offsetParent === null) {
+        frameRef.current = requestAnimationFrame(render);
+        return;
+      }
       const { nodes, edges, maxDegree } = simRef.current;
       const cam = camRef.current;
-      const W = containerSize.w, H = containerSize.h;
-      const dpr = window.devicePixelRatio || 1;
       // Raw hex palette for canvas — resolved each frame so theme toggles
       // take effect without any extra subscription/invalidation.
       const palette = getRawColors();
-
-      canvas.width = W * dpr;
-      canvas.height = H * dpr;
-      canvas.style.width = W + 'px';
-      canvas.style.height = H + 'px';
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
       // Simulation tick (cool down over time)

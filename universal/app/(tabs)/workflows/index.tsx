@@ -12,8 +12,8 @@
  */
 
 import Feather from '@expo/vector-icons/Feather';
-import { useRouter, useNavigation } from 'expo-router';
-import { useEffect, useLayoutEffect, useState } from 'react';
+import { useRouter, useNavigation, useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useLayoutEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -128,6 +128,16 @@ export default function WorkflowsScreen() {
       void loadWorkflows();
     }
   }, [connConfig]);
+
+  // Refetch on every screen focus so re-opening the tab always shows
+  // fresh data (same as Connectors). The store keeps the existing list
+  // visible while the refetch is in flight — ``loaded`` never resets —
+  // so no skeleton flashes after the first load.
+  useFocusEffect(
+    useCallback(() => {
+      void loadWorkflows();
+    }, [loadWorkflows]),
+  );
 
   // Workflow-list refresh fires on every gateway-side change: chat-driven
   // create_workflow, manual run start/end, schedule tick. The store

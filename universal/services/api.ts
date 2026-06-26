@@ -12,6 +12,7 @@ import type {
   SystemSnapshot,
   VaultWriteResult, VaultHistory, VaultGateReport,
   VaultCommitDetail, VaultRestoreResult, VaultResetResult,
+  ChatMessage, Attachment, ToolInfo, MessageAuthor,
 } from '../../common/types';
 
 let baseUrl = '';
@@ -297,6 +298,37 @@ export async function updateScheduledTask(id: string, input: UpdateScheduledTask
 
 export async function deleteScheduledTask(id: string): Promise<void> {
   await del(`/api/scheduled-tasks/${encodeURIComponent(id)}`);
+}
+
+// Run a scheduled task immediately, out of band from its cron schedule.
+// Leaves the task's schedule + enabled flag untouched. When wait=true the
+// server blocks until the firing finishes and returns the TaskRun row; when
+// wait=false (the default the app uses for a snappy button) it returns
+// {run_id, status:'running'} as soon as the run row exists — progress then
+// arrives over the ``scheduled_task`` broadcast.
+export async function runScheduledTask(
+  id: string,
+  opts: { wait?: boolean; timeoutS?: number } = {},
+): Promise<TaskRun | { run_id: string | null; status: string }> {
+  return post(`/api/scheduled-tasks/${encodeURIComponent(id)}/run`, {
+    wait: opts.wait ?? false,
+    timeout_s: opts.timeoutS,
+  });
+}
+
+// Stop the currently-running firing(s) of a scheduled task. Hard-stops the
+// in-flight agent turn(s) and records them cancelled; the schedule itself is
+// untouched. When wait=true the server blocks until the firing(s) actually
+// stop and returns {count, runs, …}; the app uses wait=false for a snappy
+// button, then refetches on the ``scheduled_task`` broadcast.
+export async function stopScheduledTask(
+  id: string,
+  opts: { wait?: boolean; timeoutS?: number } = {},
+): Promise<{ task_id: string; stopped: string[]; count: number; runs: unknown[] }> {
+  return post(`/api/scheduled-tasks/${encodeURIComponent(id)}/stop`, {
+    wait: opts.wait ?? false,
+    timeout_s: opts.timeoutS,
+  });
 }
 
 // Per-firing execution history for one scheduled task (newest first).
@@ -945,6 +977,12 @@ export interface SessionEntry {
   framework: string | null;
   created_at: number | null;
   last_active_at: number | null;
+  /** Child-session linkage (from the server's metadata JSON): the parent this
+   *  session was spawned from, what spawned it, and a fine label. Drive the
+   *  sidebar origin chip + the "← parent" breadcrumb. */
+  parent_session_id?: string | null;
+  origin?: string | null;
+  kind?: string | null;
 }
 
 export interface SessionListResponse {
@@ -953,6 +991,16 @@ export interface SessionListResponse {
 
 export async function fetchSessions(): Promise<SessionEntry[]> {
   const data = await get<SessionListResponse>('/api/sessions');
+  return data.sessions;
+}
+
+/** List just the children a session spawned (delegated sub-agents, or the AI
+ *  node / firing sessions under a workflow-run / scheduled-task root). Powers
+ *  the parent transcript's delegation cards and the run screen. */
+export async function fetchChildSessions(parentSessionId: string): Promise<SessionEntry[]> {
+  const data = await get<SessionListResponse>(
+    `/api/sessions?parent=${encodeURIComponent(parentSessionId)}`,
+  );
   return data.sessions;
 }
 
@@ -980,11 +1028,30 @@ export interface SessionRunMessage {
   };
   attachments?: { type: 'image' | 'file' | 'voice' | 'video'; path: string; filename: string }[];
   model?: string;
+  /** Per-message authorship (human handle/display, or an agent-self seed).
+   *  Server-provided; absent on legacy rows. */
+  author?: { kind: string; handle?: string; display?: string };
 }
 
 export interface SessionRunsResponse {
   session_id: string;
   messages: SessionRunMessage[];
+}
+
+// One place to turn a server-rehydrated message into a ChatMessage, so the
+// author / toolInfo passthrough stays consistent across every loader (chat
+// store hydration and the run-detail transcript alike).
+export function runMsgToChat(m: SessionRunMessage): ChatMessage {
+  return {
+    id: m.id,
+    role: m.role,
+    text: m.text,
+    timestamp: m.timestamp,
+    toolInfo: m.toolInfo as ToolInfo | undefined,
+    attachments: m.attachments as Attachment[] | undefined,
+    model: m.model,
+    author: m.author as MessageAuthor | undefined,
+  };
 }
 
 export async function fetchSessionRuns(sessionId: string, limit?: number): Promise<SessionRunMessage[]> {

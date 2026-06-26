@@ -9,8 +9,8 @@
  * the transcript and streams the mic through the active chat session.
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react';
-import { useFocusEffect } from 'expo-router';
+import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
+import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, Image,
@@ -19,8 +19,11 @@ import {
 
 const logoIcon = require('../../assets/openagent-icon.png');
 import type { Attachment } from '../../../common/types';
+import { isHiddenChildSession, runRoutePath, type RunLaunchTarget } from '../../../common/types';
 import { useConnection } from '../../stores/connection';
 import { useChat } from '../../stores/chat';
+import { useEvents } from '../../stores/events';
+import { fetchSessions } from '../../services/api';
 import ResponsiveSidebar from '../../components/ResponsiveSidebar';
 import MessageComposer, { type PendingFile, type SlashCommand } from '../../components/MessageComposer';
 import MessageList from '../../components/MessageList';
@@ -53,31 +56,61 @@ export default function ChatScreen() {
   const headerInset = useHeaderInset();
   const ws = useConnection((s) => s.ws);
   const isReconnecting = useConnection((s) => s.isReconnecting);
-  const {
-    sessions, activeSessionId, sessionsHydrated,
-    createSession, setActiveSession, removeSession, renameSession,
-    addUserMessage, editUserMessage, setDraftInput, togglePinned,
-    setLlmPin, setSystemPrompt,
-  } = useChat();
+  const currentUserHandle = useConnection((s) => s.config?.handle);
+  const router = useRouter();
+  const routeParams = useLocalSearchParams<{ session?: string }>();
+  // Fine-grained selectors instead of the whole-store `useChat()`. The
+  // no-arg form returns a freshly-merged state object on EVERY mutation,
+  // so this ~1600-line screen used to re-render on every store change —
+  // including unrelated fields. State selectors below subscribe only to
+  // the slices this screen reads; action selectors return stable refs and
+  // never trigger a re-render on their own.
+  const sessions = useChat((s) => s.sessions);
+  const activeSessionId = useChat((s) => s.activeSessionId);
+  const sessionsHydrated = useChat((s) => s.sessionsHydrated);
+  const createSession = useChat((s) => s.createSession);
+  const setActiveSession = useChat((s) => s.setActiveSession);
+  const removeSession = useChat((s) => s.removeSession);
+  const renameSession = useChat((s) => s.renameSession);
+  const addUserMessage = useChat((s) => s.addUserMessage);
+  const editUserMessage = useChat((s) => s.editUserMessage);
+  const setDraftInput = useChat((s) => s.setDraftInput);
+  const togglePinned = useChat((s) => s.togglePinned);
+  const setLlmPin = useChat((s) => s.setLlmPin);
+  const setSystemPrompt = useChat((s) => s.setSystemPrompt);
+  const hydrateFromServer = useChat((s) => s.hydrateFromServer);
   // Sidebar: apply text search, sort pinned-first then by recency
   // (last message timestamp). Voice no longer has its own session id —
   // it's integrated into the chat tab now.
   const [sessionSearch, setSessionSearch] = useState('');
-  const chatSessions = (() => {
+  // Cap the rendered session switcher; the full sorted list stays reachable
+  // behind a "show all" toggle. Heavy users accumulate hundreds of sessions
+  // (every delegation / cron / workflow run creates one durable session).
+  const SESSION_SWITCHER_MAX = 60;
+  const [showAllSessions, setShowAllSessions] = useState(false);
+  // Memoized so the filter + sort (and, when searching, the full-text scan
+  // over every message of every session) only runs when sessions or the
+  // query actually change — not on every render of this screen.
+  const chatSessions = useMemo(() => {
     const q = sessionSearch.trim().toLowerCase();
+    // Sub-agent (delegation) sessions are navigable only from their parent's
+    // transcript card — never the sidebar/recent list. The active session view
+    // reads from the full ``sessions`` list, so a child opened from a card
+    // still renders even though it's filtered out here.
+    const visible = sessions.filter((s) => !isHiddenChildSession(s));
     const filtered = q
-      ? sessions.filter((s) => {
+      ? visible.filter((s) => {
           if (s.title.toLowerCase().includes(q)) return true;
           return s.messages.some((m) => m.text.toLowerCase().includes(q));
         })
-      : sessions;
+      : visible;
     return [...filtered].sort((a, b) => {
       if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
       const at = a.messages[a.messages.length - 1]?.timestamp ?? 0;
       const bt = b.messages[b.messages.length - 1]?.timestamp ?? 0;
       return bt - at;
     });
-  })();
+  }, [sessions, sessionSearch]);
 
   const [input, setInput] = useState('');
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
@@ -109,6 +142,9 @@ export default function ChatScreen() {
   const mediaRecorderRef = useRef<any>(null);
   const chunksRef = useRef<Blob[]>([]);
   const scrollRef = useRef<ScrollView>(null);
+  // The composer's underlying text field, so a stray printable keystroke
+  // anywhere on the chat screen can be routed into it (type-to-focus).
+  const composerInputRef = useRef<any>(null);
   // Monotonic per-mount counter for stable chip ids — collisions across
   // remounts don't matter (state resets), and we only need uniqueness
   // within one ``pendingFiles`` array.
@@ -207,6 +243,50 @@ export default function ChatScreen() {
     if (!activeSessionId) return;
     setDraftInput(activeSessionId, input);
   }, [input, activeSessionId, setDraftInput]);
+
+  // Deep-link: a ``?session=<id>`` param (set when a delegation card is
+  // pressed, or by linking into a run's child session) drives the active
+  // session. Guard with a ref so this one-way application never ping-pongs
+  // with the store's own ``setActiveSession`` → URL update.
+  const appliedParamRef = useRef<string | null>(null);
+  useEffect(() => {
+    const want = typeof routeParams.session === 'string' ? routeParams.session : undefined;
+    if (!want || want === activeSessionId) return;
+    if (appliedParamRef.current === want) return;
+    appliedParamRef.current = want;
+    setActiveSession(want);
+  }, [routeParams.session, activeSessionId, setActiveSession]);
+
+  // Navigate into a child session (delegation card / run node) by swapping
+  // the active session and reflecting it in the URL so it's deep-linkable.
+  // Record it as the applied param too: setActiveSession commits synchronously
+  // (so the effect above never sees want≠active to record it itself), and
+  // without this a later sidebar switch-away would re-apply the now-stale
+  // ``?session=<child>`` and yank the user back into the child.
+  const openChildSession = useCallback((childSessionId: string) => {
+    appliedParamRef.current = childSessionId;
+    setActiveSession(childSessionId);
+    router.setParams({ session: childSessionId });
+  }, [setActiveSession, router]);
+
+  // A chat turn that ran a scheduled task / workflow shows a RunLaunchCard;
+  // pressing it opens that firing's execution screen (``/runs/{id}``) — the
+  // same single-run destination the sidebar's Recent feed uses.
+  const openRun = useCallback((target: RunLaunchTarget) => {
+    const path = runRoutePath(target);
+    if (path) router.push(`/${path}` as any);
+  }, [router]);
+
+  // A freshly-spawned child session (delegation / scheduled firing / workflow
+  // node) fires a ``session`` resource_event — refetch so it appears in the
+  // sidebar and its streaming stub gets real metadata. hydrateFromServer
+  // merges metadata onto existing rows without clobbering live transcripts.
+  useEffect(() => {
+    const off = useEvents.getState().subscribe('session', () => {
+      fetchSessions().then(hydrateFromServer).catch(() => {});
+    });
+    return off;
+  }, [hydrateFromServer]);
 
   // Auto-scroll only when the user is already pinned to the bottom.
   // If they've scrolled up to read history, we don't yank them back —
@@ -550,9 +630,10 @@ export default function ChatScreen() {
   // Up/Down recall — walk the user-message history when composer is
   // empty (or caret at boundary). Index = position from the tail.
   const recallIdxRef = useRef<number | null>(null);
-  const userMessages = activeSession
-    ? activeSession.messages.filter((m) => m.role === 'user')
-    : [];
+  const userMessages = useMemo(
+    () => (activeSession ? activeSession.messages.filter((m) => m.role === 'user') : []),
+    [activeSession?.messages],
+  );
   const recallPrev = useCallback(() => {
     if (!userMessages.length) return;
     const cur = recallIdxRef.current;
@@ -572,6 +653,35 @@ export default function ChatScreen() {
     recallIdxRef.current = next;
     setInput(userMessages[next].text);
   }, [userMessages]);
+
+  // Type-to-focus: a printable keystroke anywhere on the focused chat
+  // screen jumps into the composer and starts typing it — like Slack /
+  // Discord / Telegram. Web/desktop only; native has no global key stream.
+  useFocusEffect(
+    useCallback(() => {
+      if (Platform.OS !== 'web' || typeof window === 'undefined') return;
+      const onKey = (e: KeyboardEvent) => {
+        // Leave shortcuts, IME composition and non-printing keys alone.
+        if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
+        // Only single printable characters; keep Space free to scroll.
+        if (e.key.length !== 1 || e.key === ' ') return;
+        if (paletteOpen) return;
+        // Don't hijack a keystroke already destined for a field.
+        const el = document.activeElement as HTMLElement | null;
+        const tag = el?.tagName?.toLowerCase();
+        if (tag === 'input' || tag === 'textarea' || tag === 'select' || el?.isContentEditable) return;
+        const ta = composerInputRef.current as HTMLTextAreaElement | null;
+        // Bail when the composer isn't on screen (no session / hidden tab).
+        if (!ta || ta.offsetParent === null) return;
+        e.preventDefault();
+        ta.focus();
+        recallIdxRef.current = null;
+        setInput((prev) => prev + e.key);
+      };
+      window.addEventListener('keydown', onKey);
+      return () => window.removeEventListener('keydown', onKey);
+    }, [paletteOpen]),
+  );
 
   const swState: SoundWavesState =
     audioState === 'playing' ? 'speaking'
@@ -856,7 +966,7 @@ export default function ChatScreen() {
         )}
       </View>
       <ScrollView style={styles.sessionList}>
-        {sessions.map((ses) => {
+        {(showAllSessions ? chatSessions : chatSessions.slice(0, SESSION_SWITCHER_MAX)).map((ses) => {
           const isEditing = editingSessionId === ses.id;
           return (
             <View key={ses.id} style={styles.sessionRow}>
@@ -892,6 +1002,17 @@ export default function ChatScreen() {
                     style={styles.sessionPinGlyph}
                   />
                 )}
+                {ses.origin && ses.origin !== 'chat' ? (
+                  // Origin chip — distinguishes a delegation / scheduled / workflow
+                  // child session from a normal chat in the flat list.
+                  <Feather
+                    name={ses.origin === 'scheduler' ? 'clock' : 'git-branch'}
+                    size={9}
+                    color={colors.textMuted}
+                    style={{ marginRight: 5 }}
+                    accessibilityLabel={`${ses.origin} session`}
+                  />
+                ) : null}
                 {isEditing ? (
                   <TextInput
                     style={styles.sessionEditInput}
@@ -943,7 +1064,17 @@ export default function ChatScreen() {
             </View>
           );
         })}
-        {sessions.length === 0 && (
+        {!showAllSessions && chatSessions.length > SESSION_SWITCHER_MAX && (
+          <TouchableOpacity
+            style={styles.sessionShowAll}
+            onPress={() => setShowAllSessions(true)}
+            // @ts-ignore — web hover/press affordance
+            {...(Platform.OS === 'web' ? { className: 'oa-side-row oa-press' } : {})}
+          >
+            <Text style={styles.sessionShowAllText}>Show all {chatSessions.length}</Text>
+          </TouchableOpacity>
+        )}
+        {chatSessions.length === 0 && (
           <Text style={styles.sidebarEmpty}>No sessions yet</Text>
         )}
       </ScrollView>
@@ -1002,7 +1133,7 @@ export default function ChatScreen() {
     },
   ];
 
-  const paletteEntries: PaletteEntry[] = chatSessions.map((s) => {
+  const paletteEntries: PaletteEntry[] = useMemo(() => chatSessions.map((s) => {
     const last = s.messages[s.messages.length - 1];
     return {
       id: s.id,
@@ -1012,7 +1143,7 @@ export default function ChatScreen() {
       pinned: s.pinned,
       onSelect: () => setActiveSession(s.id),
     };
-  });
+  }), [chatSessions, setActiveSession]);
 
   return (
     <ResponsiveSidebar sidebar={sidebarContent}>
@@ -1105,6 +1236,35 @@ export default function ChatScreen() {
               scrollEventThrottle={120}
             >
               <View style={styles.messagesInner}>
+                {(activeSession.parentSessionId || (activeSession.origin && activeSession.origin !== 'chat')) ? (
+                  (() => {
+                    const parent = sessions.find((s) => s.id === activeSession.parentSessionId);
+                    const originName = activeSession.origin && activeSession.origin !== 'chat'
+                      ? activeSession.origin : 'parent';
+                    const label = parent
+                      ? `${originName} · ${parent.title}`
+                      : `${originName}${activeSession.originLabel ? ` · ${activeSession.originLabel}` : ''}`;
+                    return (
+                      <TouchableOpacity
+                        disabled={!parent}
+                        onPress={() => parent && openChildSession(parent.id)}
+                        style={{
+                          flexDirection: 'row', alignItems: 'center', gap: 6,
+                          paddingVertical: 6, paddingHorizontal: 8, marginBottom: 4,
+                          alignSelf: 'flex-start', borderRadius: 6,
+                        }}
+                        accessibilityRole="button"
+                        accessibilityLabel="Back to parent session"
+                      >
+                        <Feather name="corner-up-left" size={12} color={colors.textMuted} />
+                        <Text style={{
+                          color: colors.textMuted, fontSize: 11,
+                          textTransform: 'uppercase', letterSpacing: 0.5,
+                        }} numberOfLines={1}>{label}</Text>
+                      </TouchableOpacity>
+                    );
+                  })()
+                ) : null}
                 {activeSession.messages.length === 0 && (
                   <View style={styles.heroEmpty}>
                     <BrandLogo size={84} />
@@ -1134,6 +1294,9 @@ export default function ChatScreen() {
                   statusText={activeSession.statusText}
                   onRegenerate={handleRegenerate}
                   onEditUser={handleEditUser}
+                  onOpenChild={openChildSession}
+                  onOpenRun={openRun}
+                  currentUserHandle={currentUserHandle}
                 />
               </View>
             </ScrollView>
@@ -1169,6 +1332,7 @@ export default function ChatScreen() {
             )}
 
             <MessageComposer
+              inputRef={composerInputRef}
               input={input}
               onInputChange={(v) => {
                 // Any manual edit invalidates the history-recall index.
@@ -1342,6 +1506,13 @@ const styles = StyleSheet.create({
   sidebarEmpty: {
     fontSize: 11, color: colors.textMuted, textAlign: 'center',
     paddingVertical: 20,
+  },
+  sessionShowAll: {
+    paddingVertical: 8, paddingHorizontal: 10, marginHorizontal: 4,
+    alignItems: 'center', borderRadius: radius.sm,
+  },
+  sessionShowAllText: {
+    fontSize: 11, color: colors.textMuted, fontFamily: font.mono,
   },
 
   // Chat area

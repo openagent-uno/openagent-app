@@ -20,7 +20,7 @@
  */
 
 import Feather from '@expo/vector-icons/Feather';
-import { useRouter, useNavigation } from 'expo-router';
+import { useRouter, useNavigation, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
   View, Text, ScrollView, StyleSheet,
@@ -56,7 +56,7 @@ export default function TasksScreen() {
   const navigation = useNavigation();
   const headerInset = useHeaderInset();
   const connConfig = useConnection((s) => s.config);
-  const { tasks, loaded, error, loadTasks, deleteTask, toggleTask } = useTasks();
+  const { tasks, loaded, error, loadTasks, deleteTask, toggleTask, runTask, stopTask } = useTasks();
   const confirm = useConfirm();
 
   const handleAdd = useCallback(() => {
@@ -79,6 +79,16 @@ export default function TasksScreen() {
       loadTasks();
     }
   }, [connConfig]);
+
+  // Refetch on every screen focus so re-opening the tab always shows
+  // fresh data (same as Connectors). The store keeps the existing list
+  // visible while the refetch is in flight — ``loaded`` never resets —
+  // so no skeleton flashes after the first load.
+  useFocusEffect(
+    useCallback(() => {
+      void loadTasks();
+    }, [loadTasks]),
+  );
 
   // Refetch on chat-driven creates, scheduler ticks, and saves from a
   // detached editor window (all arrive as ``scheduled_task`` events).
@@ -153,6 +163,8 @@ export default function TasksScreen() {
                     onEdit={() => handleEdit(task)}
                     onHistory={() => openDetached(router, `tasks/runs/${task.id}`)}
                     onRemove={() => { void handleRemove(task.id); }}
+                    onRun={() => runTask(task.id)}
+                    onStop={() => stopTask(task.id)}
                   />
                 ))}
               </Grid>

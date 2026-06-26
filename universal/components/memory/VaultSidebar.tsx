@@ -41,9 +41,18 @@ export default function VaultSidebar({ selectedPath, onSelectNote }: Props) {
     void moveNote(path, target);
   };
 
+  // Cap the rendered tree — agent vaults grow to hundreds of notes and the
+  // whole list mounts (deeply-nested rows) whenever the Memory tab is open.
+  // The search box above finds anything beyond the window.
+  const VAULT_RENDER_CAP = 150;
+  const cappedNotes = displayNotes.length > VAULT_RENDER_CAP
+    ? displayNotes.slice(0, VAULT_RENDER_CAP)
+    : displayNotes;
+  const hiddenNotes = displayNotes.length - cappedNotes.length;
+
   // Group by top-level folder so the list reads as a tree.
   const folders = new Map<string, typeof notes>();
-  for (const n of displayNotes) {
+  for (const n of cappedNotes) {
     const parts = n.path.split('/');
     const folder = parts.length > 1 ? parts.slice(0, -1).join('/') : '';
     if (!folders.has(folder)) folders.set(folder, []);
@@ -105,6 +114,9 @@ export default function VaultSidebar({ selectedPath, onSelectNote }: Props) {
             ))}
           </View>
         ))}
+        {hiddenNotes > 0 && (
+          <Text style={styles.emptyText}>+{hiddenNotes} more — search to narrow</Text>
+        )}
         {displayNotes.length === 0 && (
           <Text style={styles.emptyText}>
             {loading ? 'Loading...' : searchQuery ? 'No results' : 'No notes yet'}

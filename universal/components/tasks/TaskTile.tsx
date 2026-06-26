@@ -8,7 +8,10 @@
  * The whole tile is pressable and opens the editor.
  */
 
-import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { useState } from 'react';
+import {
+  View, Text, TouchableOpacity, StyleSheet, Platform, ActivityIndicator,
+} from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import type { ScheduledTask } from '../../../common/types';
 import { colors, font, radius } from '../../theme';
@@ -20,9 +23,41 @@ interface Props {
   onEdit: () => void;
   onHistory: () => void;
   onRemove: () => void;
+  /** Fire the task now, out of band from its schedule. Resolves once the
+   *  run is dispatched (not when the firing finishes). */
+  onRun: () => Promise<boolean> | void;
+  /** Stop the in-flight firing(s) of the task. Resolves once the stop is
+   *  requested; the scheduler hard-stops within ~2s. */
+  onStop: () => Promise<boolean> | void;
 }
 
-export default function TaskTile({ task, onToggle, onEdit, onHistory, onRemove }: Props) {
+export default function TaskTile({ task, onToggle, onEdit, onHistory, onRemove, onRun, onStop }: Props) {
+  // ``task.running`` (server-driven) decides Run-now vs Stop; ``busy`` is a
+  // local guard while a run/stop request is in flight so the button can't be
+  // double-fired and shows a spinner.
+  const isRunning = !!task.running;
+  const [busy, setBusy] = useState(false);
+
+  const handleRun = async () => {
+    if (busy || isRunning) return;
+    setBusy(true);
+    try {
+      await onRun();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleStop = async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await onStop();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const cadence = task.run_once
     ? { icon: 'play-circle' as const, label: task.run_at_iso || 'once' }
     : { icon: 'clock' as const, label: task.cron_expression };
@@ -58,6 +93,12 @@ export default function TaskTile({ task, onToggle, onEdit, onHistory, onRemove }
               <Text style={styles.badgeText}>once</Text>
             </View>
           )}
+          {isRunning && (
+            <View style={[styles.badge, styles.runningBadge]}>
+              <Feather name="activity" size={10} color={colors.success} />
+              <Text style={[styles.badgeText, styles.runningBadgeText]}>running</Text>
+            </View>
+          )}
         </View>
 
         {task.next_run_iso && task.enabled ? (
@@ -72,6 +113,37 @@ export default function TaskTile({ task, onToggle, onEdit, onHistory, onRemove }
             <Text style={styles.removeText}>Remove</Text>
           </TouchableOpacity>
           <View style={styles.footRight}>
+            {isRunning ? (
+              <TouchableOpacity
+                onPress={handleStop}
+                disabled={busy}
+                style={styles.stopBtn}
+                hitSlop={8}
+                accessibilityLabel={`Stop ${task.name}`}
+              >
+                {busy ? (
+                  <ActivityIndicator size="small" color={colors.error} />
+                ) : (
+                  <Feather name="square" size={12} color={colors.error} />
+                )}
+                <Text style={styles.stopText}>{busy ? 'Stopping…' : 'Stop'}</Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                onPress={handleRun}
+                disabled={busy}
+                style={styles.runBtn}
+                hitSlop={8}
+                accessibilityLabel={`Run ${task.name} now`}
+              >
+                {busy ? (
+                  <ActivityIndicator size="small" color={colors.primary} />
+                ) : (
+                  <Feather name="play" size={12} color={colors.primary} />
+                )}
+                <Text style={styles.runText}>{busy ? 'Running…' : 'Run now'}</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
               onPress={onHistory}
               style={styles.historyBtn}
@@ -149,6 +221,8 @@ const styles = StyleSheet.create({
     fontFamily: font.mono,
     letterSpacing: 0.3,
   },
+  runningBadge: { backgroundColor: colors.successSoft },
+  runningBadgeText: { color: colors.success },
   meta: {
     fontSize: 10.5,
     color: colors.textMuted,
@@ -171,6 +245,28 @@ const styles = StyleSheet.create({
     fontSize: 10.5,
     color: colors.textMuted,
     fontWeight: '500',
+  },
+  runBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 3,
+  },
+  runText: {
+    fontSize: 10.5,
+    color: colors.primary,
+    fontWeight: '600',
+  },
+  stopBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 3,
+  },
+  stopText: {
+    fontSize: 10.5,
+    color: colors.error,
+    fontWeight: '600',
   },
   historyBtn: {
     flexDirection: 'row',

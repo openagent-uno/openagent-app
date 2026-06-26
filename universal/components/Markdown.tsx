@@ -31,9 +31,14 @@ interface Props {
   streaming?: boolean;
 }
 
+// Above this size, skip the O(n) block/inline parse and render plain
+// selectable text — a multi-hundred-KB message would otherwise hitch the
+// frame where streaming flips off.
+const MAX_MARKDOWN_CHARS = 80000;
+
 function MarkdownBase({ text, streaming }: Props) {
   const blocks = useMemo(
-    () => (streaming ? null : parseBlocks(text)),
+    () => (streaming || text.length > MAX_MARKDOWN_CHARS ? null : parseBlocks(text)),
     [text, streaming],
   );
   if (streaming || !blocks) {
@@ -41,10 +46,6 @@ function MarkdownBase({ text, streaming }: Props) {
       <View>
         <Text style={styles.paragraph} selectable>
           {text}
-          {streaming && Platform.OS === 'web' && (
-            // @ts-ignore — span with global blink keyframe
-            <span className="oa-caret" />
-          )}
         </Text>
       </View>
     );
@@ -443,6 +444,16 @@ function normaliseLang(raw: string): string | null {
   return null;
 }
 
+// Cache highlighted HTML keyed on lang+code so re-mounts (MessageList
+// re-renders, reconcileSession swaps) and repeated identical blocks don't
+// re-run the (synchronous, non-trivial) Shiki highlight. Bounded to avoid
+// unbounded growth in a very long session.
+const highlightCache = new Map<string, string>();
+const HIGHLIGHT_CACHE_MAX = 300;
+// Skip syntax highlighting above this size — a pathological multi-thousand
+// line block would otherwise block the main thread when it lands.
+const MAX_HIGHLIGHT_CHARS = 20000;
+
 function CodeBlock({ lang, code }: { lang: string; code: string }) {
   const [copied, setCopied] = useState(false);
   const [highlightedHtml, setHighlightedHtml] = useState<string | null>(null);
@@ -451,8 +462,14 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   // Lazily highlight when the language is supported. On web only —
   // Shiki uses WASM/text loaders that don't exist on native RN.
   useEffect(() => {
-    if (Platform.OS !== 'web' || !resolvedLang) {
+    if (Platform.OS !== 'web' || !resolvedLang || code.length > MAX_HIGHLIGHT_CHARS) {
       setHighlightedHtml(null);
+      return;
+    }
+    const key = `${resolvedLang} ${code}`;
+    const cached = highlightCache.get(key);
+    if (cached !== undefined) {
+      setHighlightedHtml(cached);
       return;
     }
     let cancelled = false;
@@ -464,6 +481,8 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
           lang: resolvedLang,
           theme: 'github-dark',
         });
+        if (highlightCache.size > HIGHLIGHT_CACHE_MAX) highlightCache.clear();
+        highlightCache.set(key, html);
         if (!cancelled) setHighlightedHtml(html);
       } catch (e) {
         // Unknown language → just leave plain text.
@@ -489,6 +508,8 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
         <Text style={styles.codeLang}>{lang || 'code'}</Text>
         <TouchableOpacity
           style={styles.codeCopyBtn}
+          // @ts-ignore — web hover/press affordance
+          {...(Platform.OS === 'web' ? { className: 'oa-icon-btn' } : {})}
           onPress={doCopy}
           accessibilityLabel={copied ? 'Copied' : 'Copy code'}
         >

@@ -5,21 +5,102 @@
 import { create } from 'zustand';
 import {
   toolPhase,
+  isSubAgentSessionId,
+  isHiddenChildSession,
+  subAgentParentId,
+  runLaunchTarget,
+  runTargetForChildSession,
   type Attachment,
   type ChatMessage,
   type ChatSession,
   type ServerMessage,
   type ToolInfo,
 } from '../../common/types';
-import type { SessionEntry, SessionRunMessage } from '../services/api';
+import type { SessionEntry } from '../services/api';
 import {
   deleteSession as deleteSessionApi,
   fetchSessionRuns,
+  runMsgToChat,
   updateSessionMetadata,
 } from '../services/api';
 
 let nextMsgId = 1;
 const genId = () => `msg-${nextMsgId++}-${Date.now()}`;
+
+// Infer a child session's label/origin from its id shape, so a stub created
+// before any origin-bearing metadata loads (a deep-link, or a live stream
+// frame for an unknown session) is tagged correctly — and stays HIDDEN from
+// the sidebar (isHiddenChildSession keys off origin). Used by both the
+// setActiveSession deep-link path and the handleServerMessage live-stub path
+// so they never drift (a scheduler/workflow firing now streams live frames, so
+// its stub must be tagged just like a sub-agent's).
+function childStubFor(id: string): Partial<ChatSession> {
+  if (isSubAgentSessionId(id)) {
+    return { title: 'Sub-agent', origin: 'delegation', parentSessionId: subAgentParentId(id) };
+  }
+  if (id.startsWith('scheduler:')) return { title: 'Scheduled run', origin: 'scheduler' };
+  if (id.startsWith('workflow:')) return { title: 'Workflow run', origin: 'workflow' };
+  return { title: 'New Chat' };
+}
+
+// A detached child run (scheduled firing / workflow node) now broadcasts its
+// live frames to EVERY client, each of which lazy-creates a hidden stub for it.
+// Those stubs are navigable only from a run screen (which falls back to a DB
+// fetch if the stub is gone), so an unbounded pile-up would just leak memory.
+// Keep the most-recent N hidden stubs (plus whatever's active); drop the oldest.
+const MAX_HIDDEN_STUBS = 40;
+function capHiddenStubs(sessions: ChatSession[], activeId: string | null): ChatSession[] {
+  const hidden = sessions.filter((s) => isHiddenChildSession(s) && s.id !== activeId);
+  if (hidden.length <= MAX_HIDDEN_STUBS) return sessions;
+  const drop = new Set(hidden.slice(0, hidden.length - MAX_HIDDEN_STUBS).map((s) => s.id));
+  return sessions.filter((s) => !drop.has(s.id));
+}
+
+// Flip a RUN-LAUNCH card clickable while its run is still in flight. A
+// scheduled/workflow run-now executes in the scheduler loop — a different
+// process context than the chat turn that called it — so the server can't
+// re-stream the child id onto the in-flight chip the way a (same-context)
+// delegation does. But that run DOES broadcast its live frames to every
+// client, so the moment we first see a ``scheduler:…``/``workflow:…`` child
+// session, we link it back to the matching running run-now chip (by parent
+// task/workflow id), giving the card a deep-link target mid-run. No-op for a
+// ``::sub::`` delegation (handled server-side) or an autonomous cron fire (no
+// in-chat chip to match).
+function linkRunNowChip(sessions: ChatSession[], childSid: string): ChatSession[] {
+  const target = runTargetForChildSession(childSid);
+  if (!target) return sessions;  // not a run-now child (e.g. a sub-agent)
+  let linked = false;
+  return sessions.map((ses) => {
+    if (linked) return ses;
+    const msgs = ses.messages;
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if (m.role !== 'tool' || !m.toolInfo) continue;
+      const t = runLaunchTarget(m.toolInfo);
+      // Match an as-yet-unlinked run-now chip for the SAME parent. (A chip that
+      // already resolved a runId — from its result or a prior link — is left
+      // alone, so concurrent run-nows of one task each bind their own child.)
+      if (t && t.kind === target.kind && t.parentId === target.parentId && !t.runId) {
+        const next = [...msgs];
+        next[i] = { ...m, toolInfo: { ...m.toolInfo, child_session_id: childSid } };
+        linked = true;
+        return { ...ses, messages: next };
+      }
+    }
+    return ses;
+  });
+}
+
+// Map the child-session linkage the server stamps in metadata onto a
+// ChatSession (sidebar origin chip + parent breadcrumb).
+function sessionMetaFromEntry(e: SessionEntry): Partial<ChatSession> {
+  const origin = (e.origin || 'chat') as ChatSession['origin'];
+  return {
+    parentSessionId: e.parent_session_id || undefined,
+    origin,
+    originLabel: e.kind || undefined,
+  };
+}
 
 // Token-streaming throttle: coalesce all deltas that land within one
 // animation frame into a single store mutation. Without this, a model
@@ -81,6 +162,19 @@ interface ChatState {
    *  outgoing turn is rebased on the new prompt. */
   setSystemPrompt: (sessionId: string, prompt: string) => void;
   handleServerMessage: (msg: ServerMessage) => void;
+  /** Re-derive a session's transcript from the server (the database) after a
+   *  turn completes, so the LIVE view becomes byte-identical to what a
+   *  reopen/rehydration shows — same data, same source. The optimistic live
+   *  rendering (deltas, tool chips) is only a transient preview; this snaps it
+   *  to the authoritative `_expand_run_messages` output (real authorship,
+   *  delegation cards with child_session_id, no missing/duplicated messages).
+   *  No-op while the session is still processing (so it never clobbers a turn
+   *  the user just started) or when the server returns nothing. */
+  reconcileSession: (sessionId: string) => void;
+  /** Remove a session row locally WITHOUT calling the delete API — used when
+   *  the server broadcasts that a session was deleted elsewhere (another
+   *  device, a prune), so it disappears from this sidebar in realtime. */
+  dropSessionLocal: (sessionId: string) => void;
   clearAll: () => void;
   loadSession: (id: string, title: string, history: { role: string; content: string; tool_result?: string; tool_error?: string; tool_name?: string; tool_args?: Record<string, any> }[]) => string;
 }
@@ -111,34 +205,38 @@ export const useChat = create<ChatState>((set, get) => ({
 
   setActiveSession: (id) => {
     const state = get();
+    const known = state.sessions.some((s) => s.id === id);
+    // A sub-agent session is hidden from the flat list, so navigating into it
+    // from a parent's delegation card lands on an id not in the store. Create
+    // a local entry — tagged so the sidebar keeps hiding it — so its transcript
+    // can render; its runs are fetched below like any focused-but-unloaded row.
+    // Infer the label/origin from the id shape so a child opened straight from
+    // a deep link is correct before any (origin-bearing) metadata loads.
+    const stub = childStubFor(id);
+    const sessions = known
+      ? state.sessions
+      : [...state.sessions, { id, messages: [], isProcessing: false, ...stub } as ChatSession];
     set({
       activeSessionId: id,
       // Bringing a session to focus clears its unread indicator.
-      sessions: state.sessions.map((se) =>
+      sessions: sessions.map((se) =>
         se.id === id && se.hasUnread ? { ...se, hasUnread: false } : se,
       ),
     });
     // Fetch run history from the server when switching to a hydrated
-    // session that hasn't loaded its messages yet (e.g. from a
-    // previous run that survived in the server's session store).
+    // session that hasn't loaded its messages yet (e.g. from a previous run
+    // that survived in the server's session store, or a just-created child
+    // stub above). A lazy-created child has sessionsHydrated already true.
     if (state.sessionsHydrated) {
-      const ses = state.sessions.find((s) => s.id === id);
+      const ses = sessions.find((s) => s.id === id);
       if (ses && ses.messages.length === 0) {
         fetchSessionRuns(id)
           .then((raw) => {
             if (raw && raw.length > 0) {
-              const msgs: ChatMessage[] = raw.map((m: SessionRunMessage) => ({
-                id: m.id,
-                role: m.role,
-                text: m.text,
-                timestamp: m.timestamp,
-                toolInfo: m.toolInfo as ToolInfo | undefined,
-                attachments: m.attachments as Attachment[] | undefined,
-                model: m.model,
-              }));
+              const msgs: ChatMessage[] = raw.map(runMsgToChat);
               set((s) => ({
                 sessions: s.sessions.map((se) =>
-                  se.id !== id ? se : { ...se, messages: msgs },
+                  se.id !== id || se.messages.length > 0 ? se : { ...se, messages: msgs },
                 ),
               }));
             }
@@ -172,43 +270,70 @@ export const useChat = create<ChatState>((set, get) => ({
     if (!entries || entries.length === 0) return;
     const existing = get().sessions;
     const existingIds = new Set(existing.map((s) => s.id));
+    // Metadata (parent/origin link, title, recency) keyed by id, so an
+    // event-driven re-hydrate can refresh links on sessions already in the
+    // store — used to attach a child to its parent once the server announces
+    // it — WITHOUT clobbering live messages / isProcessing / draftInput.
+    const metaById = new Map<string, Partial<ChatSession>>();
     const imported: ChatSession[] = [];
     for (const e of entries) {
       const sid = e.session_id;
-      if (!sid || existingIds.has(sid)) continue;
+      if (!sid) continue;
+      const meta = sessionMetaFromEntry(e);
+      if (existingIds.has(sid)) {
+        metaById.set(sid, {
+          ...meta,
+          // Carry the server title so a lazy-created sub-agent stub gets its
+          // real name; applied only onto placeholder titles below so a
+          // user-renamed chat is never clobbered.
+          ...(e.title ? { title: e.title } : {}),
+          lastActiveAt: e.last_active_at ?? e.created_at ?? undefined,
+        });
+        continue;
+      }
       imported.push({
         id: sid,
         title: e.title || 'New Chat',
         messages: [],
         isProcessing: false,
         lastActiveAt: e.last_active_at ?? e.created_at ?? undefined,
+        ...meta,
       });
     }
-    if (imported.length === 0) return;
+    if (imported.length === 0 && metaById.size === 0) return;
     const autoSelectId = get().activeSessionId ?? imported[0]?.id ?? null;
     set((s) => ({
-      sessions: [...s.sessions, ...imported],
+      sessions: [
+        ...s.sessions.map((se) => {
+          const meta = metaById.get(se.id);
+          if (!meta) return se;
+          // Merge metadata only; never touch messages/isProcessing/draftInput.
+          // Backfill a real title only onto a placeholder stub, so a
+          // user-renamed chat title is never overwritten by a re-hydrate.
+          const { title: serverTitle, ...rest } = meta;
+          const titlePatch = serverTitle && (se.title === 'Sub-agent' || se.title === 'New Chat')
+            ? { title: serverTitle } : {};
+          return { ...se, ...rest, ...titlePatch };
+        }),
+        ...imported,
+      ],
       sessionsHydrated: true,
       activeSessionId: autoSelectId,
     }));
-    // Fetch run history for the auto-selected session so the chat
-    // screen shows prior messages immediately.
-    if (autoSelectId) {
+    // Fetch run history for the auto-selected session so the chat screen
+    // shows prior messages immediately — but ONLY when it's a freshly
+    // imported, message-less session. On a metadata-only re-hydrate (e.g.
+    // triggered by a child-session ``resource_event``), refetching an active
+    // session here would clobber its in-flight streaming transcript.
+    const importedIds = new Set(imported.map((i) => i.id));
+    if (autoSelectId && importedIds.has(autoSelectId)) {
       fetchSessionRuns(autoSelectId)
         .then((raw) => {
           if (raw && raw.length > 0) {
-            const msgs: ChatMessage[] = raw.map((m: SessionRunMessage) => ({
-              id: m.id,
-              role: m.role,
-              text: m.text,
-              timestamp: m.timestamp,
-              toolInfo: m.toolInfo as ToolInfo | undefined,
-              attachments: m.attachments as Attachment[] | undefined,
-              model: m.model,
-            }));
+            const msgs: ChatMessage[] = raw.map(runMsgToChat);
             set((s) => ({
               sessions: s.sessions.map((se) =>
-                se.id !== autoSelectId ? se : { ...se, messages: msgs },
+                se.id !== autoSelectId || se.messages.length > 0 ? se : { ...se, messages: msgs },
               ),
             }));
           }
@@ -309,6 +434,73 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   handleServerMessage: (msg) => set((s) => {
+    // A streaming frame may arrive for a freshly-spawned child session (a
+    // delegated sub-agent streaming live) a beat before the sidebar's
+    // session-event refetch lands. Lazy-create a placeholder row so the frame
+    // isn't dropped — hydrateFromServer backfills its real title/origin. The
+    // app already routes every frame by session_id, so a child session streams
+    // exactly like any session once its row exists.
+    let stubAdded = false;
+    if (
+      (msg.type === 'status' || msg.type === 'delta' || msg.type === 'response'
+        || msg.type === 'seed')
+      && msg.session_id
+      && !s.sessions.some((x) => x.id === msg.session_id)
+    ) {
+      // First sight of a freshly-spawned child session. For a scheduler/
+      // workflow run (whose run-now executes in a detached context the server
+      // can't link back to the chat chip), this broadcast IS the cross-context
+      // signal — use it to flip the matching run-now card clickable mid-run.
+      const withLink = linkRunNowChip(s.sessions, msg.session_id);
+      s = {
+        ...s,
+        sessions: capHiddenStubs([
+          ...withLink,
+          {
+            id: msg.session_id,
+            messages: [],
+            isProcessing: false,
+            // Tag from the id shape so a hidden child (sub-agent, scheduled
+            // firing, workflow node) stays hidden from the sidebar — its origin
+            // metadata never arrives via the (excluded) history list.
+            ...childStubFor(msg.session_id),
+          } as ChatSession,
+        ], s.activeSessionId),
+      };
+      stubAdded = true;
+    }
+
+    if (msg.type === 'seed') {
+      // The agent-self mission/role/task prompt that opens a spawned child
+      // session, streamed before any delta so the Mission block shows at the
+      // top WHILE the run executes (a scheduled firing / workflow node) — not
+      // only once its canonical transcript persists at completion. Rendered as
+      // a user-role, agent-authored message (MessageList's SelfPromptBlock).
+      const text = msg.text || '';
+      if (!text) return stubAdded ? { sessions: s.sessions } : {};
+      return {
+        sessions: s.sessions.map((ses) => {
+          if (ses.id !== msg.session_id) return ses;
+          // Idempotent: the mission opens the transcript exactly once. Skip if
+          // it's already present (a re-broadcast, or reconcile beat us to the
+          // canonical row) so we never double the Mission block.
+          if (ses.messages.some((m) => m.role === 'user' && m.author?.kind === 'agent')) {
+            return ses;
+          }
+          const seedMsg: ChatMessage = {
+            id: genId(),
+            role: 'user',
+            text,
+            timestamp: Date.now(),
+            author: msg.author,
+          };
+          // Prepend so the mission stays at the top even if a delta raced ahead
+          // of this frame.
+          return { ...ses, messages: [seedMsg, ...ses.messages] };
+        }),
+      };
+    }
+
     if (msg.type === 'status') {
       const text = msg.text || '';
 
@@ -327,6 +519,21 @@ export const useChat = create<ChatState>((set, get) => ({
           sessions: s.sessions.map((ses) => {
             if (ses.id !== msg.session_id) return ses;
             if (phase === 'running') {
+              // Patch an existing running chip for the SAME tool call in place
+              // rather than appending a duplicate — a delegation re-streams its
+              // running frame once the child session id is minted (to flip the
+              // card clickable), and a member's own tool calls may re-emit.
+              const callId = toolInfo!.tool_call_id;
+              if (callId) {
+                const msgs = [...ses.messages];
+                for (let i = msgs.length - 1; i >= 0; i--) {
+                  const ex = msgs[i].toolInfo;
+                  if (ex && ex.tool_call_id === callId) {
+                    msgs[i] = { ...msgs[i], toolInfo: { ...ex, ...toolInfo } };
+                    return { ...ses, messages: msgs };
+                  }
+                }
+              }
               return {
                 ...ses,
                 messages: [...ses.messages, {
@@ -338,17 +545,24 @@ export const useChat = create<ChatState>((set, get) => ({
                 }],
               };
             }
-            // ``completed`` or ``error``: locate the matching running
-            // chip (by tool_name) and replace its toolInfo in place.
+            // ``completed`` or ``error``: locate the matching running chip
+            // and replace its toolInfo in place. Prefer matching by
+            // ``tool_call_id`` (then ``child_session_id``) so that with many
+            // concurrent ``delegate_task`` calls each result attaches to the
+            // RIGHT chip; fall back to tool_name for older frames that omit
+            // the id.
+            const callId = toolInfo!.tool_call_id;
+            const childSid = toolInfo!.child_session_id;
+            const matches = (existing: ToolInfo): boolean => {
+              if (callId && existing.tool_call_id) return existing.tool_call_id === callId;
+              if (childSid && existing.child_session_id) return existing.child_session_id === childSid;
+              return existing.tool_name === toolInfo!.tool_name;
+            };
             const msgs = [...ses.messages];
             let found = false;
             for (let i = msgs.length - 1; i >= 0; i--) {
               const existing = msgs[i].toolInfo;
-              if (
-                existing
-                && existing.tool_name === toolInfo!.tool_name
-                && toolPhase(existing) === 'running'
-              ) {
+              if (existing && matches(existing) && toolPhase(existing) === 'running') {
                 msgs[i] = { ...msgs[i], toolInfo: toolInfo! };
                 found = true;
                 break;
@@ -397,7 +611,9 @@ export const useChat = create<ChatState>((set, get) => ({
       // Coalesced via the module-level buffer above so we collapse a
       // burst of deltas into one set() per animation frame.
       const delta = msg.text || '';
-      if (!delta) return {};
+      // Commit a just-created stub session so the deferred flush below (which
+      // reads fresh state) can find it; otherwise the first child delta drops.
+      if (!delta) return stubAdded ? { sessions: s.sessions } : {};
       const sid = msg.session_id;
       pendingDeltas.set(sid, (pendingDeltas.get(sid) ?? '') + delta);
       scheduleDeltaFlush((snapshot) => {
@@ -422,13 +638,18 @@ export const useChat = create<ChatState>((set, get) => ({
               ...ses,
               messages: msgs,
               statusText: undefined,
-              lastActiveAt: Math.floor(Date.now() / 1000),
+              // NOTE: deliberately NOT re-stamping lastActiveAt here. It is
+              // set on user send (addUserMessage) and hydrate; restamping it
+              // every animation frame churned the sort key and forced the
+              // recent-session feed to re-sort + re-render ~60x/s while
+              // streaming, for a value that only changes at 1s granularity.
               hasUnread: cur.activeSessionId === ses.id ? ses.hasUnread : true,
             };
           }),
         }));
       });
-      return {};
+      // Commit the stub (if any) so the deferred flush finds the session row.
+      return stubAdded ? { sessions: s.sessions } : {};
     }
 
     if (msg.type === 'response') {
@@ -499,6 +720,40 @@ export const useChat = create<ChatState>((set, get) => ({
     }
 
     return {};
+  }),
+
+  reconcileSession: (sessionId) => {
+    const ses = get().sessions.find((s) => s.id === sessionId);
+    // Only reconcile a session we know about and that isn't mid-turn. (A new
+    // turn flips isProcessing true; clobbering it would drop the just-typed
+    // message.)
+    if (!ses || ses.isProcessing) return;
+    fetchSessionRuns(sessionId)
+      .then((raw) => {
+        // Empty result → keep the optimistic transcript (the runs may not be
+        // flushed yet); never wipe a visible conversation to nothing.
+        if (!raw || raw.length === 0) return;
+        const msgs: ChatMessage[] = raw.map(runMsgToChat);
+        set((s) => ({
+          sessions: s.sessions.map((se) => {
+            if (se.id !== sessionId) return se;
+            // Re-check at apply time: a turn may have started during the fetch.
+            if (se.isProcessing) return se;
+            return { ...se, messages: msgs };
+          }),
+        }));
+      })
+      .catch(() => {});
+  },
+
+  dropSessionLocal: (sessionId) => set((s) => {
+    if (!s.sessions.some((ses) => ses.id === sessionId)) return {};
+    const sessions = s.sessions.filter((ses) => ses.id !== sessionId);
+    let activeSessionId = s.activeSessionId;
+    if (s.activeSessionId === sessionId) {
+      activeSessionId = sessions[0]?.id ?? null;
+    }
+    return { sessions, activeSessionId };
   }),
 
   clearAll: () => set({ sessions: [], activeSessionId: null, sessionsHydrated: false }),

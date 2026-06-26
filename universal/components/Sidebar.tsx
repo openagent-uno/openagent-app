@@ -42,6 +42,7 @@ import Animated, {
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter, useSegments, useGlobalSearchParams } from 'expo-router';
 import { useChat } from '../stores/chat';
+import { isHiddenChildSession } from '../../common/types';
 import { useActivity, type ActivityRun } from '../stores/activity';
 import { useConnection } from '../stores/connection';
 import { useEvents } from '../stores/events';
@@ -301,6 +302,9 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
     const items: FeedItem[] = [];
     if (filters.chat) {
       for (const s of sessions) {
+        // Sub-agent (delegation) sessions are navigable only from their
+        // parent's transcript card — never the recent feed.
+        if (isHiddenChildSession(s)) continue;
         items.push({
           key: `c-${s.id}`,
           icon: 'message-circle',
@@ -472,9 +476,11 @@ function relTime(ms: number): string {
   return `${Math.floor(d / 30)}mo`;
 }
 
-const glassStyle = Platform.OS === 'web'
-  ? ({ backdropFilter: 'blur(2.6px) saturate(140%)', WebkitBackdropFilter: 'blur(2.6px) saturate(140%)' } as any)
-  : {};
+// The sidebar fill (colors.sidebar) is ~94% opaque, so a backdrop-filter
+// blur here was nearly invisible while forcing the compositor to maintain
+// a permanent full-height blur layer (the sidebar is always mounted).
+// Dropped — solid fill reads identically and costs nothing.
+const glassStyle = {} as any;
 
 const styles = StyleSheet.create({
   root: {

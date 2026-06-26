@@ -415,19 +415,23 @@ function Processes({
   sort: ProcessSort;
   onSort: (s: ProcessSort) => void;
 }) {
+  // Cap rendered rows — the gateway can report hundreds of processes and
+  // the whole table re-renders on every ~2s telemetry tick. The top N by
+  // the active sort is what matters.
+  const PROC_ROW_CAP = 40;
   const sorted = useMemo(() => {
     const list = [...snap.processes];
     if (sort === 'cpu') list.sort((a, b) => b.cpu_pct - a.cpu_pct);
     else if (sort === 'mem') list.sort((a, b) => b.rss_bytes - a.rss_bytes);
     else list.sort((a, b) => a.pid - b.pid);
-    return list;
+    return list.slice(0, PROC_ROW_CAP);
   }, [snap.processes, sort]);
 
   return (
     <>
       <Text style={styles.sectionTitle}>Processes</Text>
       <Text style={styles.hint}>
-        Top {snap.processes.length} processes by resource consumption. Refreshes live with each tick.
+        Top {Math.min(snap.processes.length, PROC_ROW_CAP)} of {snap.processes.length} processes by resource consumption. Refreshes live with each tick.
       </Text>
 
       <TabStrip

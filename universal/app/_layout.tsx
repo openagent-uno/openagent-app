@@ -62,9 +62,26 @@ export default function RootLayout() {
         msg.type === 'status'
         || msg.type === 'delta'
         || msg.type === 'response'
+        || msg.type === 'seed'
         || msg.type === 'error'
       ) {
         handleServerMessage(msg);
+      }
+
+      // End of a logical assistant turn → snap the live transcript to the
+      // authoritative DB-derived shape so the live view matches a reopen
+      // exactly (real authorship, delegation cards, no missing/dup messages).
+      // The runs are persisted by the time this frame is emitted.
+      if (msg.type === 'turn_complete' && msg.session_id) {
+        useChat.getState().reconcileSession(msg.session_id);
+      }
+
+      // A session was deleted/pruned server-side → drop it from this sidebar
+      // in realtime (the events store separately handles 'created' by
+      // refetching the list, which surfaces new sub-agent sessions live).
+      if (msg.type === 'resource_event' && msg.resource === 'session'
+          && msg.action === 'deleted' && msg.id) {
+        useChat.getState().dropSessionLocal(msg.id);
       }
 
       if (isDesktop && !isChild) {

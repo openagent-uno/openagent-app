@@ -28,24 +28,21 @@ export default function Card({
   rail = true,
   style,
 }: CardProps) {
+  // NOTE: no web backdrop-filter here. `colors.surface` is already ~72%
+  // opaque, so the blur was nearly invisible while forcing Chromium to
+  // snapshot + gaussian-blur the backdrop of every card on every frame
+  // (a major scroll-jank source on card-dense screens). Solid fill only.
   const cardStyle: any[] = [
     styles.card,
     padded && (tight ? styles.tight : styles.padded),
-    Platform.OS === 'web' && { backdropFilter: 'blur(2px) saturate(140%)', WebkitBackdropFilter: 'blur(2px) saturate(140%)' },
     style,
   ].filter(Boolean);
 
   const inner = (
     <>
-      {rail && (
-        <View
-          style={[
-            styles.rail,
-            // @ts-ignore boxShadow web-only
-            Platform.OS === 'web' && { boxShadow: `0 0 6px ${colors.accentGlow}` },
-          ]}
-        />
-      )}
+      {/* Solid 1.5px cyan rail — no box-shadow glow (the blurred shadow
+          layer repainted per frame for a barely-visible effect). */}
+      {rail && <View style={styles.rail} />}
       {children}
     </>
   );
