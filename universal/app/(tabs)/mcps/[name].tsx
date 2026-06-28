@@ -20,12 +20,12 @@ import {
   View, Text, ScrollView, StyleSheet, ActivityIndicator,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
-import { useLocalSearchParams, useNavigation } from 'expo-router';
-import { StackActions } from '@react-navigation/native';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useConnection } from '../../../stores/connection';
 import {
   setBaseUrl, getMcp, updateMcp, deleteMcp,
 } from '../../../services/api';
+import { goBack } from '../../../services/windows';
 import type { MCPEntry } from '../../../../common/types';
 import { colors, font, radius, tracking } from '../../../theme';
 import Button from '../../../components/Button';
@@ -35,20 +35,19 @@ import McpConfigForm, { type McpSubmitPayload } from '../../../components/mcps/M
 
 export default function EditMcpScreen() {
   const navigation = useNavigation();
+  const router = useRouter();
   const headerInset = useHeaderInset();
   const confirm = useConfirm();
   const params = useLocalSearchParams<{ name?: string }>();
   const name = typeof params.name === 'string' ? params.name : '';
   const config = useConnection((s) => s.config);
 
-  // Go back to the MCPs list. Dispatched to the enclosing Stack so the
-  // action can't bubble to the outer Tabs navigator (which defaults to
-  // ``backBehavior: 'firstRoute'`` and would jump to chat). ``POP_TO``
-  // pops to ``index`` if it's in the stack; otherwise it replaces this
-  // screen with a fresh ``index`` — correct either way.
+  // Return to wherever this editor was opened from (the Connectors list
+  // normally) via expo-router history; opened cold from a deep link it
+  // falls back to the Connectors list rather than chat.
   const backToList = useCallback(() => {
-    navigation.dispatch(StackActions.popTo('index'));
-  }, [navigation]);
+    goBack(router, '/(tabs)/mcps');
+  }, [router]);
 
   const [entry, setEntry] = useState<MCPEntry | null>(null);
   const [loading, setLoading] = useState(true);
@@ -134,7 +133,7 @@ export default function EditMcpScreen() {
   // stack's header back button.
   useLayoutEffect(() => {
     navigation.setOptions({
-      title: entry?.name || 'Connector',
+      title: 'Connector',
       headerRight: () => (
         <HeaderRight>
           <HeaderIconButton icon="refresh-cw" accessibilityLabel="Reload" onPress={load} disabled={loading} />

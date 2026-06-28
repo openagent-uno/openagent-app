@@ -21,8 +21,7 @@ import {
   ActivityIndicator, Platform,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
-import { useLocalSearchParams, useNavigation } from 'expo-router';
-import { StackActions } from '@react-navigation/native';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { HeaderRight, HeaderIconButton, useHeaderInset } from '../../../components/screenHeader';
 import { useConnection } from '../../../stores/connection';
 import {
@@ -35,6 +34,7 @@ import {
   type MarketplaceField,
   type MarketplaceInstallError,
 } from '../../../services/api';
+import { goBack } from '../../../services/windows';
 import { colors, font, radius, tracking } from '../../../theme';
 import Button from '../../../components/Button';
 
@@ -47,19 +47,19 @@ function defaultInstallName(registryName: string): string {
 
 export default function InstallMcpScreen() {
   const navigation = useNavigation();
+  const router = useRouter();
   const headerInset = useHeaderInset();
   const params = useLocalSearchParams<{ name?: string; version?: string }>();
   const name = typeof params.name === 'string' ? params.name : '';
   const version = typeof params.version === 'string' ? params.version : 'latest';
   const config = useConnection((s) => s.config);
 
-  // See the matching note in ``[name].tsx``: ``router.back()`` bubbles up
-  // to the Tabs navigator and lands on chat when this stack only holds one
-  // screen. ``POP_TO`` on the Stack directly pops to ``index`` or replaces
-  // this screen with it.
+  // Return to wherever this form was opened from (the Connectors list
+  // normally) via expo-router history; opened cold from a deep link it
+  // falls back to the Connectors list rather than chat.
   const backToList = useCallback(() => {
-    navigation.dispatch(StackActions.popTo('index'));
-  }, [navigation]);
+    goBack(router, '/(tabs)/mcps');
+  }, [router]);
 
   const [detail, setDetail] = useState<MarketplaceServerDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -190,7 +190,7 @@ export default function InstallMcpScreen() {
   // stack's header back button.
   useLayoutEffect(() => {
     navigation.setOptions({
-      title: server?.title || server?.name || 'Install',
+      title: 'Install connector',
       headerRight: () => (
         <HeaderRight>
           <HeaderIconButton icon="refresh-cw" accessibilityLabel="Reload" onPress={load} disabled={loading} />

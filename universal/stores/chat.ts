@@ -69,25 +69,39 @@ function capHiddenStubs(sessions: ChatSession[], activeId: string | null): ChatS
 function linkRunNowChip(sessions: ChatSession[], childSid: string): ChatSession[] {
   const target = runTargetForChildSession(childSid);
   if (!target) return sessions;  // not a run-now child (e.g. a sub-agent)
-  let linked = false;
-  return sessions.map((ses) => {
-    if (linked) return ses;
-    const msgs = ses.messages;
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i];
-      if (m.role !== 'tool' || !m.toolInfo) continue;
+  // Collect every still-in-flight, as-yet-unlinked run-now chip of this kind (a
+  // chip that already resolved a runId — from its result or a prior link — has
+  // ``t.runId`` set, so it's skipped). We can't just require
+  // ``t.parentId === target.parentId``: mid-run a chip's parentId is the tool's
+  // ``id_or_name`` argument, and for a WORKFLOW that's usually the NAME, while
+  // the child session id embeds the workflow ID — so an equality test never
+  // fires for a name-invoked run-now and its card stays unclickable until the
+  // run ends. So prefer an exact parentId match (run-now by id — every
+  // scheduled task), and otherwise fall back to the UNIQUE in-flight chip of
+  // this kind (the name-invoked case). More than one candidate with no exact
+  // match is ambiguous — leave it unlinked rather than bind the wrong card.
+  const candidates: { si: number; mi: number; exact: boolean }[] = [];
+  sessions.forEach((ses, si) => {
+    ses.messages.forEach((m, mi) => {
+      if (m.role !== 'tool' || !m.toolInfo) return;
       const t = runLaunchTarget(m.toolInfo);
-      // Match an as-yet-unlinked run-now chip for the SAME parent. (A chip that
-      // already resolved a runId — from its result or a prior link — is left
-      // alone, so concurrent run-nows of one task each bind their own child.)
-      if (t && t.kind === target.kind && t.parentId === target.parentId && !t.runId) {
-        const next = [...msgs];
-        next[i] = { ...m, toolInfo: { ...m.toolInfo, child_session_id: childSid } };
-        linked = true;
-        return { ...ses, messages: next };
-      }
-    }
-    return ses;
+      if (!t || t.kind !== target.kind || t.runId) return;
+      candidates.push({ si, mi, exact: t.parentId === target.parentId });
+    });
+  });
+  const exact = candidates.filter((c) => c.exact);
+  const pick = exact.length > 0
+    ? exact[exact.length - 1]              // most-recent exact id match
+    : candidates.length === 1
+      ? candidates[0]                      // unique in-flight chip (name-invoked)
+      : null;                              // ambiguous (or none) — don't mislink
+  if (!pick) return sessions;
+  return sessions.map((ses, si) => {
+    if (si !== pick.si) return ses;
+    const next = [...ses.messages];
+    const m = next[pick.mi];
+    next[pick.mi] = { ...m, toolInfo: { ...m.toolInfo!, child_session_id: childSid } };
+    return { ...ses, messages: next };
   });
 }
 
@@ -501,6 +515,21 @@ export const useChat = create<ChatState>((set, get) => ({
       };
     }
 
+    if (msg.type === 'reasoning') {
+      // Transient reasoning signal: flip the matching session's animated
+      // "Reasoning" indicator on/off. ``active=true`` → thinking with no
+      // visible output yet; ``active=false`` → output started or turn ended.
+      // Cosmetic + session-scoped; if the row doesn't exist yet (a child
+      // session whose first frame is a reasoning ping) we simply drop it —
+      // the next status/delta frame creates the stub and a later reasoning
+      // frame updates it.
+      return {
+        sessions: s.sessions.map((ses) =>
+          ses.id === msg.session_id ? { ...ses, isReasoning: msg.active } : ses,
+        ),
+      };
+    }
+
     if (msg.type === 'status') {
       const text = msg.text || '';
 
@@ -638,6 +667,10 @@ export const useChat = create<ChatState>((set, get) => ({
               ...ses,
               messages: msgs,
               statusText: undefined,
+              // Visible output has started — clear the reasoning shimmer
+              // (safety net per the wire contract in case the server's
+              // explicit ``reasoning active=false`` frame was missed).
+              isReasoning: false,
               // NOTE: deliberately NOT re-stamping lastActiveAt here. It is
               // set on user send (addUserMessage) and hydrate; restamping it
               // every animation frame churned the sort key and forced the
@@ -689,6 +722,8 @@ export const useChat = create<ChatState>((set, get) => ({
             ...ses,
             isProcessing: false,
             statusText: undefined,
+            // Turn ended — clear the reasoning shimmer (safety net).
+            isReasoning: false,
             messages: msgs,
           };
         }),
@@ -708,6 +743,8 @@ export const useChat = create<ChatState>((set, get) => ({
             ...ses,
             isProcessing: false,
             statusText: undefined,
+            // Turn ended (errored) — clear the reasoning shimmer (safety net).
+            isReasoning: false,
             messages: [...ses.messages, {
               id: genId(),
               role: 'assistant' as const,

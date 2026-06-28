@@ -26,7 +26,7 @@ export default function NoteHistoryScreen() {
   const titleFallback = notePath.split('/').pop()?.replace('.md', '') ?? '';
 
   useLayoutEffect(() => {
-    navigation.setOptions({ title: titleFallback ? `History · ${titleFallback}` : 'History' });
+    navigation.setOptions({ title: 'Memory file history' });
   }, [navigation, titleFallback]);
 
   return (

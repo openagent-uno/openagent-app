@@ -53,7 +53,7 @@ export default function TerminalScreen() {
   // where it was opened from (System) via closeDetached.
   useLayoutEffect(() => {
     navigation.setOptions({
-      title: shellName ? `Terminal — ${shellName}` : 'Terminal',
+      title: 'Terminal',
       headerLeft: () => <HeaderBack onPress={() => closeDetached(router)} />,
       headerRight: () => (
         <HeaderRight>

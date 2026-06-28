@@ -1,12 +1,31 @@
-import { Stack } from 'expo-router';
+import { Stack, useUnstableGlobalHref } from 'expo-router';
 import { useEffect, useRef } from 'react';
 import { Animated, View, StyleSheet, Platform } from 'react-native';
 import { ThemeProvider, type Theme } from '@react-navigation/native';
 import { useConnection } from '../stores/connection';
 import { useChat } from '../stores/chat';
+import { useNavHistory, trailHref } from '../stores/navHistory';
 import { ConfirmProvider } from '../components/ConfirmDialog';
 import Header from '../components/Header';
 import { JarvisCanvas } from '../components/jarvis';
+
+/**
+ * Records every route change into the explicit nav trail (see
+ * stores/navHistory). Renders nothing; lives inside the router so the
+ * expo-router hook re-runs it on each navigation. Uses
+ * ``useUnstableGlobalHref`` — the REACTIVE full href (path + query) from
+ * expo-router's route info — rather than reading ``window.location`` out of
+ * band, which lagged the route update and dropped query params (e.g. a run's
+ * ``?kind&parentId&name``), corrupting the back target. Cross-platform too:
+ * the global href carries the query on native as well.
+ */
+function NavHistoryRecorder() {
+  const href = useUnstableGlobalHref();
+  useEffect(() => {
+    useNavHistory.getState().record(trailHref(href));
+  }, [href]);
+  return null;
+}
 
 const navDarkTheme: Theme = {
   dark: true,
@@ -111,6 +130,7 @@ export default function RootLayout() {
 
   return (
     <ConfirmProvider>
+      <NavHistoryRecorder />
       <JarvisCanvas style={styles.root} showBrackets={false} showEdgeTicks={false} showGrid={false}>
         {/* Window chrome (drag strip + custom traffic-light controls) for
             frameless Win/Linux only. macOS uses native traffic lights in

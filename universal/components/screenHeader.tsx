@@ -12,10 +12,12 @@
 
 import { Pressable, Text, Platform, View, StyleSheet } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
-import { useNavigation } from 'expo-router';
+import { useNavigation, useRouter } from 'expo-router';
 import { DrawerActions } from '@react-navigation/native';
 import { useHeaderHeight } from '@react-navigation/elements';
 import { useLayout } from '../hooks/useLayout';
+import { goBack } from '../services/windows';
+import { useNavHistory } from '../stores/navHistory';
 import DragRegion, { NO_DRAG } from './DragRegion';
 import { colors, font, radius, glassSurface } from '../theme';
 
@@ -114,18 +116,23 @@ export function HeaderMenu() {
 }
 
 /** Back control for `headerLeft` on pushed sub-screens — a themed,
- *  no-drag chevron that pops the enclosing stack (never `router.back()`,
- *  which can bubble to the drawer / land on the login screen). Pass
- *  `onPress` to override the dismissal (e.g. terminal closes its window). */
-export function HeaderBack({ onPress, label }: { onPress?: () => void; label?: string }) {
-  const navigation = useNavigation<any>();
-  const goBack = () => {
+ *  no-drag chevron that steps back through the app's navigation history
+ *  via `goBack` (expo-router's `router.back()`, guarded + with a
+ *  `fallback`). Unlike react-navigation's per-navigator `goBack()`, this
+ *  composes across the Drawer's section stacks, so a screen pushed from
+ *  another section (a run opened from a Chat card) returns to where it was
+ *  opened from rather than dead-ending on a single-screen stack. Pass
+ *  `onPress` to override the dismissal (e.g. terminal closes its window);
+ *  pass `fallback` for the cold-deep-link landing (defaults to chat). */
+export function HeaderBack({ onPress, label, fallback }: { onPress?: () => void; label?: string; fallback?: string }) {
+  const router = useRouter();
+  const onBack = () => {
     if (onPress) { onPress(); return; }
-    if (navigation.canGoBack?.()) navigation.goBack();
+    goBack(router, fallback);
   };
   return (
     <Pressable
-      onPress={goBack}
+      onPress={onBack}
       hitSlop={8}
       style={{
         flexDirection: 'row', alignItems: 'center', gap: 2,
@@ -143,6 +150,22 @@ export function HeaderBack({ onPress, label }: { onPress?: () => void; label?: s
       ) : null}
     </Pressable>
   );
+}
+
+/**
+ * Header-left for a screen that is the ROOT of its own stack yet is reached
+ * by a push from elsewhere — the single-run detail (`runs/[id]`), opened
+ * from a Chat card or the sidebar's Recent feed. When there is history to
+ * pop it shows the back chevron (return to where it was opened from);
+ * opened cold from a deep link, it falls back to the drawer toggle so the
+ * sidebar is still reachable. `fallback` is forwarded to `HeaderBack`.
+ */
+export function HeaderBackOrMenu({ fallback }: { fallback?: string }) {
+  // Back when the route trail has somewhere to return to (this screen was
+  // pushed from elsewhere); the drawer toggle when opened cold from a deep
+  // link. Subscribes to the trail so it updates as navigation changes.
+  const canBack = useNavHistory((s) => s.trail.length > 1);
+  return canBack ? <HeaderBack fallback={fallback} /> : <HeaderMenu />;
 }
 
 /** Right-side header action — the unified "create / add new / save" control. */

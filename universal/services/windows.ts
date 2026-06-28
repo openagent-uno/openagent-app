@@ -13,6 +13,8 @@
  * or ``tasks/runs/abc``).
  */
 
+import { useNavHistory } from '../stores/navHistory';
+
 type RouterLike = {
   push: (href: any) => void;
   back: () => void;
@@ -46,18 +48,34 @@ export function openDetached(router: RouterLike, route: string): void {
 }
 
 /**
- * Dismiss an inline detail/editor: pop the navigation stack, falling back
- * to the authenticated home when there's nothing to pop (e.g. a
- * deep-linked tab). The fallback is the chat tab — NOT ``/`` (the login
- * screen), which would look like a logout when a sub-screen's back has an
- * empty history.
+ * Go back one step in the app's navigation history — the single, unified
+ * "back" primitive for every screen (sub-screen back chevrons, editor
+ * dismissals, run/terminal close, chat child-session exit).
+ *
+ * It pops expo-router's history (``router.back()``), which — unlike
+ * react-navigation's per-navigator ``goBack()`` / ``StackActions.popTo`` —
+ * composes across the Drawer's section stacks: a run opened from a Chat
+ * card returns to that chat, a note opened from the vault returns to the
+ * graph, etc. Forward navigation everywhere is ``router.push``, so this
+ * mirror is always correct.
+ *
+ * When there is nothing to pop (a deep-linked tab opened cold), it
+ * ``replace``s to ``fallback`` instead of bubbling up to ``/`` (the login
+ * screen), which would look like a logout. The default fallback is the
+ * chat tab; editors/run-history pass their own section root so a cold
+ * deep-link lands on the natural parent (e.g. the Workflows list) rather
+ * than chat.
  */
-export function closeDetached(router: RouterLike): void {
-  if (router.canGoBack?.()) {
-    router.back();
-  } else {
-    router.replace('/(tabs)/chat' as any);
-  }
+export function goBack(router: RouterLike, fallback: string = '/(tabs)/chat'): void {
+  // Drive back from the explicit route trail (deterministic across the
+  // Drawer's section stacks) rather than react-navigation's GO_BACK, which
+  // bubbles to the wrong section here. See stores/navHistory.
+  useNavHistory.getState().back(router, fallback);
+}
+
+/** @deprecated Use {@link goBack}. Kept as a name-compatible alias. */
+export function closeDetached(router: RouterLike, fallback?: string): void {
+  goBack(router, fallback);
 }
 
 /**

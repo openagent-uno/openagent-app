@@ -20,18 +20,25 @@
 import { Stack } from 'expo-router';
 import { themedHeader, HeaderMenu, HeaderBack } from '../../../components/screenHeader';
 
+// Anchor the stack at ``index`` so the connector edit / install sub-screens
+// always have the grid beneath them — back pops to the grid in-section
+// instead of bubbling to the Drawer. See app/(tabs)/_layout.tsx.
+export const unstable_settings = { initialRouteName: 'index' };
+
 export default function MCPsStackLayout() {
   return (
     <Stack
       screenOptions={{
         ...themedHeader,
-        headerLeft: () => <HeaderBack />,
+        // Section fallback: a cold-loaded (reloaded/deep-linked) sub-screen
+        // with no trail history backs out to the section dashboard, not chat.
+        headerLeft: () => <HeaderBack fallback="/(tabs)/mcps" />,
         animation: 'slide_from_right',
       }}
     >
       <Stack.Screen name="index" options={{ title: 'Connectors', headerLeft: () => <HeaderMenu /> }} />
-      {/* Sub-screens set their own (dynamic) titles + actions. */}
-      <Stack.Screen name="install" options={{ title: 'Install' }} />
+      {/* Sub-screens keep these screen-name titles (no per-item names). */}
+      <Stack.Screen name="install" options={{ title: 'Install connector' }} />
       <Stack.Screen name="[name]" options={{ title: 'Connector' }} />
     </Stack>
   );

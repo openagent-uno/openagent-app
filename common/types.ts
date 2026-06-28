@@ -128,6 +128,16 @@ export type ServerMessage =
   | { type: 'auth_ok'; agent_name: string; version: string }
   | { type: 'auth_error'; reason: string }
   | { type: 'status'; text: string; session_id: string }
+  // ── Reasoning indicator (transient, session-scoped) ──
+  // ``active=true`` while the agent is thinking with no visible output yet;
+  // ``active=false`` once visible output starts OR the turn ends. The UI
+  // swaps the static status row for an animated "Reasoning" shimmer while
+  // active. Several may arrive per turn (true→false→true→false across
+  // tool-call iterations). Transient — never persisted in the transcript.
+  // ``seq``/``ts_ms`` ride along for ordering/debug; the UI only needs
+  // ``active``. Clients also clear reasoning on the turn-final ``response``
+  // frame as a safety net in case an explicit ``active=false`` is missed.
+  | { type: 'reasoning'; session_id: string; active: boolean; seq?: number; ts_ms?: number }
   // Token-streaming frame for text-mode chat. Clients accumulate each
   // ``text`` chunk into the in-progress assistant bubble; the trailing
   // ``response`` is the canonical record (full text + attachments +
@@ -503,11 +513,14 @@ export function runLaunchTarget(t?: ToolInfo): RunLaunchTarget | undefined {
   // mid-run (matching the DelegationCard affordance).
   const fromSid = runTargetForChildSession(eff.child_session_id);
   const runId = res?.id || res?.run_id || fromSid?.runId || undefined;
+  // Prefer a resolved parent ID (the tool result, or the linked child session
+  // id) over the raw ``id_or_name`` argument: a workflow run-now is usually
+  // invoked by NAME, but the run screen routes its parent by id — so falling
+  // back to the name would point the parent-open link at a non-existent id.
   const parentId =
     (match.kind === 'task'
-      ? res?.task_id || args.task_id
-      : res?.workflow_id || args.id_or_name)
-    || fromSid?.parentId
+      ? res?.task_id || fromSid?.parentId || args.task_id
+      : res?.workflow_id || fromSid?.parentId || args.id_or_name)
     || undefined;
   return {
     kind: match.kind,
@@ -553,6 +566,11 @@ export interface ChatSession {
   messages: ChatMessage[];
   isProcessing: boolean;
   statusText?: string;
+  /** Driven by the transient ``reasoning`` wire frame: true while the agent
+   *  is thinking with no visible output yet. Swaps the static status row for
+   *  the animated <ReasoningIndicator/>. Cleared on the first streamed delta,
+   *  the turn-final response, and on error (safety net). */
+  isReasoning?: boolean;
   /** When this session was spawned by another (a delegated sub-agent, a
    *  scheduled-task firing, or a workflow AI node), the parent it belongs to —
    *  drives the "← parent" breadcrumb and lets the sidebar tag it. */

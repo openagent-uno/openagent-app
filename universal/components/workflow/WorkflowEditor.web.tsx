@@ -412,7 +412,7 @@ function EditorInner({ workflow, onBack, onWorkflowUpdated }: Props) {
           <Feather name="arrow-left" size={14} color={colors.textSecondary} />
         </button>
         <div style={styles.workflowInfo}>
-          <div style={styles.workflowName}>{workflow.name}</div>
+          <div style={styles.workflowName}>Workflow</div>
           {workflow.description && (
             <div style={styles.workflowDescription}>{workflow.description}</div>
           )}

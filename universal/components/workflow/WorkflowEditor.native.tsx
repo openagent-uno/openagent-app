@@ -298,7 +298,7 @@ export default function WorkflowEditorNative({
         </TouchableOpacity>
         <View style={styles.titleWrap}>
           <Text style={styles.title} numberOfLines={1}>
-            {workflow.name}
+            Workflow
           </Text>
           {lastRunStatus ? (
             <Text

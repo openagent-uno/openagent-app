@@ -4,8 +4,8 @@
  * Wide: fixed file-tree sidebar + graph. Narrow: drawer sidebar + graph.
  * Tapping a note (sidebar or graph node) pushes ``[...path]`` onto the
  * Memory Stack, which hosts the editor. ``router.push`` keeps ``index``
- * on the stack so the editor's back button pops cleanly via
- * ``StackActions.popTo('index')`` — same pattern as MCPs / Workflows.
+ * on the stack so the editor's back chevron (the shared ``HeaderBack`` →
+ * ``goBack`` → ``router.back()``) returns here cleanly.
  */
 
 import { useCallback, useEffect, useLayoutEffect } from 'react';

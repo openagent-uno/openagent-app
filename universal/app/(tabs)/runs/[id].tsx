@@ -38,8 +38,9 @@ export default function RunDetailScreen() {
   }, [connConfig]);
 
   useLayoutEffect(() => {
-    navigation.setOptions({ title: name || 'Run detail' });
-  }, [navigation, name]);
+    // Screen-name title by run kind (homogeneous; not the parent's name).
+    navigation.setOptions({ title: kind === 'workflow' ? 'Workflow run' : 'Scheduled run' });
+  }, [navigation, kind]);
 
   const ready = connConfig && id && parentId;
 

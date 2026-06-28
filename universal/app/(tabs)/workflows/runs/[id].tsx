@@ -45,7 +45,7 @@ export default function WorkflowRunsScreen() {
   }, [connConfig, id]);
 
   useLayoutEffect(() => {
-    navigation.setOptions({ title: name ? `History · ${name}` : 'Run history' });
+    navigation.setOptions({ title: 'Workflow runs' });
   }, [navigation, name]);
 
   return (

@@ -44,7 +44,7 @@ export default function TaskRunsScreen() {
   }, [connConfig, id]);
 
   useLayoutEffect(() => {
-    navigation.setOptions({ title: name ? `History · ${name}` : 'Run history' });
+    navigation.setOptions({ title: 'Scheduled runs' });
   }, [navigation, name]);
 
   return (

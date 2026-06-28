@@ -31,6 +31,7 @@ import { downloadFile, fileUrl } from '../services/api';
 import Markdown from './Markdown';
 import DelegationCard from './DelegationCard';
 import RunLaunchCard from './RunLaunchCard';
+import ReasoningIndicator from './ReasoningIndicator';
 import { colors, font, radius } from '../theme';
 
 // How many trailing messages to render before "Load earlier". Caps the
@@ -41,6 +42,10 @@ export interface MessageListProps {
   messages: ChatMessage[];
   isProcessing?: boolean;
   statusText?: string;
+  /** When true, the status row shows the animated <ReasoningIndicator/>
+   *  instead of the static status dot + text. Driven by the session's
+   *  ``isReasoning`` flag (the transient ``reasoning`` wire frame). */
+  isReasoning?: boolean;
   /** Slice the tail when set (Voice tab uses ~6). Omit for full history. */
   maxItems?: number;
   /** Fired by the per-bubble Regenerate button on the last (non-streaming)
@@ -61,7 +66,7 @@ export interface MessageListProps {
 }
 
 function MessageListBase({
-  messages, isProcessing, statusText, maxItems, onRegenerate, onEditUser,
+  messages, isProcessing, statusText, isReasoning, maxItems, onRegenerate, onEditUser,
   onOpenChild, onOpenRun, currentUserHandle,
 }: MessageListProps) {
   // Windowing: render only the last `shown` messages. With bottom-pinned
@@ -154,14 +159,20 @@ function MessageListBase({
         </TouchableOpacity>
       )}
       {visible.map(renderMessage)}
-      {isProcessing && (
+      {(isProcessing || isReasoning) && (
         <View style={styles.statusRow}>
-          <View
-            style={styles.statusDot}
-            // @ts-ignore — web-only className for the pulse keyframe
-            {...(Platform.OS === 'web' ? { className: 'oa-pulse' } : {})}
-          />
-          <Text style={styles.statusText}>{statusText || 'Thinking'}</Text>
+          {isReasoning ? (
+            <ReasoningIndicator />
+          ) : (
+            <>
+              <View
+                style={styles.statusDot}
+                // @ts-ignore — web-only className for the pulse keyframe
+                {...(Platform.OS === 'web' ? { className: 'oa-pulse' } : {})}
+              />
+              <Text style={styles.statusText}>{statusText || 'Thinking'}</Text>
+            </>
+          )}
         </View>
       )}
     </>

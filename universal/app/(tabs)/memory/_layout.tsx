@@ -14,21 +14,29 @@
 import { Stack } from 'expo-router';
 import { themedHeader, HeaderMenu, HeaderBack } from '../../../components/screenHeader';
 
+// Anchor the stack at ``index`` so a pushed/deep-linked sub-screen (a note,
+// the vault history) always has the graph dashboard beneath it — its back
+// chevron then pops to ``index`` in-section instead of bubbling out to the
+// Drawer (which would jump to another section). See app/(tabs)/_layout.tsx.
+export const unstable_settings = { initialRouteName: 'index' };
+
 export default function MemoryStackLayout() {
   return (
     <Stack
       screenOptions={{
         ...themedHeader,
-        headerLeft: () => <HeaderBack />,
+        // Section fallback: a cold-loaded (reloaded/deep-linked) sub-screen
+        // with no trail history backs out to the section dashboard, not chat.
+        headerLeft: () => <HeaderBack fallback="/(tabs)/memory" />,
         animation: 'slide_from_right',
       }}
     >
       {/* Top-level: drawer toggle, not a back button. */}
       <Stack.Screen name="index" options={{ title: 'Memory', headerLeft: () => <HeaderMenu /> }} />
-      {/* Sub-screens set their own (dynamic) titles via navigation.setOptions. */}
-      <Stack.Screen name="[...path]" options={{ title: 'Note' }} />
-      <Stack.Screen name="history" options={{ title: 'Vault history' }} />
-      <Stack.Screen name="history/[...path]" options={{ title: 'History' }} />
+      {/* Sub-screens use these screen-name titles (no per-note names). */}
+      <Stack.Screen name="[...path]" options={{ title: 'Memory file' }} />
+      <Stack.Screen name="history" options={{ title: 'Memory history' }} />
+      <Stack.Screen name="history/[...path]" options={{ title: 'Memory file history' }} />
     </Stack>
   );
 }

@@ -16,12 +16,19 @@
 import { Stack } from 'expo-router';
 import { themedHeader, HeaderMenu, HeaderBack } from '../../../components/screenHeader';
 
+// Anchor the stack at ``index`` so the editor / run-history sub-screens
+// always have the list beneath them — back pops to the list in-section
+// instead of bubbling to the Drawer. See app/(tabs)/_layout.tsx.
+export const unstable_settings = { initialRouteName: 'index' };
+
 export default function WorkflowsStackLayout() {
   return (
     <Stack
       screenOptions={{
         ...themedHeader,
-        headerLeft: () => <HeaderBack />,
+        // Section fallback: a cold-loaded (reloaded/deep-linked) sub-screen
+        // with no trail history backs out to the section dashboard, not chat.
+        headerLeft: () => <HeaderBack fallback="/(tabs)/workflows" />,
         animation: 'slide_from_right',
       }}
     >
@@ -29,7 +36,7 @@ export default function WorkflowsStackLayout() {
       {/* The visual editor is a full-canvas screen with its own toolbar
           (Back / Save / Run) — it manages its own chrome, no nav header. */}
       <Stack.Screen name="[id]" options={{ headerShown: false }} />
-      <Stack.Screen name="runs/[id]" options={{ title: 'Run history' }} />
+      <Stack.Screen name="runs/[id]" options={{ title: 'Workflow runs' }} />
     </Stack>
   );
 }

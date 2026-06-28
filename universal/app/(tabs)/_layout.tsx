@@ -42,6 +42,14 @@ export default function AppDrawerLayout() {
 
   return (
     <Drawer
+      // The Drawer is the cross-section "back" boundary. react-navigation's
+      // default backBehavior is 'firstRoute', which REBUILDS the drawer
+      // history to [firstRoute(chat), current] on every section switch — so
+      // any back that bubbles out of a section stack lands on chat (the
+      // first route) instead of the section you came from. 'history' keeps a
+      // real visited-section trail, so a back that bubbles into the Drawer
+      // returns to the previously focused section (and canGoBack reflects it).
+      backBehavior="history"
       drawerContent={(props: any) => (
         <Sidebar
           onNavigate={permanent ? undefined : () => props.navigation.closeDrawer()}

@@ -122,10 +122,10 @@ export default function MemoryNoteScreen() {
   const selectedNote = notes.find((n) => n.path === notePath);
   const titleFallback = notePath.split('/').pop()?.replace('.md', '') ?? '';
 
-  // Note title in the nav header.
+  // Screen-name title in the nav header (homogeneous; not the note's name).
   useLayoutEffect(() => {
-    navigation.setOptions({ title: selectedNote?.title || titleFallback || 'Note' });
-  }, [navigation, selectedNote?.title, titleFallback]);
+    navigation.setOptions({ title: 'Memory file' });
+  }, [navigation]);
 
   // History / Rename / Edit-Preview / Save in the nav header's right slot.
   useLayoutEffect(() => {

@@ -97,6 +97,9 @@ export default function Sidebar({
 }) {
   const router = useRouter();
   const segments = useSegments();
+  // Post-auth WS drop — surfaced right above the agent name so the connection
+  // state lives next to the agent identity (moved here from the chat screen).
+  const isReconnecting = useConnection((s) => s.isReconnecting);
   // macOS shows native traffic lights over the sidebar's top-left, so the
   // brand pads down to clear them and that strip drags the window.
   const isMac = typeof window !== 'undefined' && (window as any).desktop?.platform === 'darwin';
@@ -224,6 +227,15 @@ export default function Sidebar({
       {/* ── Footer: agent (left) + Settings/System (right) ── */}
       <View style={[styles.footer, styles.footerFull]}>
         <View style={styles.footerRule} />
+        {isReconnecting && (
+          <View style={styles.reconnectRow}>
+            <View
+              style={styles.reconnectDot}
+              {...(Platform.OS === 'web' ? { className: 'oa-pulse' } : {})}
+            />
+            <Text style={styles.reconnectText} numberOfLines={1}>Reconnecting…</Text>
+          </View>
+        )}
         <View style={styles.footerRow}>
           <AgentSwitcher variant="compact" />
           <FooterIcon icon="settings" label="Settings" active={activeSeg === 'settings'} onPress={() => go('/settings')} />
@@ -321,7 +333,9 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
       }
     }
     if (filters.workflow) {
-      for (const r of workflowRuns) items.push(runItem(r, 'w', 'share-2', 'workflows', router, activeRunId, onNavigate));
+      // Same glyph as the top-nav "Workflows" button (NAV) so a workflow reads
+      // identically wherever it appears in the sidebar.
+      for (const r of workflowRuns) items.push(runItem(r, 'w', 'git-branch', 'workflows', router, activeRunId, onNavigate));
     }
     if (filters.task) {
       for (const r of taskRuns) items.push(runItem(r, 't', 'clock', 'tasks', router, activeRunId, onNavigate));
@@ -602,6 +616,15 @@ const styles = StyleSheet.create({
   footer: { marginTop: 'auto' },
   footerFull: { paddingTop: spacing.sm },
   footerRule: { height: 1, backgroundColor: colors.borderLight, marginBottom: spacing.sm },
+  // Reconnecting hint — sits right above the agent row (see [[isReconnecting]]).
+  reconnectRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 7,
+    paddingHorizontal: spacing.xs, paddingBottom: spacing.sm,
+  },
+  reconnectDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: colors.warning },
+  reconnectText: {
+    fontSize: 11, color: colors.textSecondary, fontFamily: font.mono, letterSpacing: 0.3,
+  },
   footerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   footerBtn: { width: 40, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, borderWidth: 1, borderColor: 'transparent' },
   footerBtnActive: { backgroundColor: colors.surface, borderColor: colors.border },

@@ -292,6 +292,34 @@ function ensureGlobalCss(): void {
       background-size: 200% 100%;
       animation: oa-shimmer 1.5s ease-in-out infinite;
     }
+    /* Reasoning indicator — the animated "the agent is thinking" cue that
+       replaces the static "Thinking…" status text. A cyan highlight sweeps
+       across the muted "Reasoning" wordmark (clipped to the glyphs) while
+       three trailing dots ripple. See [[components/ReasoningIndicator.tsx]]. */
+    @keyframes oa-reasoning-shimmer {
+      0%   { background-position: 200% 0; }
+      100% { background-position: -200% 0; }
+    }
+    @keyframes oa-reasoning-dot {
+      0%, 100% { opacity: 0.25; transform: translateY(0); }
+      50%      { opacity: 1;    transform: translateY(-1px); }
+    }
+    .oa-reasoning {
+      background-image: linear-gradient(100deg,
+        var(--oa-textMuted) 0%, var(--oa-textMuted) 35%,
+        var(--oa-primaryEnd) 50%,
+        var(--oa-textMuted) 65%, var(--oa-textMuted) 100%) !important;
+      background-size: 200% 100% !important;
+      -webkit-background-clip: text !important;
+      background-clip: text !important;
+      -webkit-text-fill-color: transparent !important;
+      color: transparent !important;
+      animation: oa-reasoning-shimmer 2.4s linear infinite;
+    }
+    .oa-reasoning-dot { animation: oa-reasoning-dot 1.2s ease-in-out infinite; }
+    .oa-reasoning-dot:nth-child(1) { animation-delay: 0s; }
+    .oa-reasoning-dot:nth-child(2) { animation-delay: 0.18s; }
+    .oa-reasoning-dot:nth-child(3) { animation-delay: 0.36s; }
     /* Shiki-rendered code blocks — strip its default background and
        apply our font stack so highlighted code matches the surface. */
     .oa-shiki pre {

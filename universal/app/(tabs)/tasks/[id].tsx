@@ -13,7 +13,7 @@
  * dismisses — the list window refetches off that broadcast.
  */
 
-import { useLocalSearchParams, useNavigation } from 'expo-router';
+import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useEffect, useLayoutEffect, useState } from 'react';
 import {
   ActivityIndicator, Platform, ScrollView, StyleSheet, Text, TextInput, View,
@@ -22,6 +22,7 @@ import { colors, font, radius } from '../../../theme';
 import { useConnection } from '../../../stores/connection';
 import { useTasks } from '../../../stores/tasks';
 import { setBaseUrl, getScheduledTask } from '../../../services/api';
+import { goBack } from '../../../services/windows';
 import CronPicker from '../../../components/CronPicker';
 import { HeaderAction, useHeaderInset } from '../../../components/screenHeader';
 
@@ -36,6 +37,7 @@ const EMPTY_FORM: TaskForm = { name: '', cron_expression: '', prompt: '' };
 export default function TaskEditScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const navigation = useNavigation();
+  const router = useRouter();
   const headerInset = useHeaderInset();
   const isNew = id === 'new';
   const connConfig = useConnection((s) => s.config);
@@ -78,7 +80,9 @@ export default function TaskEditScreen() {
     };
   }, [connConfig, id, isNew]);
 
-  const close = () => { if (navigation.canGoBack()) navigation.goBack(); };
+  // Return to wherever the editor was opened from (the Scheduled list
+  // normally) via expo-router history; cold deep-link falls back to it.
+  const close = () => { goBack(router, '/(tabs)/tasks'); };
 
   const handleSave = async () => {
     setLocalError(null);
@@ -100,7 +104,7 @@ export default function TaskEditScreen() {
   // Title + Save action in the nav header (back is provided by the stack).
   useLayoutEffect(() => {
     navigation.setOptions({
-      title: isNew ? 'New Task' : (form.name || 'Edit Task'),
+      title: isNew ? 'New scheduled task' : 'Scheduled task',
       headerRight: () => (
         <HeaderAction
           icon="check"

@@ -9,8 +9,8 @@
  * the transcript and streams the mic through the active chat session.
  */
 
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useState, useRef, useEffect, useCallback, useMemo, useLayoutEffect } from 'react';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, Image,
@@ -29,7 +29,9 @@ import MessageComposer, { type PendingFile, type SlashCommand } from '../../comp
 import MessageList from '../../components/MessageList';
 import CommandPalette, { type PaletteEntry } from '../../components/CommandPalette';
 import BrandLogo from '../../components/BrandLogo';
-import { useHeaderInset } from '../../components/screenHeader';
+import { useHeaderInset, HeaderBack, HeaderMenu } from '../../components/screenHeader';
+import { goBack } from '../../services/windows';
+import { useNavHistory } from '../../stores/navHistory';
 import { Skeleton, SkeletonLines } from '../../components/Skeleton';
 import { uploadFile, guessMimeType, listDbModels } from '../../services/api';
 import type { ModelEntry } from '../../../common/types';
@@ -55,9 +57,9 @@ const log = (event: string, data?: Record<string, unknown>) => {
 export default function ChatScreen() {
   const headerInset = useHeaderInset();
   const ws = useConnection((s) => s.ws);
-  const isReconnecting = useConnection((s) => s.isReconnecting);
   const currentUserHandle = useConnection((s) => s.config?.handle);
   const router = useRouter();
+  const navigation = useNavigation<any>();
   const routeParams = useLocalSearchParams<{ session?: string }>();
   // Fine-grained selectors instead of the whole-store `useChat()`. The
   // no-arg form returns a freshly-merged state object on EVERY mutation,
@@ -266,7 +268,15 @@ export default function ChatScreen() {
   const openChildSession = useCallback((childSessionId: string) => {
     appliedParamRef.current = childSessionId;
     setActiveSession(childSessionId);
-    router.setParams({ session: childSessionId });
+    // Update the URL by EXPLICIT path, not router.setParams: setParams
+    // regenerates the href from the focused navigation state, which — because
+    // the chat screen mounts an inner ResponsiveSidebar (a
+    // NavigationIndependentTree whose screen is named ``__main__``) — comes out
+    // as ``/chat/__main__?session=…``, an unmatched route that 404s on reload /
+    // deep-link. Replacing by the canonical ``/(tabs)/chat`` path keeps the URL
+    // a clean, round-trippable ``/chat?session=…`` while staying on the same
+    // screen (no push, no remount).
+    router.replace({ pathname: '/(tabs)/chat', params: { session: childSessionId } });
   }, [setActiveSession, router]);
 
   // A chat turn that ran a scheduled task / workflow shows a RunLaunchCard;
@@ -276,6 +286,46 @@ export default function ChatScreen() {
     const path = runRoutePath(target);
     if (path) router.push(`/${path}` as any);
   }, [router]);
+
+  // Drive the (drawer) header's left control. A child session — a delegation
+  // sub-agent, a scheduled firing, or a workflow node — gets a real "back"
+  // chevron instead of the drawer toggle: it swaps to the parent session in
+  // place when that session is loaded (walking the lineage to any depth),
+  // and otherwise steps back through navigation history to whatever screen
+  // opened it (e.g. a run detail). A top-level chat session keeps the drawer
+  // toggle. ``router``/``openChildSession`` are intentionally out of the deps
+  // (``useRouter`` returns a fresh ref each render, which would re-run
+  // setOptions every frame); the captured refs stay correct because the
+  // effect re-runs whenever the session being viewed actually changes.
+  const parentSession = activeSession?.parentSessionId
+    ? sessions.find((s) => s.id === activeSession.parentSessionId)
+    : undefined;
+  const isChildSession = !!activeSession
+    && (!!activeSession.parentSessionId
+      || (!!activeSession.origin && activeSession.origin !== 'chat'));
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerLeft: () =>
+        isChildSession ? (
+          <HeaderBack
+            onPress={() => {
+              // If this child was drilled into from a NON-chat screen (e.g. a
+              // run detail's sub-agent card), return to that screen via the
+              // route trail. Otherwise it's an in-chat delegation → swap to the
+              // parent session in place (the session-lineage axis, any depth).
+              const trail = useNavHistory.getState().trail;
+              const prev = trail[trail.length - 2];
+              if (prev && !prev.startsWith('/chat')) goBack(router);
+              else if (parentSession) openChildSession(parentSession.id);
+              else goBack(router);
+            }}
+          />
+        ) : (
+          <HeaderMenu />
+        ),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigation, isChildSession, parentSession?.id]);
 
   // A freshly-spawned child session (delegation / scheduled firing / workflow
   // node) fires a ``session`` resource_event — refetch so it appears in the
@@ -691,7 +741,7 @@ export default function ChatScreen() {
 
   const caption = micError ? `Mic ${micError}`
     : swState === 'speaking' ? 'Speaking…'
-    : swState === 'processing' ? 'Thinking…'
+    : swState === 'processing' ? (activeSession?.isReasoning ? 'Reasoning…' : 'Thinking…')
     : swState === 'listening' ? 'Listening…'
     : 'Speak any time';
 
@@ -1148,15 +1198,6 @@ export default function ChatScreen() {
   return (
     <ResponsiveSidebar sidebar={sidebarContent}>
       <View style={[styles.chatArea, { paddingTop: headerInset }]}>
-        {isReconnecting && (
-          <View style={styles.reconnectBanner}>
-            <View
-              style={styles.reconnectDot}
-              {...(Platform.OS === 'web' ? { className: 'oa-pulse' } : {})}
-            />
-            <Text style={styles.reconnectText}>Reconnecting to agent…</Text>
-          </View>
-        )}
         {dragActive && (
           <View style={styles.dropOverlay} pointerEvents="none">
             <View style={styles.dropPanel}>
@@ -1292,6 +1333,7 @@ export default function ChatScreen() {
                   messages={activeSession.messages}
                   isProcessing={activeSession.isProcessing}
                   statusText={activeSession.statusText}
+                  isReasoning={activeSession.isReasoning}
                   onRegenerate={handleRegenerate}
                   onEditUser={handleEditUser}
                   onOpenChild={openChildSession}
@@ -1656,21 +1698,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
   },
   emptyBtnText: { fontSize: 12, fontWeight: '500', color: colors.text },
-
-  // Post-auth WS drop banner — see [[isReconnecting]] in connection store.
-  reconnectBanner: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    paddingHorizontal: 16, paddingVertical: 8,
-    backgroundColor: colors.codeBg,
-    borderBottomWidth: 1, borderBottomColor: colors.border,
-  },
-  reconnectDot: {
-    width: 6, height: 6, borderRadius: 3, backgroundColor: colors.warning,
-  },
-  reconnectText: {
-    fontSize: 11, color: colors.textSecondary, fontFamily: font.mono,
-    letterSpacing: 0.3,
-  },
 
   // Drag-and-drop overlay (web/desktop only — see useEffect above).
   dropOverlay: {

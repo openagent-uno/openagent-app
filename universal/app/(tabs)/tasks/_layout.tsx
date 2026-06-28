@@ -14,19 +14,26 @@
 import { Stack } from 'expo-router';
 import { themedHeader, HeaderMenu, HeaderBack } from '../../../components/screenHeader';
 
+// Anchor the stack at ``index`` so the task editor / run-history sub-screens
+// always have the list beneath them — back pops to the list in-section
+// instead of bubbling to the Drawer. See app/(tabs)/_layout.tsx.
+export const unstable_settings = { initialRouteName: 'index' };
+
 export default function TasksStackLayout() {
   return (
     <Stack
       screenOptions={{
         ...themedHeader,
-        headerLeft: () => <HeaderBack />,
+        // Section fallback: a cold-loaded (reloaded/deep-linked) sub-screen
+        // with no trail history backs out to the section dashboard, not chat.
+        headerLeft: () => <HeaderBack fallback="/(tabs)/tasks" />,
         animation: 'slide_from_right',
       }}
     >
-      <Stack.Screen name="index" options={{ title: 'Scheduled', headerLeft: () => <HeaderMenu /> }} />
-      {/* Editor sets its own title (New Task / the task name) + Save action. */}
-      <Stack.Screen name="[id]" options={{ title: 'Task' }} />
-      <Stack.Screen name="runs/[id]" options={{ title: 'Run history' }} />
+      <Stack.Screen name="index" options={{ title: 'Scheduled tasks', headerLeft: () => <HeaderMenu /> }} />
+      {/* Editor sets its own title ("Scheduled task" / "New scheduled task"). */}
+      <Stack.Screen name="[id]" options={{ title: 'Scheduled task' }} />
+      <Stack.Screen name="runs/[id]" options={{ title: 'Scheduled runs' }} />
     </Stack>
   );
 }

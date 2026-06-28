@@ -12,30 +12,29 @@
  * rewriting this shell.
  */
 
-import { useLocalSearchParams, useNavigation } from 'expo-router';
-import { StackActions } from '@react-navigation/native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, View } from 'react-native';
 import { colors, font } from '../../../theme';
 import WorkflowEditor from '../../../components/workflow/WorkflowEditor';
 import { useConnection } from '../../../stores/connection';
 import { setBaseUrl, getWorkflow } from '../../../services/api';
+import { goBack } from '../../../services/windows';
 import type { WorkflowTask } from '../../../../common/types';
 
 export default function WorkflowEditorScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
-  const navigation = useNavigation();
+  const router = useRouter();
   const connConfig = useConnection((s) => s.config);
   const [workflow, setWorkflow] = useState<WorkflowTask | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // The editor is a pushed route inside the workflows stack — "back" pops
-  // to the list. (``router.back()`` would bubble to the Tabs navigator
-  // and jump to chat when this stack holds only one screen — ``POP_TO``
-  // pops to ``index`` or replaces this screen with it.)
+  // "Back" steps to wherever the editor was opened from (the Workflows
+  // list normally, or a deeper origin) via expo-router history; opened cold
+  // from a deep link it falls back to the Workflows list rather than chat.
   const backToList = useCallback(() => {
-    navigation.dispatch(StackActions.popTo('index'));
-  }, [navigation]);
+    goBack(router, '/(tabs)/workflows');
+  }, [router]);
 
   useEffect(() => {
     if (!connConfig || !id) return;
