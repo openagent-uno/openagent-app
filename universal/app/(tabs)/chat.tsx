@@ -19,7 +19,7 @@ import {
 
 const logoIcon = require('../../assets/openagent-icon.png');
 import type { Attachment } from '../../../common/types';
-import { isHiddenChildSession, runRoutePath, type RunLaunchTarget } from '../../../common/types';
+import { isHiddenChildSession, runRoutePath, type RunLaunchTarget, type MemoryTarget } from '../../../common/types';
 import { useConnection } from '../../stores/connection';
 import { useChat } from '../../stores/chat';
 import { useEvents } from '../../stores/events';
@@ -285,6 +285,21 @@ export default function ChatScreen() {
   const openRun = useCallback((target: RunLaunchTarget) => {
     const path = runRoutePath(target);
     if (path) router.push(`/${path}` as any);
+  }, [router]);
+
+  // A memory-vault tool chip deep-links into the Memory tab: a single-note op
+  // opens that note's markdown screen (the same destination as clicking its
+  // graph node — see (tabs)/memory/index.tsx ``openNote``); a search / list /
+  // maintenance op opens the memory graph.
+  const openMemory = useCallback((target: MemoryTarget) => {
+    if (target.kind === 'note') {
+      router.push({
+        pathname: '/(tabs)/memory/[...path]',
+        params: { path: target.path.split('/') },
+      });
+    } else {
+      router.push('/(tabs)/memory');
+    }
   }, [router]);
 
   // Drive the (drawer) header's left control. A child session — a delegation
@@ -1338,6 +1353,7 @@ export default function ChatScreen() {
                   onEditUser={handleEditUser}
                   onOpenChild={openChildSession}
                   onOpenRun={openRun}
+                  onOpenMemory={openMemory}
                   currentUserHandle={currentUserHandle}
                 />
               </View>

@@ -5,6 +5,7 @@
 import { create } from 'zustand';
 import {
   toolPhase,
+  toolDisplay,
   isSubAgentSessionId,
   isHiddenChildSession,
   subAgentParentId,
@@ -568,7 +569,13 @@ export const useChat = create<ChatState>((set, get) => ({
                 messages: [...ses.messages, {
                   id: genId(),
                   role: 'tool' as const,
-                  text: `Using ${toolInfo!.tool_name}...`,
+                  // Friendly fallback text (sidebar previews, no-toolInfo
+                  // render path). The chip itself re-derives the label from
+                  // ``toolInfo`` via toolDisplay.
+                  text: (() => {
+                    const d = toolDisplay(toolInfo!);
+                    return d.detail ? `${d.title} ${d.detail}` : d.title;
+                  })(),
                   timestamp: Date.now(),
                   toolInfo,
                 }],

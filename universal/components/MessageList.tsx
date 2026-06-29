@@ -21,9 +21,12 @@ import {
   isDelegationTool,
   delegationTitle,
   delegationLabel,
+  toolDisplay,
+  memoryTarget,
   type Attachment,
   type ChatMessage,
   type MessageAuthor,
+  type MemoryTarget,
   type RunLaunchTarget,
   type ToolInfo,
 } from '../../common/types';
@@ -60,6 +63,10 @@ export interface MessageListProps {
    *  opens that run's execution screen. Omit to render such cards as
    *  non-clickable. */
   onOpenRun?: (target: RunLaunchTarget) => void;
+  /** Fired when a memory-vault tool chip's "open" link is pressed — deep-links
+   *  into the Memory tab (a single note's markdown screen, or the graph). Omit
+   *  to render memory chips without the link affordance. */
+  onOpenMemory?: (target: MemoryTarget) => void;
   /** The current user's handle/display, used as the fallback "You" label
    *  when a user message carries no explicit author. */
   currentUserHandle?: string;
@@ -67,7 +74,7 @@ export interface MessageListProps {
 
 function MessageListBase({
   messages, isProcessing, statusText, isReasoning, maxItems, onRegenerate, onEditUser,
-  onOpenChild, onOpenRun, currentUserHandle,
+  onOpenChild, onOpenRun, onOpenMemory, currentUserHandle,
 }: MessageListProps) {
   // Windowing: render only the last `shown` messages. With bottom-pinned
   // scroll the tail is what the user sees; a long transcript otherwise
@@ -119,7 +126,14 @@ function MessageListBase({
       if (runTarget) {
         return <RunLaunchCard key={msg.id} target={runTarget} onOpen={onOpenRun} />;
       }
-      return <ToolCard key={msg.id} toolInfo={msg.toolInfo} fallbackText={msg.text} />;
+      return (
+        <ToolCard
+          key={msg.id}
+          toolInfo={msg.toolInfo}
+          fallbackText={msg.text}
+          onOpenMemory={onOpenMemory}
+        />
+      );
     }
     if (msg.role === 'user') {
       // An agent-self seed (a delegated task / scheduled mission / workflow
@@ -159,22 +173,32 @@ function MessageListBase({
         </TouchableOpacity>
       )}
       {visible.map(renderMessage)}
-      {(isProcessing || isReasoning) && (
-        <View style={styles.statusRow}>
-          {isReasoning ? (
-            <ReasoningIndicator />
-          ) : (
-            <>
-              <View
-                style={styles.statusDot}
-                // @ts-ignore — web-only className for the pulse keyframe
-                {...(Platform.OS === 'web' ? { className: 'oa-pulse' } : {})}
-              />
-              <Text style={styles.statusText}>{statusText || 'Thinking'}</Text>
-            </>
-          )}
-        </View>
-      )}
+      {(isProcessing || isReasoning) && (() => {
+        // The animated indicator is the DEFAULT "agent is working" state —
+        // shown whenever we're processing without a specific tool line to
+        // display (the generic "Thinking…" placeholder). It does NOT depend
+        // on the server's ``reasoning`` frame (older/remote agents don't
+        // send it); that frame just reinforces ``isReasoning``. Only a real
+        // tool-status line (e.g. "Using bash…") falls through to the text row.
+        const isGenericThinking = !statusText || /^thinking/i.test(statusText.trim());
+        const showIndicator = isReasoning || isGenericThinking;
+        return (
+          <View style={styles.statusRow}>
+            {showIndicator ? (
+              <ReasoningIndicator />
+            ) : (
+              <>
+                <View
+                  style={styles.statusDot}
+                  // @ts-ignore — web-only className for the pulse keyframe
+                  {...(Platform.OS === 'web' ? { className: 'oa-pulse' } : {})}
+                />
+                <Text style={styles.statusText}>{statusText}</Text>
+              </>
+            )}
+          </View>
+        );
+      })()}
     </>
   );
 }
@@ -469,8 +493,12 @@ const SelfPromptBlock = memo(function SelfPromptBlock({
 });
 
 const ToolCard = memo(function ToolCard({
-  toolInfo, fallbackText,
-}: { toolInfo?: ToolInfo; fallbackText: string }) {
+  toolInfo, fallbackText, onOpenMemory,
+}: {
+  toolInfo?: ToolInfo;
+  fallbackText: string;
+  onOpenMemory?: (target: MemoryTarget) => void;
+}) {
   const [expanded, setExpanded] = useState(false);
   const parsed = useMemo<ToolInfo | undefined>(() => {
     if (toolInfo) return toolInfo;
@@ -508,24 +536,86 @@ const ToolCard = memo(function ToolCard({
     ? info.result
     : undefined;
 
+  // Friendly, user-facing label/icon — the raw tool name + args remain in the
+  // expanded body for debugging. Memory-vault ops additionally deep-link into
+  // the Memory tab via the "open" affordance.
+  const display = toolDisplay(info);
+  const memTarget = display.isMemory ? memoryTarget(info) : undefined;
+  const canOpenMemory = !!(memTarget && onOpenMemory);
+  // The real tool the chip stands for (unwrapped from the dispatcher) — shown
+  // in the debug body so the friendly title never hides what actually ran.
+  const eff = effectiveTool(info);
+  const rawName = eff?.tool_name || info.tool_name;
+  const dispatched = info.tool_name === 'tool_search_call_tool';
+
   return (
     <TouchableOpacity
       activeOpacity={0.85}
       onPress={() => setExpanded(!expanded)}
-      style={[styles.toolCard, isError && styles.toolCardError]}
+      style={[
+        styles.toolCard,
+        display.isMemory && styles.toolCardMemory,
+        isError && styles.toolCardError,
+      ]}
       // @ts-ignore
       {...(Platform.OS === 'web' ? { className: 'oa-msg-in oa-card-hover' } : {})}
     >
       <View style={styles.toolCardHeader}>
         <View style={[styles.toolStatusDot, { backgroundColor: statusColor }]} />
-        <Feather name="tool" size={11} color={colors.textMuted} />
-        <Text style={styles.toolCardName}>{info.tool_name}</Text>
+        <Feather
+          name={display.icon as any}
+          size={12}
+          color={display.isMemory ? colors.accent : colors.textMuted}
+        />
+        <View style={styles.toolCardTitleWrap}>
+          <Text style={styles.toolCardName} numberOfLines={1}>
+            {display.title}
+            {display.detail ? (
+              <Text style={styles.toolCardDetail}>{`  ${display.detail}`}</Text>
+            ) : null}
+          </Text>
+        </View>
+        {canOpenMemory && (
+          <TouchableOpacity
+            // Separate touch target so opening the note doesn't also toggle the
+            // debug body. Stop propagation on web; RN's onPress doesn't bubble.
+            onPress={(e) => {
+              // @ts-ignore — web SyntheticEvent
+              e?.stopPropagation?.();
+              onOpenMemory!(memTarget!);
+            }}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            style={styles.toolOpenLink}
+            accessibilityRole="link"
+            accessibilityLabel={
+              memTarget!.kind === 'note'
+                ? `Open ${memTarget!.title} in Memory`
+                : 'Open Memory'
+            }
+            // @ts-ignore — web hover affordance
+            {...(Platform.OS === 'web' ? { className: 'oa-press' } : {})}
+          >
+            <Feather name="external-link" size={11} color={colors.accent} />
+            <Text style={styles.toolOpenLinkText}>Open</Text>
+          </TouchableOpacity>
+        )}
         <Text style={[styles.toolStatusText, { color: statusColor }]}>{statusLabel}</Text>
         <Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={12} color={colors.textMuted} />
       </View>
 
       {expanded && (
         <View style={styles.toolCardBody}>
+          <Text style={styles.toolSectionTitle}>Tool</Text>
+          <View style={styles.toolCodeBlock}>
+            <Text style={styles.toolCodeText}>
+              <Text style={{ color: colors.primary }}>{rawName}</Text>
+              {dispatched && (
+                <Text style={{ color: colors.textMuted }}>
+                  {`  (via tool_search_call_tool${eff?.server ? ` → ${eff.server}` : ''})`}
+                </Text>
+              )}
+            </Text>
+          </View>
           {info.tool_args && Object.keys(info.tool_args).length > 0 && (
             <>
               <Text style={styles.toolSectionTitle}>Parameters</Text>
@@ -711,14 +801,34 @@ const styles = StyleSheet.create({
     marginVertical: 4, overflow: 'hidden',
   },
   toolCardError: { borderColor: colors.errorBorder },
+  // Memory-vault chips get a faint accent left border so "the agent is using
+  // its memory" reads at a glance, distinct from generic tool chips.
+  toolCardMemory: {
+    borderLeftWidth: 2, borderLeftColor: colors.accent,
+  },
   toolCardHeader: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingVertical: 8, paddingHorizontal: 12,
   },
   toolStatusDot: { width: 6, height: 6, borderRadius: 3 },
+  toolCardTitleWrap: { flex: 1, minWidth: 0 },
   toolCardName: {
-    fontSize: 12, fontWeight: '500', color: colors.text, flex: 1,
+    fontSize: 12, fontWeight: '600', color: colors.text,
+  },
+  toolCardDetail: {
+    fontSize: 12, fontWeight: '400', color: colors.textMuted,
     fontFamily: font.mono,
+  },
+  // "Open in Memory" link — navigates to the note's markdown screen / graph.
+  toolOpenLink: {
+    flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingVertical: 2, paddingHorizontal: 6,
+    borderRadius: radius.sm,
+    backgroundColor: colors.accentSoft,
+  },
+  toolOpenLinkText: {
+    fontSize: 10, fontWeight: '600', color: colors.accent,
+    letterSpacing: 0.3,
   },
   toolStatusText: {
     fontSize: 10, fontWeight: '500', letterSpacing: 0.5,

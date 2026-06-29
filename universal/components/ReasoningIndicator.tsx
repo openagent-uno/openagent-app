@@ -6,23 +6,26 @@
  * flag is set — driven by the transient ``reasoning`` wire frame (see
  * [[common/types.ts]] ServerMessage + [[stores/chat.ts]]).
  *
- * Web rides CSS keyframes (see theme.ts ``.oa-reasoning``): a cyan
- * gradient shimmer sweeps across the "Reasoning" wordmark via
- * ``background-clip: text`` while three trailing dots pulse on a stagger.
+ * Animation is driven by ``requestAnimationFrame`` + state, NOT CSS and
+ * NOT the Animated API. Two things ruled those out in this app's
+ * react-native-web build (both verified live in-browser): the
+ * ``className`` prop is never forwarded to the DOM (so CSS keyframes can't
+ * attach — the legacy ``.oa-pulse`` dot is dead too), and the JS-driver
+ * ``Animated`` value stays pinned at its initial value (never ticks). rAF
+ * exists on web and native, re-renders are cheap for a ~9-glyph inline
+ * cue, and it animates identically everywhere.
  *
- * Native has no CSS animations, so it runs the equivalent with the RN
- * ``Animated`` API — a breathing opacity on the label plus three
- * sequentially-pulsing dots — matching the Skeleton.tsx / SoundWaves.tsx
- * convention (no reanimated worklets needed for a small inline cue).
- *
- * Kept small/inline so it slots straight into the MessageList status row.
+ * Effect: a bright crest sweeps across the "Reasoning" wordmark
+ * glyph-by-glyph (a shimmer wave) while three trailing dots ride the same
+ * crest — brightening, rising and scaling as it passes. Cyan + Geist Mono.
  */
 
-import { useEffect, useRef } from 'react';
-import { Animated, Platform, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useRef, useState } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 import { colors, font } from '../theme';
 
-const isWeb = Platform.OS === 'web';
+const PERIOD_MS = 1150;   // one full left→right sweep
+const WINDOW = 0.32;      // how wide the bright crest is (fraction of the row)
 const DOTS = 3;
 
 interface ReasoningIndicatorProps {
@@ -30,76 +33,62 @@ interface ReasoningIndicatorProps {
   label?: string;
 }
 
+/** Triangular bump in [0,1]: 1 at the crest, 0 once |Δ| ≥ WINDOW.
+ *  ``pos`` and ``phase`` are both in [0,1]; the distance wraps so the
+ *  crest re-enters from the left seamlessly. */
+function intensity(pos: number, phase: number): number {
+  let d = Math.abs(pos - phase);
+  if (d > 0.5) d = 1 - d; // wrap-around distance
+  return d >= WINDOW ? 0 : 1 - d / WINDOW;
+}
+
 export default function ReasoningIndicator({ label = 'Reasoning' }: ReasoningIndicatorProps) {
-  // Native breathing/pulse drivers. On web these stay idle — the CSS
-  // shimmer/keyframes (theme.ts) drive the animation instead.
-  const breath = useRef(new Animated.Value(0.55)).current;
-  const dots = useRef(Array.from({ length: DOTS }, () => new Animated.Value(0.25))).current;
+  const letters = label.split('');
+  const slots = letters.length + DOTS; // letters + dots share one travelling crest
+  const [phase, setPhase] = useState(0);
+  const raf = useRef<number | null>(null);
 
   useEffect(() => {
-    if (isWeb) return;
-    // Label: a slow breathing opacity so the word "feels alive" without a
-    // hard blink.
-    const breathLoop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(breath, { toValue: 1, duration: 720, useNativeDriver: true }),
-        Animated.timing(breath, { toValue: 0.55, duration: 720, useNativeDriver: true }),
-      ]),
-    );
-    // Dots: each ramps up then down, offset by a fixed delay so they ripple
-    // left→right instead of pulsing in lockstep. The trailing delay keeps the
-    // total loop length identical across dots so the phase offset holds.
-    const dotLoops = dots.map((v, i) =>
-      Animated.loop(
-        Animated.sequence([
-          Animated.delay(i * 180),
-          Animated.timing(v, { toValue: 1, duration: 420, useNativeDriver: true }),
-          Animated.timing(v, { toValue: 0.25, duration: 420, useNativeDriver: true }),
-          Animated.delay((DOTS - 1 - i) * 180),
-        ]),
-      ),
-    );
-    breathLoop.start();
-    dotLoops.forEach((l) => l.start());
-    return () => {
-      breathLoop.stop();
-      dotLoops.forEach((l) => l.stop());
+    let start: number | null = null;
+    const tick = (ts: number) => {
+      if (start == null) start = ts;
+      setPhase((((ts - start) % PERIOD_MS) / PERIOD_MS));
+      raf.current = requestAnimationFrame(tick);
     };
-  }, [breath, dots]);
-
-  if (isWeb) {
-    return (
-      <View style={styles.row} accessibilityRole="text" accessibilityLabel="Reasoning">
-        <Text
-          style={styles.label}
-          // @ts-ignore — web-only shimmer class (theme.ts)
-          className="oa-reasoning"
-        >
-          {label}
-        </Text>
-        <View style={styles.dots}>
-          {Array.from({ length: DOTS }).map((_, i) => (
-            <View
-              key={i}
-              style={styles.dot}
-              // @ts-ignore — web-only staggered pulse (theme.ts)
-              className="oa-reasoning-dot"
-            />
-          ))}
-        </View>
-      </View>
-    );
-  }
+    raf.current = requestAnimationFrame(tick);
+    return () => {
+      if (raf.current != null) cancelAnimationFrame(raf.current);
+    };
+  }, []);
 
   return (
     <View style={styles.row} accessibilityRole="text" accessibilityLabel="Reasoning">
-      <Animated.Text style={[styles.label, styles.labelNative, { opacity: breath }]}>
-        {label}
-      </Animated.Text>
+      <View style={styles.word}>
+        {letters.map((ch, i) => {
+          const k = intensity(i / (slots - 1), phase);
+          return (
+            <Text key={i} style={[styles.letter, { opacity: 0.4 + 0.6 * k }]}>
+              {ch}
+            </Text>
+          );
+        })}
+      </View>
       <View style={styles.dots}>
-        {dots.map((v, i) => (
-          <Animated.View key={i} style={[styles.dot, { opacity: v }]} />
-        ))}
+        {Array.from({ length: DOTS }).map((_, d) => {
+          const k = intensity((letters.length + d) / (slots - 1), phase);
+          return (
+            <View
+              key={d}
+              style={[
+                styles.dot,
+                {
+                  opacity: 0.3 + 0.7 * k,
+                  transform: [{ translateY: -4 * k }, { scale: 0.8 + 0.45 * k }],
+                },
+              ]}
+            />
+          );
+        })}
       </View>
     </View>
   );
@@ -107,20 +96,16 @@ export default function ReasoningIndicator({ label = 'Reasoning' }: ReasoningInd
 
 const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: 7 },
-  label: {
+  word: { flexDirection: 'row', alignItems: 'baseline' },
+  letter: {
     fontSize: 13,
     fontFamily: font.mono,
     letterSpacing: 0.6,
-    // On web the .oa-reasoning class overrides this with a clipped gradient;
-    // it remains the fallback colour if the stylesheet hasn't injected yet.
     color: colors.primary,
   },
-  // Native can't clip a gradient to text, so use the softer cyan accent and
-  // let the breathing opacity carry the motion.
-  labelNative: { color: colors.primaryMuted },
-  dots: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  dots: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 1 },
   dot: {
-    width: 4, height: 4, borderRadius: 2,
+    width: 5, height: 5, borderRadius: 2.5,
     backgroundColor: colors.primary,
   },
 });

@@ -366,6 +366,12 @@ const TOOL_SEARCH_DISPATCHER = 'tool_search_call_tool';
 export interface EffectiveTool {
   /** The real tool the agent invoked (unwrapped from the dispatcher). */
   tool_name: string;
+  /** The MCP server the real tool lives on, when the call went through the
+   *  deferred-tool dispatcher (``tool_search_call_tool({server, …})``).
+   *  Undefined for a direct (upfront) tool call. Lets memory detection key
+   *  off the server (``vault`` / ``vault-gate``) instead of guessing from
+   *  the bare tool name. */
+  server?: string;
   /** The real tool's arguments. */
   tool_args: Record<string, any>;
   /** The tool result verbatim — the dispatcher returns the inner result. */
@@ -392,6 +398,7 @@ export function effectiveTool(t?: ToolInfo): EffectiveTool | undefined {
     const res = parseToolResult(t.result);
     return {
       tool_name: innerName || name,
+      server: typeof outer.server === 'string' ? outer.server : undefined,
       tool_args: innerArgs,
       result: t.result,
       tool_call_error: t.tool_call_error,
@@ -529,6 +536,207 @@ export function runLaunchTarget(t?: ToolInfo): RunLaunchTarget | undefined {
     name: res?.name ? String(res.name) : undefined,
     status: res?.status ? String(res.status) : 'running',
   };
+}
+
+// ── Friendly tool presentation ───────────────────────────────────────
+// Raw tool names ("vault_write_note", "shell_shell_exec", the unwrapped
+// "read_note") are an implementation detail. The chip shows a human verb
+// instead — and memory-vault operations get first-class, on-brand copy
+// ("Recalling", "Memorizing", "Forgetting", …). The raw name + args stay
+// available in the expanded card body for debugging (see ToolCard).
+
+export interface ToolDisplay {
+  /** The user-facing verb shown on the chip ("Recalling", "Running command"). */
+  title: string;
+  /** Optional secondary detail after the title — the note title, file path,
+   *  or query the tool is acting on. */
+  detail?: string;
+  /** Feather icon name for the chip. */
+  icon: string;
+  /** True for memory-vault operations — drives the "open in Memory" link
+   *  affordance and the chip's accent tint. */
+  isMemory: boolean;
+}
+
+/** Whether a dispatcher ``server`` arg names the memory vault. */
+function isMemoryServer(s?: string): boolean {
+  if (!s) return false;
+  const x = s.toLowerCase();
+  return x === 'vault' || x.startsWith('vault') || x.includes('memory');
+}
+
+/** Reduce a tool name to its bare operation by stripping the MCP server
+ *  prefix, so the upfront-prefixed ``vault_read_note`` and the
+ *  dispatcher-unwrapped ``read_note`` map to the same op. */
+function memoryOp(name: string): string {
+  return name
+    .toLowerCase()
+    .replace(/^vault[_-]gate[_-]/, '')
+    .replace(/^vaultgate[_-]/, '')
+    .replace(/^vault[_-]/, '')
+    .replace(/^memory[_-]search[_-]/, '');
+}
+
+// Memory op → friendly verb + icon. Keyed by the bare op (see ``memoryOp``);
+// a few ops carry aliases (obsidian-MCP raw name vs the vault-gate name).
+const MEMORY_VERBS: Record<string, { title: string; icon: string }> = {
+  read_note: { title: 'Recalling', icon: 'book-open' },
+  read_multiple_notes: { title: 'Recalling', icon: 'book-open' },
+  get_frontmatter: { title: 'Reading memory details', icon: 'info' },
+  write_note: { title: 'Memorizing', icon: 'edit-3' },
+  patch_note: { title: 'Updating memory', icon: 'edit-3' },
+  update_frontmatter: { title: 'Updating memory', icon: 'edit-3' },
+  update_user_memory: { title: 'Updating memory', icon: 'edit-3' },
+  validate_note: { title: 'Checking memory', icon: 'check-circle' },
+  delete_note: { title: 'Forgetting', icon: 'trash-2' },
+  move_note: { title: 'Reorganizing memory', icon: 'shuffle' },
+  rename_note: { title: 'Renaming memory', icon: 'shuffle' },
+  search_notes: { title: 'Searching memory', icon: 'search' },
+  search: { title: 'Searching memory', icon: 'search' },
+  list_notes: { title: 'Browsing memory', icon: 'list' },
+  list_all_tags: { title: 'Memory tags', icon: 'tag' },
+  manage_tags: { title: 'Tagging memory', icon: 'tag' },
+  get_backlinks: { title: 'Tracing memory links', icon: 'link-2' },
+  backlinks: { title: 'Tracing memory links', icon: 'link-2' },
+  get_vault_stats: { title: 'Memory stats', icon: 'bar-chart-2' },
+  stats: { title: 'Memory stats', icon: 'bar-chart-2' },
+  gate: { title: 'Auditing memory', icon: 'shield' },
+  doctor: { title: 'Healing memory', icon: 'activity' },
+  dream: { title: 'Memory maintenance', icon: 'moon' },
+  init: { title: 'Setting up memory', icon: 'database' },
+  regenerate_derived: { title: 'Rebuilding memory index', icon: 'refresh-cw' },
+};
+
+/** Whether a tool call is a memory-vault operation (by server or name). */
+export function isMemoryTool(t?: ToolInfo): boolean {
+  const eff = effectiveTool(t);
+  if (!eff) return false;
+  const name = eff.tool_name.toLowerCase();
+  return (
+    isMemoryServer(eff.server)
+    || name === 'update_user_memory'
+    || /(^|[_-])(vault|note)(s)?([_-]|$)/.test(name)
+    || memoryOp(eff.tool_name) in MEMORY_VERBS
+  );
+}
+
+// General (non-memory) tools: a small verb map keyed by a substring of the
+// bare op, plus a Title-Case fallback. Keeps common tools readable without
+// an exhaustive registry. Order matters — first match wins.
+const GENERAL_VERBS: { test: RegExp; title: string; icon: string }[] = [
+  { test: /(^|_)(bash|shell|exec|run_command|terminal)/, title: 'Running command', icon: 'terminal' },
+  { test: /(web[_-]?search|search_web)/, title: 'Searching the web', icon: 'globe' },
+  { test: /(fetch|http|browse|navigate|open_url|web)/, title: 'Browsing the web', icon: 'globe' },
+  { test: /(read_file|read_multiple_files|^read$|cat_file|view_file)/, title: 'Reading file', icon: 'file-text' },
+  { test: /(write_file|^write$|str_replace|edit_file|^edit$|apply_patch|create_file)/, title: 'Editing file', icon: 'edit-3' },
+  { test: /(list_dir|list_files|^ls$|glob|find_files)/, title: 'Listing files', icon: 'folder' },
+  { test: /(grep|ripgrep|search_code|search_files)/, title: 'Searching files', icon: 'search' },
+  { test: /(send_file|send_message|messaging|notify|email)/, title: 'Sending message', icon: 'send' },
+  { test: /(image|media|generate|render|draw)/, title: 'Generating media', icon: 'image' },
+];
+
+/** Title-Case a snake/kebab tool name as a last-resort label. */
+function titleCase(name: string): string {
+  const words = name.replace(/[_-]+/g, ' ').trim();
+  if (!words) return 'Tool';
+  return words.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** Extract the most relevant arg value to show as the chip's detail line. */
+function detailFromArgs(op: string, args: Record<string, any>): string | undefined {
+  // Memory: the note this op targets (shown by basename, sans .md).
+  for (const k of ['new_path', 'path', 'note_path', 'filepath', 'filename']) {
+    const v = args[k];
+    if (typeof v === 'string' && v.trim()) return noteTitle(v);
+  }
+  // Searches / queries.
+  for (const k of ['query', 'q', 'pattern', 'search', 'text']) {
+    const v = args[k];
+    if (typeof v === 'string' && v.trim()) return `“${v.length > 48 ? v.slice(0, 48) + '…' : v}”`;
+  }
+  // The agent's own-memory update carries a free-text task.
+  if (op === 'update_user_memory') {
+    const v = args.task ?? args.instruction;
+    if (typeof v === 'string' && v.trim()) return v.length > 48 ? v.slice(0, 48) + '…' : v;
+  }
+  return undefined;
+}
+
+/** Friendly label + icon for a tool chip. Memory-vault ops get bespoke
+ *  verbs; everything else gets a common-verb match or a Title-Case fallback. */
+export function toolDisplay(t?: ToolInfo): ToolDisplay {
+  const eff = effectiveTool(t);
+  if (!eff || !eff.tool_name) return { title: 'Tool', icon: 'tool', isMemory: false };
+  const args = eff.tool_args || {};
+  const memory = isMemoryTool(t);
+  if (memory) {
+    const op = memoryOp(eff.tool_name);
+    const verb = MEMORY_VERBS[op] || { title: 'Memory', icon: 'database' };
+    return {
+      title: verb.title,
+      detail: detailFromArgs(op, args),
+      icon: verb.icon,
+      isMemory: true,
+    };
+  }
+  const lower = eff.tool_name.toLowerCase();
+  const match = GENERAL_VERBS.find((g) => g.test.test(lower));
+  if (match) {
+    return { title: match.title, detail: detailFromArgs('', args), icon: match.icon, isMemory: false };
+  }
+  // Fallback: humanize the raw name, noting the MCP server when dispatched.
+  const base = titleCase(eff.tool_name);
+  return {
+    title: eff.server ? `${base} · ${titleCase(eff.server)}` : base,
+    icon: 'tool',
+    isMemory: false,
+  };
+}
+
+/** The basename of a note path without its ``.md`` extension — the label
+ *  shown for a memory op and the link target's display. */
+function noteTitle(path: string): string {
+  const base = path.split('/').pop() || path;
+  return base.replace(/\.md$/i, '');
+}
+
+// ── Memory-vault navigation target ───────────────────────────────────
+// A memory tool chip deep-links into the Memory tab: a single-note op opens
+// that note's markdown screen (the same destination as clicking its graph
+// node); a search / list / maintenance op opens the memory graph. Mirrors
+// the DelegationCard / RunLaunchCard navigable-chip pattern.
+
+export type MemoryTarget =
+  | { kind: 'note'; path: string; title: string }
+  | { kind: 'graph' };
+
+export function memoryTarget(t?: ToolInfo): MemoryTarget | undefined {
+  if (!isMemoryTool(t)) return undefined;
+  const eff = effectiveTool(t)!;
+  const args = eff.tool_args || {};
+  // Prefer the post-move path so a rename links to the note's new home.
+  for (const k of ['new_path', 'path', 'note_path', 'filepath', 'filename']) {
+    const v = args[k];
+    if (typeof v === 'string' && v.trim()) return noteTargetFor(v.trim());
+  }
+  // read_multiple_notes takes an array; link to the first if present.
+  const paths = args.paths;
+  if (Array.isArray(paths) && typeof paths[0] === 'string' && paths[0].trim()) {
+    return noteTargetFor(paths[0].trim());
+  }
+  // No specific note (search / list / stats / maintenance) — open the graph.
+  return { kind: 'graph' };
+}
+
+/** Build a note target, normalizing the vault-relative path to match the
+ *  graph node id / note route (which always carry the ``.md`` extension —
+ *  see the server's ``/api/vault/graph`` ``rel`` and ``/api/vault/notes``).
+ *  The model occasionally drops the extension; append it so the deep link
+ *  still resolves. */
+function noteTargetFor(raw: string): MemoryTarget {
+  const last = raw.split('/').pop() || raw;
+  const path = last.includes('.') ? raw : `${raw}.md`;
+  return { kind: 'note', path, title: noteTitle(path) };
 }
 
 /** Who authored a message. ``human`` carries a network handle/display so the
