@@ -65,9 +65,12 @@ export interface MessageComposerProps {
   onPickFile?: () => void;             // omit → no paperclip button
   onSend: () => void;
   disabled?: boolean;                  // disables send (e.g. session.isProcessing)
-  /** When true (session is processing), the Send button morphs into a
-   *  Stop button that calls ``onStop`` instead. ``disabled`` should be
-   *  true alongside this — keeps the Enter handler from firing too. */
+  /** When true (session is processing), the trailing Send button morphs
+   *  into a Stop button that calls ``onStop``. The input itself stays
+   *  interactive: the user can type a steer message and press Enter to
+   *  send it mid-turn (the server coalesces it into the running turn).
+   *  Do NOT also pass ``disabled`` while processing — that would re-block
+   *  the Enter-to-steer path. */
   processing?: boolean;
   onStop?: () => void;
   /** Optional recall handlers — wired to Up Arrow on empty composer and
@@ -228,11 +231,12 @@ export default function MessageComposer({
 
     if (e.key !== 'Enter' || e.shiftKey) return;
     e.preventDefault();
-    // While ``disabled`` (session is processing) or there is literally
-    // nothing to send, eat the Enter instead of firing onSend — the
-    // earlier behaviour would queue a no-op WS frame on every keystroke
-    // and re-mark the session as Thinking…, which read as a UI freeze
-    // when the user mashed Enter after attaching files.
+    // Eat the Enter only when there is genuinely nothing to send (empty
+    // composer / unsettled uploads) — that avoids queuing a no-op WS
+    // frame and re-marking the session as Thinking… on every keystroke.
+    // A non-empty Enter DOES fire onSend even while the agent is
+    // processing: that is a steer / send-while-busy message, which the
+    // server coalesces into the in-flight turn (vision §2).
     if (!canSend) return;
     onSend();
   }, [onSend, canSend, onRecallPrev, onRecallNext, input, slashMatches, slashActive, acceptSlash, onInputChange]);
@@ -475,7 +479,7 @@ export default function MessageComposer({
           </View>
           {processing && onStop ? (
             <TouchableOpacity
-              style={[styles.sendBtn, styles.stopBtn]}
+              style={styles.sendBtn}
               onPress={onStop}
               accessibilityLabel="Stop generating"
               // @ts-ignore — web press affordance
@@ -647,9 +651,6 @@ const styles = StyleSheet.create({
     alignItems: 'center', justifyContent: 'center',
   },
   sendBtnDisabled: { opacity: 0.25 },
-  stopBtn: {
-    backgroundColor: colors.error,
-  },
   composerHintRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 16, marginTop: 6,

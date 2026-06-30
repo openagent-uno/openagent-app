@@ -29,10 +29,13 @@ import MessageComposer, { type PendingFile, type SlashCommand } from '../../comp
 import MessageList from '../../components/MessageList';
 import CommandPalette, { type PaletteEntry } from '../../components/CommandPalette';
 import BrandLogo from '../../components/BrandLogo';
-import { useHeaderInset, HeaderBack, HeaderMenu } from '../../components/screenHeader';
+import { useHeaderInset, HeaderBack, HeaderMenu, HeaderRight } from '../../components/screenHeader';
+import PopupMenu from '../../components/PopupMenu';
+import { NO_DRAG } from '../../components/DragRegion';
 import { goBack } from '../../services/windows';
 import { useNavHistory } from '../../stores/navHistory';
 import { Skeleton, SkeletonLines } from '../../components/Skeleton';
+import { useConfirm } from '../../components/ConfirmDialog';
 import { uploadFile, guessMimeType, listDbModels } from '../../services/api';
 import type { ModelEntry } from '../../../common/types';
 
@@ -73,6 +76,7 @@ export default function ChatScreen() {
   const createSession = useChat((s) => s.createSession);
   const setActiveSession = useChat((s) => s.setActiveSession);
   const removeSession = useChat((s) => s.removeSession);
+  const confirm = useConfirm();
   const renameSession = useChat((s) => s.renameSession);
   const addUserMessage = useChat((s) => s.addUserMessage);
   const editUserMessage = useChat((s) => s.editUserMessage);
@@ -81,6 +85,26 @@ export default function ChatScreen() {
   const setLlmPin = useChat((s) => s.setLlmPin);
   const setSystemPrompt = useChat((s) => s.setSystemPrompt);
   const hydrateFromServer = useChat((s) => s.hydrateFromServer);
+  // Delete a chat session behind a confirmation dialog (vision §16: sessions
+  // are durable — removal is an explicit, confirmed action). The server
+  // cascades the delete to every sub-agent session this chat spawned, so the
+  // copy warns about it up front. Only manual chats reach this path (the
+  // affordances are gated to ``origin === 'chat'``).
+  const confirmAndRemove = useCallback(
+    async (ses: { id: string; title?: string }) => {
+      const ok = await confirm({
+        title: 'Delete chat',
+        message:
+          `Delete "${ses.title || 'this chat'}"? This permanently removes the ` +
+          'conversation and any sub-agent sessions it spawned. This cannot be undone.',
+        confirmLabel: 'Delete',
+        cancelLabel: 'Cancel',
+        confirmVariant: 'danger',
+      });
+      if (ok) removeSession(ses.id);
+    },
+    [confirm, removeSession],
+  );
   // Sidebar: apply text search, sort pinned-first then by recency
   // (last message timestamp). Voice no longer has its own session id —
   // it's integrated into the chat tab now.
@@ -338,9 +362,32 @@ export default function ChatScreen() {
         ) : (
           <HeaderMenu />
         ),
+      // Overflow menu for the open chat — same Delete action as the sidebar
+      // row, in the navigator header. Only a top-level manual chat is
+      // deletable, so a sub-agent / run view (a child session) shows none.
+      headerRight: () =>
+        activeSession && !isChildSession ? (
+          <HeaderRight>
+            <PopupMenu
+              triggerIcon="more-vertical"
+              triggerSize={18}
+              triggerColor={colors.textSecondary}
+              triggerStyle={[styles.headerMenuBtn, NO_DRAG]}
+              accessibilityLabel="Chat options"
+              items={[
+                {
+                  label: 'Delete chat',
+                  icon: 'trash-2',
+                  destructive: true,
+                  onPress: () => confirmAndRemove(activeSession),
+                },
+              ]}
+            />
+          </HeaderRight>
+        ) : null,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigation, isChildSession, parentSession?.id]);
+  }, [navigation, isChildSession, parentSession?.id, activeSession?.id, activeSession?.title]);
 
   // A freshly-spawned child session (delegation / scheduled firing / workflow
   // node) fires a ``session`` resource_event — refetch so it appears in the
@@ -665,11 +712,16 @@ export default function ChatScreen() {
     });
   }, [ws, activeSessionId, activeSession, editUserMessage]);
 
-  // Cancel an in-flight assistant turn for the active session. Server
-  // receives ``command:stop`` and halts streaming + tool execution.
+  // Cancel an in-flight assistant turn for the active session. Turns run
+  // inside a server-side StreamSession whose cancel verb is the
+  // ``interrupt`` frame (barge-in) — NOT the legacy ``command:stop``,
+  // which targets a separate, unused queue and silently does nothing.
+  // sendInterrupt routes to _cancel_active_turn so streaming + tool
+  // execution actually halt and the server emits a terminal turn so the
+  // composer un-sticks. ``reason: 'manual'`` = an explicit user stop.
   const handleStop = useCallback(() => {
     if (!ws || !activeSessionId) return;
-    ws.sendCommand('stop', activeSessionId);
+    ws.sendInterrupt(activeSessionId, 'manual');
   }, [ws, activeSessionId]);
 
   // Resend the most recent user message verbatim (with its original
@@ -1050,7 +1102,7 @@ export default function ChatScreen() {
                         { text: 'Rename', onPress: () => { setEditingSessionId(ses.id); setEditTitle(ses.title); } },
                         { text: ses.pinned ? 'Unpin' : 'Pin', onPress: () => togglePinned(ses.id) },
                         { text: 'Export as Markdown', onPress: () => exportSessionAsMarkdown(ses.id) },
-                        { text: 'Delete', style: 'destructive', onPress: () => removeSession(ses.id) },
+                        { text: 'Delete', style: 'destructive', onPress: () => confirmAndRemove(ses) },
                         { text: 'Cancel', style: 'cancel' },
                       ],
                     );
@@ -1119,13 +1171,21 @@ export default function ChatScreen() {
                   color={ses.pinned ? colors.primary : colors.textMuted}
                 />
               </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.sessionDeleteBtn}
-                onPress={() => removeSession(ses.id)}
-                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-              >
-                <Feather name="x" size={12} color={colors.textMuted} />
-              </TouchableOpacity>
+              {(!ses.origin || ses.origin === 'chat') && (
+                // Overflow menu — Delete lives behind a confirmation dialog.
+                // Offered only on manual chats, never on a sub-agent /
+                // scheduled-run / workflow row (the server rejects those).
+                <PopupMenu
+                  triggerIcon="more-horizontal"
+                  triggerSize={15}
+                  triggerColor={colors.textMuted}
+                  triggerStyle={styles.sessionDeleteBtn}
+                  accessibilityLabel={`Options for ${ses.title}`}
+                  items={[
+                    { label: 'Delete', icon: 'trash-2', destructive: true, onPress: () => confirmAndRemove(ses) },
+                  ]}
+                />
+              )}
             </View>
           );
         })}
@@ -1427,7 +1487,12 @@ export default function ChatScreen() {
               })}
               onPickFile={(Platform.OS === 'web' || isDesktop) ? handleFilePick : undefined}
               onSend={handleSend}
-              disabled={activeSession.isProcessing}
+              // Composer stays interactive while the agent is processing so
+              // the user can send a steer / send-while-busy message mid-turn
+              // (vision §2 — "fast bursts coalesced into a single turn"); the
+              // server coalesces it into the in-flight turn. Stopping is still
+              // one tap away via the Stop button (rendered while processing)
+              // and the command palette.
               recording={Platform.OS === 'web' ? recording : undefined}
               onStartRecord={startRecording}
               onStopRecord={stopRecording}
@@ -1524,6 +1589,11 @@ const styles = StyleSheet.create({
     padding: 6, marginLeft: 0,
     width: 24, height: 24,
     alignItems: 'center', justifyContent: 'center',
+  },
+  headerMenuBtn: {
+    width: 34, height: 34,
+    alignItems: 'center', justifyContent: 'center',
+    borderRadius: radius.md,
   },
   sessionPinBtn: {
     padding: 6, marginLeft: 4,

@@ -24,7 +24,7 @@
  * there is no collapsed icon-only stage.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import {
   View,
   Text,
@@ -45,6 +45,8 @@ import { useChat } from '../stores/chat';
 import { isHiddenChildSession } from '../../common/types';
 import { useActivity, type ActivityRun } from '../stores/activity';
 import { useConnection } from '../stores/connection';
+import { useConfirm } from './ConfirmDialog';
+import PopupMenu from './PopupMenu';
 import { useEvents } from '../stores/events';
 import AgentSwitcher from './AgentSwitcher';
 import BrandLogo from './BrandLogo';
@@ -88,6 +90,10 @@ interface FeedItem {
   active?: boolean;
   dotColor?: string | null;
   onPress: () => void;
+  // Set only on manual chat rows — deleting (with confirmation) a chat and
+  // the sub-agent sessions it spawned. Runs (workflow / scheduled) leave it
+  // undefined, so no delete affordance renders for them.
+  onDelete?: () => void;
 }
 
 export default function Sidebar({
@@ -290,14 +296,31 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
 
   const sessions = useChat((s) => s.sessions);
   const activeSessionId = useChat((s) => s.activeSessionId);
+  const removeSession = useChat((s) => s.removeSession);
+  const confirm = useConfirm();
+
+  // Delete a chat (and the sub-agent sessions it spawned) from the Recent
+  // feed, behind a confirmation dialog. This is the primary, always-visible
+  // surface, so the affordance lives here rather than only in the chat-screen
+  // session switcher.
+  const confirmAndRemove = useCallback(async (id: string, title: string) => {
+    const ok = await confirm({
+      title: 'Delete chat',
+      message:
+        `Delete "${title || 'this chat'}"? This permanently removes the ` +
+        'conversation and any sub-agent sessions it spawned. This cannot be undone.',
+      confirmLabel: 'Delete',
+      cancelLabel: 'Cancel',
+      confirmVariant: 'danger',
+    });
+    if (ok) removeSession(id);
+  }, [confirm, removeSession]);
 
   const workflowRuns = useActivity((s) => s.workflowRuns);
   const taskRuns = useActivity((s) => s.taskRuns);
   const filters = useActivity((s) => s.filters);
   const setFilter = useActivity((s) => s.setFilter);
   const loadActivity = useActivity((s) => s.loadActivity);
-
-  const [filterOpen, setFilterOpen] = useState(false);
 
   useEffect(() => {
     if (!isConnected) return;
@@ -329,6 +352,7 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
             router.push('/chat' as any);
             onNavigate?.();
           },
+          onDelete: () => confirmAndRemove(s.id, s.title || 'New Chat'),
         });
       }
     }
@@ -350,29 +374,17 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
       <View style={styles.recentDivider} />
       <View style={styles.recentHeader}>
         <Text style={styles.recentHeading}>Recent</Text>
-        <Pressable
-          onPress={() => setFilterOpen((v) => !v)}
-          hitSlop={6}
-          style={[styles.filterBtn, (filterOpen || !allOn) && styles.filterBtnActive]}
-          accessibilityRole="button"
+        {/* Same shared PopupMenu as the delete actions — here hosting the
+            multi-select activity filter (toggles stay open; dismiss on scrim). */}
+        <PopupMenu
+          triggerIcon="sliders"
+          triggerSize={13}
+          triggerColor={!allOn ? colors.accent : colors.textMuted}
+          triggerStyle={[styles.filterBtn, !allOn && styles.filterBtnActive]}
           accessibilityLabel="Filter recent activity"
-          // @ts-ignore web hover
-          {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
+          menuWidth={176}
         >
-          <Feather name="sliders" size={13} color={filterOpen || !allOn ? colors.accent : colors.textMuted} />
-        </Pressable>
-      </View>
-
-      {filterOpen && (
-        <Pressable style={styles.filterScrim} onPress={() => setFilterOpen(false)} />
-      )}
-      {filterOpen && (
-        <View
-          // @ts-ignore web glass backdrop
-          style={[styles.filterMenu, glassStyle]}
-          {...(Platform.OS === 'web' ? { className: 'oa-fade-in' } : {})}
-        >
-          {FILTERS.map((f) => (
+          {() => FILTERS.map((f) => (
             <Pressable
               key={f.key}
               onPress={() => setFilter(f.key, !filters[f.key])}
@@ -391,8 +403,8 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
               />
             </Pressable>
           ))}
-        </View>
-      )}
+        </PopupMenu>
+      </View>
 
       <ScrollView style={styles.recentScroll} contentContainerStyle={styles.recentContent} showsVerticalScrollIndicator={false}>
         {feed.length === 0 ? (
@@ -415,6 +427,18 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
               </Text>
               {it.ts ? <Text style={styles.feedMeta}>{relTime(it.ts)}</Text> : null}
               {it.dotColor ? <View style={[styles.feedDot, { backgroundColor: it.dotColor }]} /> : null}
+              {it.onDelete ? (
+                <PopupMenu
+                  triggerIcon="more-horizontal"
+                  triggerSize={15}
+                  triggerColor={colors.textMuted}
+                  triggerStyle={styles.feedMenuBtn}
+                  accessibilityLabel={`Options for ${it.label}`}
+                  items={[
+                    { label: 'Delete', icon: 'trash-2', destructive: true, onPress: it.onDelete },
+                  ]}
+                />
+              ) : null}
             </Pressable>
           ))
         )}
@@ -489,12 +513,6 @@ function relTime(ms: number): string {
   if (w < 5) return `${w}w`;
   return `${Math.floor(d / 30)}mo`;
 }
-
-// The sidebar fill (colors.sidebar) is ~94% opaque, so a backdrop-filter
-// blur here was nearly invisible while forcing the compositor to maintain
-// a permanent full-height blur layer (the sidebar is always mounted).
-// Dropped — solid fill reads identically and costs nothing.
-const glassStyle = {} as any;
 
 const styles = StyleSheet.create({
   root: {
@@ -572,24 +590,7 @@ const styles = StyleSheet.create({
   filterBtn: { width: 24, height: 24, alignItems: 'center', justifyContent: 'center', borderRadius: radius.sm, borderWidth: 1, borderColor: 'transparent' },
   filterBtnActive: { borderColor: colors.border, backgroundColor: colors.primaryLight },
 
-  // Filter dropdown
-  filterScrim: { position: 'absolute', top: 0, left: -spacing.md, right: -spacing.md, bottom: -spacing.lg, zIndex: 10 },
-  filterMenu: {
-    position: 'absolute',
-    top: 26,
-    right: 0,
-    width: 168,
-    zIndex: 11,
-    backgroundColor: colors.surfaceElevated,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    paddingVertical: 4,
-    shadowColor: colors.shadowColorStrong,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 1,
-    shadowRadius: 20,
-  },
+  // Filter dropdown rows (hosted in the shared PopupMenu)
   filterItem: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.md, paddingVertical: 8, borderRadius: radius.sm },
   filterItemText: { flex: 1, fontFamily: font.sans, fontSize: 12.5, color: colors.text },
 
@@ -611,6 +612,11 @@ const styles = StyleSheet.create({
   feedTextActive: { color: colors.text, fontWeight: '600' },
   feedMeta: { fontFamily: font.mono, fontSize: 9.5, color: colors.textMuted },
   feedDot: { width: 6, height: 6, borderRadius: radius.pill },
+  feedMenuBtn: {
+    width: 22, height: 22, marginLeft: 2,
+    alignItems: 'center', justifyContent: 'center',
+    borderRadius: radius.sm,
+  },
 
   // Footer (icons only)
   footer: { marginTop: 'auto' },

@@ -1,15 +1,17 @@
 /**
  * Shared color palette and design tokens — JARVIS HUD theme.
  *
- * Single dark sci-fi palette: near-black canvas, cyan accents, dotted
- * grid background, translucent glass panels. There is no light mode —
- * the previous editorial / warm-paper theme has been removed along
- * with the toggle UI; this is a one-theme app.
+ * Two palettes share one token set: the default dark sci-fi look
+ * (near-black canvas, cyan accents, dotted grid, glass panels) and a
+ * light counterpart (cool-white canvas, the same cyan accent identity,
+ * ink text). The active palette is chosen by `getThemeMode()` and
+ * switched live with `setTheme()` — see Settings → Appearance.
  *
  * On the web/Electron renderer, scalar color tokens are exposed as CSS
  * custom-property references (`var(--oa-<key>)`) so component styles
- * stay value-stable while still letting us tweak the palette in one
- * place. On native, `colors` holds raw hex values.
+ * stay value-stable across a theme switch — flipping the mode only
+ * re-writes the `:root` custom properties, and every style repaints in
+ * place. On native, `colors` holds raw hex values for the active mode.
  */
 
 const STYLE_ELEMENT_ID = 'oa-theme-vars';
@@ -72,10 +74,14 @@ export interface Palette {
   orbCore: string;
   orbRing: string;
   orbHalo: string;
+  /** Frosted-glass tint behind a `backdrop-filter` blur — shared by the
+   *  nav header and every floating panel. Theme-aware so glass reads
+   *  dark on the JARVIS canvas and light on the light canvas. */
+  glassBg: string;
 }
 
-/** Single JARVIS dark palette. */
-export const jarvisColors: Palette = {
+/** JARVIS dark palette — the default mode. */
+export const darkColors: Palette = {
   primary: '#3FC8FF',
   primaryEnd: '#7FE0FF',
   primaryLight: 'rgba(63, 200, 255, 0.14)',
@@ -149,16 +155,151 @@ export const jarvisColors: Palette = {
   orbCore: '#050810',
   orbRing: '#3FC8FF',
   orbHalo: 'rgba(63, 200, 255, 0.60)',
+  glassBg: 'rgba(8, 12, 22, 0.42)',
 };
 
-const SCALAR_KEYS = (Object.keys(jarvisColors) as (keyof Palette)[])
-  .filter((k) => !Array.isArray((jarvisColors as any)[k]));
+/** Back-compat alias — the dark palette is the historical JARVIS look.
+ *  Kept so existing imports of `jarvisColors` keep resolving. */
+export const jarvisColors: Palette = darkColors;
+
+/** Light palette — a cool-white counterpart that keeps the cyan accent
+ *  identity. Same token keys as `darkColors`, deeper cyan for contrast
+ *  on a light canvas and ink-blue text. */
+export const lightColors: Palette = {
+  primary: '#0892CE',
+  primaryEnd: '#39B7EA',
+  primaryLight: 'rgba(8, 146, 206, 0.10)',
+  primaryMuted: '#2AA3DC',
+  primarySoft: 'rgba(8, 146, 206, 0.16)',
+
+  bg: '#F3F6FB',
+  surface: 'rgba(255, 255, 255, 0.80)',
+  surfaceElevated: '#FFFFFF',
+  sidebar: 'rgba(247, 250, 253, 0.92)',
+  border: 'rgba(18, 50, 80, 0.12)',
+  borderLight: 'rgba(18, 50, 80, 0.07)',
+  borderStrong: 'rgba(8, 146, 206, 0.42)',
+  inputBg: 'rgba(255, 255, 255, 0.90)',
+  hover: 'rgba(8, 146, 206, 0.08)',
+
+  text: '#0E1B28',
+  textSecondary: '#44566B',
+  textMuted: '#8090A2',
+  textInverse: '#FFFFFF',
+
+  success: '#0F9A6A',
+  error: '#E0455A',
+  warning: '#D98A1F',
+
+  successSoft: 'rgba(15, 154, 106, 0.14)',
+  errorSoft: 'rgba(224, 69, 90, 0.12)',
+  errorBorder: 'rgba(224, 69, 90, 0.40)',
+  mutedSoft: 'rgba(68, 86, 107, 0.10)',
+
+  graphBg: '#F3F6FB',
+  graphEdge: 'rgba(8, 146, 206, 0.34)',
+  graphLabel: '#44566B',
+  graphRing: '#0892CE',
+  graphNodeMuted: '#C3CEDB',
+
+  // Same cool spectrum, tuned a shade deeper so nodes/labels read on
+  // a light canvas.
+  graph: [
+    '#0892CE',
+    '#39B7EA',
+    '#1C7FB8',
+    '#6A5BE0',
+    '#1FA2D6',
+    '#0F9A6A',
+    '#7C5CE6',
+    '#5878A6',
+    '#AEBCCC',
+    '#E0455A',
+  ],
+
+  codeBg: 'rgba(240, 244, 249, 0.92)',
+  codeText: '#1A2A3A',
+  codeKeyword: '#0892CE',
+  codeBorder: 'rgba(18, 50, 80, 0.12)',
+
+  shadowColor: 'rgba(18, 38, 63, 0.12)',
+  shadowColorStrong: 'rgba(18, 38, 63, 0.22)',
+
+  accent: '#0892CE',
+  accentSoft: 'rgba(8, 146, 206, 0.18)',
+  accentGlow: 'rgba(8, 146, 206, 0.34)',
+  accentDim: 'rgba(8, 146, 206, 0.24)',
+  gridLine: 'rgba(18, 90, 150, 0.05)',
+  gridDot: 'rgba(18, 90, 150, 0.10)',
+  tickDim: 'rgba(40, 90, 130, 0.34)',
+  tickActive: '#0892CE',
+  panelBg: 'rgba(255, 255, 255, 0.70)',
+  panelBgSolid: '#FFFFFF',
+  panelRail: '#0892CE',
+  scanLine: 'rgba(8, 146, 206, 0.45)',
+  orbCore: '#FFFFFF',
+  orbRing: '#0892CE',
+  orbHalo: 'rgba(8, 146, 206, 0.40)',
+  glassBg: 'rgba(255, 255, 255, 0.55)',
+};
+
+export type ThemeMode = 'light' | 'dark';
+
+/** All palettes keyed by mode. */
+export const palettes: Record<ThemeMode, Palette> = {
+  dark: darkColors,
+  light: lightColors,
+};
+
+const THEME_STORAGE_KEY = 'oa-theme-mode-v1';
+
+function loadInitialMode(): ThemeMode {
+  if (isWeb && typeof window !== 'undefined' && window.localStorage) {
+    try {
+      const saved = window.localStorage.getItem(THEME_STORAGE_KEY);
+      if (saved === 'light' || saved === 'dark') return saved;
+    } catch {
+      // private mode / blocked storage — fall through to default
+    }
+  }
+  return 'dark';
+}
+
+let activeMode: ThemeMode = loadInitialMode();
+
+function activePalette(): Palette {
+  return palettes[activeMode];
+}
+
+/** Current theme mode. */
+export function getThemeMode(): ThemeMode {
+  return activeMode;
+}
+
+const themeListeners = new Set<(mode: ThemeMode) => void>();
+
+/** Subscribe to theme changes. Returns an unsubscribe fn. */
+export function subscribeTheme(fn: (mode: ThemeMode) => void): () => void {
+  themeListeners.add(fn);
+  return () => {
+    themeListeners.delete(fn);
+  };
+}
+
+// Token keys derived from the dark palette (both palettes share keys).
+const SCALAR_KEYS = (Object.keys(darkColors) as (keyof Palette)[])
+  .filter((k) => !Array.isArray((darkColors as any)[k]));
 
 function buildColors(): Palette {
+  const src = activePalette();
   const out: any = {};
-  for (const key of Object.keys(jarvisColors)) {
-    const v = (jarvisColors as any)[key];
+  for (const key of Object.keys(src)) {
+    const v = (src as any)[key];
     if (isWeb && SCALAR_KEYS.includes(key as any)) {
+      // On web every scalar resolves through a CSS custom property, so
+      // `colors` is mode-agnostic — switching themes only rewrites the
+      // `:root` vars (see `ensureCssVariables`). Array tokens (graph)
+      // keep raw values since they're consumed by canvas/SVG.
       out[key] = `var(--oa-${key})`;
     } else {
       out[key] = v;
@@ -175,9 +316,13 @@ export const colors: Palette = buildColors();
  * and saturation read identically across all of them. Apply
  * `glassSurface.backgroundColor` always and `glassSurface.webFilter`
  * (backdrop-filter) only on web.
+ *
+ * The tint resolves through `colors.glassBg` — `var(--oa-glassBg)` on
+ * web — so glass panels follow the active theme (dark tint on the
+ * JARVIS canvas, light tint on the light canvas) and repaint on switch.
  */
 export const glassSurface = {
-  backgroundColor: 'rgba(8, 12, 22, 0.42)',
+  backgroundColor: colors.glassBg,
   webFilter: 'blur(2.6px) saturate(140%)',
 } as const;
 
@@ -204,7 +349,7 @@ function ensureGlobalCss(): void {
     document.head.appendChild(el);
   }
   el.textContent = `
-    html, body, #root { background: #050810 !important; color: var(--oa-text); margin: 0; min-height: 100vh; }
+    html, body, #root { background: var(--oa-bg) !important; color: var(--oa-text); margin: 0; min-height: 100vh; }
     body { font-family: 'Rajdhani', 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
       -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
       letter-spacing: 0.005em; }
@@ -337,11 +482,41 @@ function ensureCssVariables(): void {
     el.id = STYLE_ELEMENT_ID;
     document.head.appendChild(el);
   }
+  const pal = activePalette();
   const lines = SCALAR_KEYS
-    .map((k) => `  --oa-${k}: ${(jarvisColors as any)[k]};`)
+    .map((k) => `  --oa-${k}: ${(pal as any)[k]};`)
     .join('\n');
   el.textContent = `:root {\n${lines}\n}`;
-  document.documentElement.setAttribute('data-theme', 'dark');
+  document.documentElement.setAttribute('data-theme', activeMode);
+}
+
+/**
+ * Switch the active theme mode. On web this only rewrites the `:root`
+ * CSS custom properties, so every component that styles through
+ * `colors` (i.e. `var(--oa-*)`) repaints instantly with no re-render.
+ * On native it mutates the shared `colors` object in place; consumers
+ * pick up the new values on their next render (drive that re-render via
+ * the theme store / a `subscribeTheme` listener). Persists to
+ * localStorage so the choice survives a reload.
+ */
+export function setTheme(mode: ThemeMode): void {
+  if (mode === activeMode) return;
+  activeMode = mode;
+  if (isWeb && typeof window !== 'undefined' && window.localStorage) {
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, mode);
+    } catch {
+      // quota / private mode — ignore, the in-memory switch still works
+    }
+  }
+  if (isWeb) {
+    ensureCssVariables();
+  } else {
+    // Native holds raw hex — mutate in place so already-imported
+    // `colors` references see the new palette.
+    Object.assign(colors as any, buildColors());
+  }
+  themeListeners.forEach((fn) => fn(mode));
 }
 
 ensureFonts();
@@ -353,7 +528,7 @@ ensureGlobalCss();
  *  2D `fillStyle`/`strokeStyle`, gradient stop math, etc.). DOM styles
  *  should keep using `colors` so they remain CSS-var-driven. */
 export function getRawColors(): Palette {
-  return jarvisColors;
+  return activePalette();
 }
 
 /** Cyan accent gradient — used sparingly (focus rings, primary buttons). */

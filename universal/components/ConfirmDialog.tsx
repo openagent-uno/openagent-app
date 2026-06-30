@@ -2,13 +2,17 @@ import type { ReactNode } from 'react';
 import { createContext, useCallback, useContext, useState } from 'react';
 import { Alert, Modal, Pressable, StyleSheet, Text, View, Platform } from 'react-native';
 import { colors, font, radius, glassSurface } from '../theme';
-import Button from './Button';
+import Button, { type ButtonVariant } from './Button';
 
 type ConfirmOptions = {
   title?: string;
   message: string;
   confirmLabel?: string;
   cancelLabel?: string;
+  /** Visual weight of the confirm button. Use ``'danger'`` for destructive
+   *  actions (delete) — renders red on web and as an iOS ``destructive``
+   *  button on native. Defaults to ``'primary'``. */
+  confirmVariant?: ButtonVariant;
 };
 
 type ConfirmRequest = ConfirmOptions & {
@@ -45,6 +49,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
             },
             {
               text: normalized.confirmLabel ?? 'Confirm',
+              style: normalized.confirmVariant === 'danger' ? 'destructive' : 'default',
               onPress: () => resolve(true),
             },
           ],
@@ -59,6 +64,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
         message: normalized.message,
         confirmLabel: normalized.confirmLabel ?? 'Confirm',
         cancelLabel: normalized.cancelLabel ?? 'Cancel',
+        confirmVariant: normalized.confirmVariant ?? 'primary',
         resolve,
       });
     });
@@ -89,7 +95,7 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
                 onPress={() => close(false)}
               />
               <Button
-                variant="primary"
+                variant={request?.confirmVariant ?? 'primary'}
                 label={request?.confirmLabel}
                 onPress={() => close(true)}
               />

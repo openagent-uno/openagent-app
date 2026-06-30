@@ -14,6 +14,7 @@ import { useRouter } from 'expo-router';
 import { useConnection } from '../../stores/connection';
 import { useConfig } from '../../stores/config';
 import { useVoiceConfig, VOICE_DEFAULTS, VOICE_LANGUAGES, type VoiceConfig } from '../../stores/voice';
+import { useTheme } from '../../stores/theme';
 import { triggerUpdate, triggerRestart } from '../../services/api';
 import { useConfirm } from '../../components/ConfirmDialog';
 import Button from '../../components/Button';
@@ -27,6 +28,7 @@ import ModelScreen from './model';
 
 type CategoryId =
   | 'identity'
+  | 'appearance'
   | 'members'
   | 'voice'
   | 'channels'
@@ -46,6 +48,7 @@ interface Category {
 
 const CATEGORIES: Category[] = [
   { id: 'identity', label: 'Agent Identity', icon: 'user', description: 'Name and system prompt' },
+  { id: 'appearance', label: 'Appearance', icon: 'sun', description: 'Light or dark theme' },
   { id: 'models', label: 'Models & Providers', icon: 'cpu', description: 'LLMs and provider credentials' },
   { id: 'costs', label: 'Costs', icon: 'bar-chart-2', description: 'Daily spend breakdown' },
   { id: 'members', label: 'Members', icon: 'users', description: 'Users, agents, invitations' },
@@ -82,6 +85,8 @@ export default function SettingsScreen() {
   const voiceCfg = useVoiceConfig((s) => s.config);
   const setVoiceCfg = useVoiceConfig((s) => s.setConfig);
   const resetVoiceCfg = useVoiceConfig((s) => s.reset);
+  const themeMode = useTheme((s) => s.mode);
+  const setThemeMode = useTheme((s) => s.setMode);
   const activeAccount = accounts.find((a) => a.id === activeAccountId);
   const confirm = useConfirm();
 
@@ -444,6 +449,29 @@ export default function SettingsScreen() {
     </>
   );
 
+  const renderAppearance = () => (
+    <>
+      <Text style={styles.sectionTitle}>Appearance</Text>
+      <Card>
+        <Text style={styles.label}>Theme</Text>
+        <Text style={styles.fieldHint}>
+          Switch between the dark JARVIS look and a light theme. Applies instantly and is
+          remembered on this device.
+        </Text>
+        <TabStrip
+          tabs={[
+            { id: 'dark', label: 'Dark' },
+            { id: 'light', label: 'Light' },
+          ]}
+          active={themeMode}
+          onChange={(v) => setThemeMode(v as 'dark' | 'light')}
+          fullWidth
+          size="sm"
+        />
+      </Card>
+    </>
+  );
+
   const renderControls = () => (
     <>
       <Text style={styles.sectionTitle}>Controls</Text>
@@ -530,6 +558,7 @@ export default function SettingsScreen() {
   const renderCategory = () => {
     switch (activeCategory) {
       case 'identity': return renderIdentity();
+      case 'appearance': return renderAppearance();
       case 'members': return renderMembers();
       case 'voice': return renderVoice();
       case 'channels': return renderChannels();
