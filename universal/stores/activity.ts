@@ -105,7 +105,10 @@ export const useActivity = create<ActivityState>((set, get) => ({
       try {
         const [workflows, tasks] = await Promise.all([
           getWorkflows().catch(() => []),
-          getScheduledTasks().catch(() => []),
+          // Include framework built-ins so a dream-mode firing surfaces in
+          // the Recent feed like any other scheduled run. The dedicated
+          // Scheduled-tasks screen still lists user tasks only.
+          getScheduledTasks(false, true).catch(() => []),
         ]);
 
         // Prioritise the parents most likely to have fresh runs.

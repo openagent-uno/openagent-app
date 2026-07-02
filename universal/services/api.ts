@@ -278,9 +278,21 @@ export async function getGraph(): Promise<GraphData> {
 
 // ── Scheduled Tasks API ──
 
-export async function getScheduledTasks(enabledOnly: boolean = false): Promise<ScheduledTask[]> {
-  const q = enabledOnly ? '?enabled_only=true' : '';
-  const data = await get<{ tasks: ScheduledTask[] }>(`/api/scheduled-tasks${q}`);
+export async function getScheduledTasks(
+  enabledOnly: boolean = false,
+  // Include framework built-ins (dream-mode, auto-update) in the result.
+  // Off by default so the Scheduled-tasks management screen stays clean;
+  // the sidebar "Recent" activity feed opts in so a dream-mode firing
+  // surfaces there like any other scheduled run.
+  includeBuiltin: boolean = false,
+): Promise<ScheduledTask[]> {
+  const params = new URLSearchParams();
+  if (enabledOnly) params.set('enabled_only', 'true');
+  if (includeBuiltin) params.set('include_builtin', '1');
+  const q = params.toString();
+  const data = await get<{ tasks: ScheduledTask[] }>(
+    `/api/scheduled-tasks${q ? `?${q}` : ''}`,
+  );
   return data.tasks;
 }
 
