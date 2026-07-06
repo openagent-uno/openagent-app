@@ -31,10 +31,14 @@ export type ClientMessage =
   // when the client hosts multiple independent conversations on one ws
   // (e.g. two chat tabs). The gateway scopes those commands to the tab's
   // session so one tab's /clear doesn't wipe the others.
+  // ``arg`` carries an optional positional argument (e.g. ``/model gpt-4o``
+  // sends ``name: 'model', arg: 'gpt-4o'``). Undefined = no argument.
   | {
       type: 'command';
-      name: 'stop' | 'new' | 'clear' | 'reset' | 'status' | 'queue' | 'help' | 'usage' | 'update' | 'restart';
+      name: 'stop' | 'new' | 'clear' | 'reset' | 'status' | 'queue' | 'help'
+           | 'usage' | 'update' | 'restart' | 'compact' | 'model';
       session_id?: string;
+      arg?: string;
     }
   | { type: 'ping' }
   // ── Stream protocol (additive) ──

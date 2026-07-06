@@ -186,6 +186,13 @@ interface ChatState {
    *  No-op while the session is still processing (so it never clobbers a turn
    *  the user just started) or when the server returns nothing. */
   reconcileSession: (sessionId: string) => void;
+  /** Called on ``turn_complete`` to synchronously clear any stuck
+   *  ``streaming: true`` / ``isProcessing: true`` state left behind when a
+   *  gateway omits the ``response`` frame or when the RAF delta flush races
+   *  past it. This unblocks ``reconcileSession`` and ensures the markdown
+   *  renderer switches from plain-text fallback to full parsing. Safe to call
+   *  redundantly — it is a no-op when nothing is stuck. */
+  finaliseStreaming: (sessionId: string) => void;
   /** Remove a session row locally WITHOUT calling the delete API — used when
    *  the server broadcasts that a session was deleted elsewhere (another
    *  device, a prune), so it disappears from this sidebar in realtime. */
@@ -765,6 +772,30 @@ export const useChat = create<ChatState>((set, get) => ({
 
     return {};
   }),
+
+  finaliseStreaming: (sessionId) => {
+    set((s) => ({
+      sessions: s.sessions.map((ses) => {
+        if (ses.id !== sessionId) return ses;
+        // Flush any buffered deltas for this session so nothing is lost.
+        pendingDeltas.delete(sessionId);
+        // Clear the stuck streaming flag on the last assistant bubble (if any)
+        // and mark the session as no longer processing. This is idempotent:
+        // if ``response`` already landed and cleaned up, the messages and
+        // isProcessing flag are already correct and this is a no-op.
+        const msgs = ses.messages.map((m) =>
+          m.role === 'assistant' && m.streaming ? { ...m, streaming: false } : m,
+        );
+        return {
+          ...ses,
+          isProcessing: false,
+          isReasoning: false,
+          statusText: undefined,
+          messages: msgs,
+        };
+      }),
+    }));
+  },
 
   reconcileSession: (sessionId) => {
     const ses = get().sessions.find((s) => s.id === sessionId);

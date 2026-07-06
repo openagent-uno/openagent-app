@@ -312,12 +312,14 @@ export class OpenAgentWS {
   sendCommand(
     name: ClientMessage & { type: 'command' } extends { name: infer N } ? N : never,
     sessionId?: string,
+    arg?: string,
   ): void {
-    // Scope scope-sensitive commands (stop/new/clear/reset) to the
-    // specific chat tab so other tabs stay intact. Pass `undefined` for
-    // global admin commands (help/usage/update/restart).
+    // Scope scope-sensitive commands (stop/new/clear/reset/compact/model)
+    // to the specific chat tab so other tabs stay intact. Pass `undefined`
+    // for global admin commands (help/usage/update/restart).
     const payload: any = { type: 'command', name };
     if (sessionId !== undefined) payload.session_id = sessionId;
+    if (arg !== undefined) payload.arg = arg;
     this.send(payload);
   }
 

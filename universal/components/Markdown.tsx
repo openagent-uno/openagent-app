@@ -125,7 +125,7 @@ function parseBlocks(text: string): Block[] {
       continue;
     }
 
-    const headingMatch = line.match(/^(#{1,4})\s+(.+)/);
+    const headingMatch = line.match(/^(#{1,6})\s+(.+)/);
     if (headingMatch) {
       blocks.push({ type: 'heading', level: headingMatch[1].length, text: headingMatch[2] });
       i++;
@@ -200,7 +200,7 @@ function parseBlocks(text: string): Block[] {
 
     const paraLines: string[] = [];
     while (i < lines.length && lines[i].trim() && !lines[i].startsWith('```')
-      && !lines[i].match(/^#{1,4}\s/) && !lines[i].startsWith('> ')
+      && !lines[i].match(/^#{1,6}\s/) && !lines[i].startsWith('> ')
       && !/^[\s]*[-*•]\s/.test(lines[i])
       && !/^[\s]*\d+\.\s/.test(lines[i])
       && !/^\s*([-*_])\s*(\1\s*){2,}$/.test(lines[i])
@@ -547,15 +547,17 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
 function renderInline(text: string): (string | ReactElement)[] {
   const parts: (string | ReactElement)[] = [];
   // Capture groups (order matters — `match[N]` indices feed the
-  // switch below):
-  //   1-2 bold     **x**
-  //   3-4 italic   *x*
-  //   5-6 inline   `x`
-  //   7-8-9 image  ![alt](url)
-  //   10-11-12 link [t](url)
-  //   13-14 strike ~~x~~
-  //   15-16 math   $x$    (inline KaTeX; ``$x x x$`` with non-newline body)
-  const re = /(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`([^`]+)`)|(!\[([^\]]*)\]\(([^)]+)\))|(\[([^\]]+)\]\(([^)]+)\))|(~~(.+?)~~)|(\$([^$\n]+?)\$)/g;
+  // switch below; bold-italic must precede bold and italic so the
+  // longer token wins):
+  //   1-2  bold-italic ***x***
+  //   3-4  bold        **x**
+  //   5-6  italic      *x*
+  //   7-8  inline      `x`
+  //   9-10-11 image    ![alt](url)
+  //   12-13-14 link    [t](url)
+  //   15-16 strike     ~~x~~
+  //   17-18 math       $x$    (inline KaTeX; ``$x x x$`` with non-newline body)
+  const re = /(\*\*\*(.+?)\*\*\*)|(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`([^`]+)`)|(!\[([^\]]*)\]\(([^)]+)\))|(\[([^\]]+)\]\(([^)]+)\))|(~~(.+?)~~)|(\$([^$\n]+?)\$)/g;
   let last = 0;
   let match: RegExpExecArray | null;
   let idx = 0;
@@ -566,13 +568,16 @@ function renderInline(text: string): (string | ReactElement)[] {
     }
 
     if (match[2]) {
-      parts.push(<Text key={`b${idx++}`} style={styles.bold}>{match[2]}</Text>);
+      // bold-italic ***x***
+      parts.push(<Text key={`bi${idx++}`} style={[styles.bold, styles.italic]}>{match[2]}</Text>);
     } else if (match[4]) {
-      parts.push(<Text key={`i${idx++}`} style={styles.italic}>{match[4]}</Text>);
+      parts.push(<Text key={`b${idx++}`} style={styles.bold}>{match[4]}</Text>);
     } else if (match[6]) {
-      parts.push(<Text key={`c${idx++}`} style={styles.inlineCode}>{match[6]}</Text>);
-    } else if (match[8] !== undefined && match[9]) {
-      const imgUrl = match[9];
+      parts.push(<Text key={`i${idx++}`} style={styles.italic}>{match[6]}</Text>);
+    } else if (match[8]) {
+      parts.push(<Text key={`c${idx++}`} style={styles.inlineCode}>{match[8]}</Text>);
+    } else if (match[10] !== undefined && match[11]) {
+      const imgUrl = match[11];
       if (/^https?:\/\//i.test(imgUrl)) {
         parts.push(
           <Image
@@ -585,22 +590,22 @@ function renderInline(text: string): (string | ReactElement)[] {
       } else {
         parts.push(match[0]);
       }
-    } else if (match[10] && match[11]) {
+    } else if (match[13] && match[14]) {
       parts.push(
         <Text
           key={`l${idx++}`}
           style={styles.link}
-          onPress={() => Linking.openURL(match![11])}
+          onPress={() => Linking.openURL(match![14])}
         >
-          {match[10]}
+          {match[13]}
         </Text>
       );
-    } else if (match[14]) {
-      parts.push(
-        <Text key={`s${idx++}`} style={styles.strike}>{match[14]}</Text>,
-      );
     } else if (match[16]) {
-      parts.push(<MathInline key={`m${idx++}`} tex={match[16]} />);
+      parts.push(
+        <Text key={`s${idx++}`} style={styles.strike}>{match[16]}</Text>,
+      );
+    } else if (match[18]) {
+      parts.push(<MathInline key={`m${idx++}`} tex={match[18]} />);
     }
 
     last = match.index + match[0].length;

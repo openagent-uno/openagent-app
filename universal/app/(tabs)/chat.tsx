@@ -822,6 +822,30 @@ export default function ChatScreen() {
     const sendableFiles = pendingFiles.filter((f) => !f.error && f.remotePath);
     if (!text && sendableFiles.length === 0) return;
 
+    // Intercept gateway slash-commands typed with an argument (e.g.
+    // "/model claude-opus", "/compact"). Commands whose ``action`` is
+    // defined in slashCommands fire immediately on autocomplete selection
+    // and never reach here; commands without ``action`` (model, help) get
+    // their "/name " template inserted and the user types the rest — that
+    // fully-formed "/name arg" arrives here. Route as a COMMAND frame so
+    // the server's _handle_command branch runs instead of the agent.
+    if (text.startsWith('/') && sendableFiles.length === 0) {
+      const spaceIdx = text.indexOf(' ');
+      const cmdName = (spaceIdx === -1 ? text.slice(1) : text.slice(1, spaceIdx)).toLowerCase();
+      const cmdArg = spaceIdx === -1 ? undefined : text.slice(spaceIdx + 1).trim() || undefined;
+      // Only intercept known gateway commands — unknown "/foo" text still
+      // goes to the agent as a normal message.
+      const GATEWAY_COMMANDS = new Set([
+        'compact', 'model', 'new', 'clear', 'reset', 'stop',
+        'status', 'queue', 'usage', 'update', 'restart', 'help',
+      ]);
+      if (GATEWAY_COMMANDS.has(cmdName)) {
+        ws.sendCommand(cmdName as any, activeSessionId, cmdArg);
+        setInput('');
+        return;
+      }
+    }
+
     const attachments: Attachment[] = sendableFiles.map((f) => ({
       type: f.kind,
       path: f.remotePath,
@@ -1230,6 +1254,13 @@ export default function ChatScreen() {
     {
       name: 'help',
       description: 'Ask the agent what it can do',
+    },
+    {
+      name: 'compact',
+      description: 'Compress conversation history to free up context',
+      action: () => {
+        if (activeSessionId) ws?.sendCommand('compact', activeSessionId);
+      },
     },
     {
       name: 'model',

@@ -91,7 +91,14 @@ export default function RootLayout() {
       // authoritative DB-derived shape so the live view matches a reopen
       // exactly (real authorship, delegation cards, no missing/dup messages).
       // The runs are persisted by the time this frame is emitted.
+      // ``finaliseStreaming`` first: clears any stuck streaming:true / isProcessing:true
+      // left when a gateway omits the ``response`` frame or a RAF delta flush
+      // races past it. This unblocks ``reconcileSession`` so it can fetch the
+      // canonical transcript — without it, isProcessing:true would make
+      // reconcileSession a no-op and the markdown renderer would stay on the
+      // plain-text (literal asterisks) fallback path permanently.
       if (msg.type === 'turn_complete' && msg.session_id) {
+        useChat.getState().finaliseStreaming(msg.session_id);
         useChat.getState().reconcileSession(msg.session_id);
       }
 
