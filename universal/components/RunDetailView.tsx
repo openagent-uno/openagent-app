@@ -16,7 +16,7 @@
 
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -28,14 +28,16 @@ import {
 } from 'react-native';
 import { colors, font, radius } from '../theme';
 import {
-  getWorkflowRun, getScheduledTaskRuns, fetchSessionRuns, runMsgToChat,
+  getWorkflowRun, getScheduledTaskRuns, fetchSessionRuns, runMsgToChat, getSessionContext,
 } from '../services/api';
-import { runRoutePath } from '../../common/types';
+import { runRoutePath, type SessionContext } from '../../common/types';
 import { openDetached } from '../services/windows';
 import { useChat } from '../stores/chat';
 import Markdown from './Markdown';
 import MessageList from './MessageList';
+import ContextPanel from './ContextPanel';
 import type {
+  BlockType,
   ChatMessage,
   TaskRun,
   WorkflowRun,
@@ -164,6 +166,42 @@ function SessionTranscript({ sessionId, live }: {
   );
 }
 
+/** The context-window panel for a run's owning session, floated top-right of
+ *  the run screen — the SAME placement and ContextPanel component as the chat
+ *  screen. Fetches the report directly (not via the chat store): a run session
+ *  (``scheduler:{task}:{run}``) usually isn't a row in the chat store, so the
+ *  store-scoped ``refreshContext`` would drop it. Polls while the run is live
+ *  so the panel grows with the firing, mirroring SessionTranscript. */
+function RunContextPanel({ sessionId, live }: { sessionId?: string; live?: boolean }) {
+  const [context, setContext] = useState<SessionContext | null>(null);
+  useEffect(() => {
+    if (!sessionId) { setContext(null); return; }
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let attempts = 0;
+    const tick = async () => {
+      try {
+        const rep = await getSessionContext(sessionId);
+        if (cancelled) return;
+        // A valid report has a real window; ignore the empty pre-first-turn
+        // shape so we keep the last good state rather than blanking.
+        if (rep && rep.context_window) setContext(rep);
+      } catch { /* ignore transient fetch errors */ }
+      attempts += 1;
+      if (live && attempts < LIVE_POLL_MAX && !cancelled) {
+        timer = setTimeout(tick, POLL_MS);
+      }
+    };
+    tick();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [sessionId, live]);
+  if (!sessionId || !context) return null;
+  // ``topInset={0}``: RunDetailView already sits below the navigator header
+  // (the run screen applies the header inset as padding), so top:0 floats the
+  // panel just under the header — same visual position as the chat screen.
+  return <ContextPanel context={context} variant="floating" topInset={0} />;
+}
+
 type IconName = keyof typeof Feather.glyphMap;
 type RunKind = 'workflow' | 'task';
 
@@ -174,6 +212,101 @@ const STATUS_COLOR: Record<string, string> = {
   cancelled: colors.textMuted,
   skipped: colors.textMuted,
 };
+
+// ── Workflow node presentation ───────────────────────────────────────
+// Each block type gets a friendly icon + human label so the trace reads
+// like plain English ("Tool call", "Condition", "Wait") instead of the
+// raw engine ``type`` string ("mcp-tool", "if", "wait"). Keeps the run
+// screen legible to someone who never opened the workflow editor.
+const NODE_META: Record<BlockType, { icon: IconName; label: string }> = {
+  'trigger-manual': { icon: 'play', label: 'Manual start' },
+  'trigger-schedule': { icon: 'clock', label: 'Scheduled start' },
+  'trigger-ai': { icon: 'zap', label: 'AI start' },
+  'mcp-tool': { icon: 'tool', label: 'Tool call' },
+  'ai-prompt': { icon: 'cpu', label: 'AI node' },
+  'if': { icon: 'git-merge', label: 'Condition' },
+  'loop': { icon: 'repeat', label: 'Loop' },
+  'wait': { icon: 'pause-circle', label: 'Wait' },
+  'parallel': { icon: 'git-branch', label: 'Parallel' },
+  'merge': { icon: 'git-pull-request', label: 'Merge' },
+  'set-variable': { icon: 'edit-3', label: 'Set variable' },
+  'http-request': { icon: 'globe', label: 'HTTP request' },
+};
+
+function nodeMeta(type: string): { icon: IconName; label: string } {
+  return NODE_META[type as BlockType] ?? { icon: 'box', label: type };
+}
+
+// Only nodes whose input/output is genuinely worth reading are expandable;
+// everything else (triggers, waits, flow control, set-variable) collapses to
+// a single clean summary row. A node that errored is always expandable so the
+// failure is never hidden behind a non-clickable card.
+const EXPANDABLE_TYPES = new Set<BlockType>(['mcp-tool', 'http-request']);
+
+function isExpandable(entry: WorkflowTraceEntry): boolean {
+  return EXPANDABLE_TYPES.has(entry.type) || !!entry.error;
+}
+
+/** Compact, single-line stringification for a summary chip. */
+function shortVal(v: unknown, max = 48): string {
+  let s: string;
+  if (v == null) s = String(v);
+  else if (typeof v === 'string') s = v;
+  else if (typeof v === 'number' || typeof v === 'boolean') s = String(v);
+  else {
+    try { s = JSON.stringify(v); } catch { s = String(v); }
+  }
+  s = s.replace(/\s+/g, ' ').trim();
+  return s.length > max ? s.slice(0, max - 1) + '…' : s;
+}
+
+// A one-line, human "what this step did", derived from the resolved input /
+// output the engine records (executor writes ``input = resolved_config`` and a
+// per-type ``output``). Returns undefined when there's nothing meaningful to
+// show, so the summary row simply doesn't render.
+function nodeSummary(entry: WorkflowTraceEntry): string | undefined {
+  const inp = (entry.input ?? {}) as Record<string, any>;
+  const out = (entry.output ?? {}) as Record<string, any>;
+  switch (entry.type) {
+    case 'mcp-tool': {
+      const tool = inp.tool_name || inp.mcp_name;
+      return tool ? String(tool) : undefined;
+    }
+    case 'http-request': {
+      const method = String(inp.method || 'GET').toUpperCase();
+      return inp.url ? `${method} ${shortVal(inp.url, 56)}` : undefined;
+    }
+    case 'set-variable': {
+      const key = out.key ?? inp.key;
+      if (!key) return undefined;
+      return 'value' in out ? `${key} = ${shortVal(out.value)}` : String(key);
+    }
+    case 'wait': {
+      if (inp.mode === 'until' && inp.until_iso) return `until ${shortVal(inp.until_iso, 40)}`;
+      if (inp.seconds != null) return `${inp.seconds}s`;
+      if (out.waited_ms != null) {
+        const s = out.waited_ms / 1000;
+        return `${s.toFixed(s >= 10 ? 0 : 1)}s`;
+      }
+      return undefined;
+    }
+    case 'if': {
+      return out.branch ? `→ ${out.branch} branch` : undefined;
+    }
+    case 'loop': {
+      const n = out.iterations;
+      return n != null ? `${n} iteration${n === 1 ? '' : 's'}` : undefined;
+    }
+    case 'merge': {
+      return inp.strategy ? `strategy: ${inp.strategy}` : undefined;
+    }
+    case 'trigger-schedule': {
+      return inp.cron_expression ? shortVal(inp.cron_expression, 36) : undefined;
+    }
+    default:
+      return undefined;
+  }
+}
 
 const webFade = Platform.OS === 'web' ? { className: 'oa-fade-in' } : {};
 
@@ -275,20 +408,28 @@ export function RunDetailView({
   if (!run) return null;
 
   return (
-    <ScrollView style={styles.scroll} contentContainerStyle={styles.column}>
-      <RunHeader
-        name={name}
-        kindIcon={kind === 'workflow' ? 'git-branch' : 'clock'}
-        kindLabel={kind === 'workflow' ? 'Workflow' : 'Scheduled task'}
-        status={run.status}
-        trigger={run.trigger}
-        startedIso={run.started_at_iso}
-        startedAt={run.started_at}
-        finishedAt={run.finished_at}
-        onPress={openParent}
-      />
-      {wfRun ? <WorkflowBody run={wfRun} /> : taskRun ? <TaskBody run={taskRun} /> : null}
-    </ScrollView>
+    <View style={styles.root}>
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.column}>
+        <RunHeader
+          name={name}
+          kindIcon={kind === 'workflow' ? 'git-branch' : 'clock'}
+          kindLabel={kind === 'workflow' ? 'Workflow' : 'Scheduled task'}
+          status={run.status}
+          trigger={run.trigger}
+          startedIso={run.started_at_iso}
+          startedAt={run.started_at}
+          finishedAt={run.finished_at}
+          onPress={openParent}
+        />
+        {wfRun ? <WorkflowBody run={wfRun} /> : taskRun ? <TaskBody run={taskRun} /> : null}
+      </ScrollView>
+      {/* Floating context panel, top-right — same placement as the chat screen.
+          A scheduled firing has one owning session; workflow runs surface it per
+          AI node instead (open the node to see that session's panel). */}
+      {taskRun?.session_id ? (
+        <RunContextPanel sessionId={taskRun.session_id} live={taskRun.status === 'running'} />
+      ) : null}
+    </View>
   );
 }
 
@@ -362,6 +503,8 @@ function TaskBody({ run }: { run: TaskRun }) {
   // A durable firing renders as its full child-session transcript (same
   // surface as a chat). Legacy firings (no session) keep the output preview.
   if (run.session_id) {
+    // The context panel is floated at the RunDetailView root (top-right), not
+    // inline here, so it stays fixed while the transcript scrolls.
     return (
       <>
         <SessionTranscript sessionId={run.session_id} live={run.status === 'running'} />
@@ -384,29 +527,49 @@ function TaskBody({ run }: { run: TaskRun }) {
 // ── Workflow run body ────────────────────────────────────────────────
 
 function WorkflowBody({ run }: { run: WorkflowRun }) {
+  const router = useRouter();
   const result = useMemo(() => {
     if (!run.outputs || Object.keys(run.outputs).length === 0) return null;
     return safeJson(run.outputs);
   }, [run.outputs]);
 
+  // A tiny at-a-glance tally next to the "Steps" label — total plus any
+  // failed / still-running counts, so the run's health reads without
+  // scanning every card.
+  const total = run.trace.length;
+  const failed = run.trace.filter((e) => e.status === 'failed').length;
+  const running = run.trace.filter((e) => e.status === 'running').length;
+  const tally = [
+    `${total} step${total === 1 ? '' : 's'}`,
+    failed ? `${failed} failed` : null,
+    running ? `${running} running` : null,
+  ].filter(Boolean).join(' · ');
+
   return (
     <>
-      <Text style={styles.sectionLabel}>Steps</Text>
+      <View style={styles.stepsHead}>
+        <Text style={styles.sectionLabel}>Steps</Text>
+        {total > 0 ? <Text style={styles.stepsTally}>{tally}</Text> : null}
+      </View>
       {run.trace.length === 0 ? (
         <EmptyNote text="No steps were recorded for this run." />
       ) : (
-        // Each ai-prompt node ran as its own child session — render that
-        // session's transcript inline right under its step card, so the whole
-        // run reads as one page (no redirect out to the chat tab).
+        // An ai-prompt node ran as its own durable child session → render it
+        // through the same StepRow shell as every other node (AiNodeCard), so
+        // it reads as part of the same family — but tapping it deep-links into
+        // that node's full conversation (where the reused ContextPanel shows
+        // its context-window usage) instead of expanding inline. Every other
+        // node type has no session to open, so it stays a StepCard.
         run.trace.map((entry, i) => (
           <View key={`${entry.node_id}-${i}`}>
-            <StepCard entry={entry} />
             {entry.child_session_id ? (
-              <SessionTranscript
-                sessionId={entry.child_session_id}
-                live={entry.status === 'running'}
+              <AiNodeCard
+                entry={entry}
+                onOpen={(id) => openDetached(router, `chat?session=${encodeURIComponent(id)}`)}
               />
-            ) : null}
+            ) : (
+              <StepCard entry={entry} />
+            )}
           </View>
         ))
       )}
@@ -418,34 +581,85 @@ function WorkflowBody({ run }: { run: WorkflowRun }) {
   );
 }
 
+// The shared visual shell for one workflow node — a colored status rail down
+// the left, an icon chip for the node kind, a friendly label + node id, a
+// one-line human summary, and a compact status pill with the duration. Both
+// the generic StepCard and the AI-node card render through this so every step
+// (tool call, wait, condition, AI node…) reads as the same family of card.
+// ``trailing`` is the right-edge affordance (an expand chevron, a navigate
+// chevron, or nothing); ``children`` is the optional expanded body.
+function StepRow({
+  icon, label, nodeId, summary, status, statusColor, duration, trailing, children,
+}: {
+  icon: IconName;
+  label: string;
+  nodeId: string;
+  summary?: string;
+  status: string;
+  statusColor: string;
+  duration: string;
+  trailing?: ReactNode;
+  children?: ReactNode;
+}) {
+  return (
+    <View style={styles.stepRow}>
+      <View style={[styles.stepAccent, { backgroundColor: statusColor }]} />
+      <View style={styles.stepMain}>
+        <View style={styles.stepHeader}>
+          <View style={styles.stepIconChip}>
+            <Feather name={icon} size={13} color={colors.textSecondary} />
+          </View>
+          <View style={styles.stepTexts}>
+            <View style={styles.stepTitleRow}>
+              <Text style={styles.stepLabel} numberOfLines={1}>{label}</Text>
+              <Text style={styles.stepNodeTag} numberOfLines={1}>{nodeId}</Text>
+            </View>
+            {summary ? (
+              <Text style={styles.stepSummary} numberOfLines={1}>{summary}</Text>
+            ) : null}
+          </View>
+          <View style={styles.stepRight}>
+            <View style={[styles.stepPill, { borderColor: statusColor }]}>
+              <View style={[styles.stepPillDot, { backgroundColor: statusColor }]} />
+              <Text style={[styles.stepPillText, { color: statusColor }]}>{status}</Text>
+            </View>
+            <Text style={styles.stepDuration}>{duration}</Text>
+          </View>
+          {trailing}
+        </View>
+        {children}
+      </View>
+    </View>
+  );
+}
+
 function StepCard({ entry }: { entry: WorkflowTraceEntry }) {
   const [expanded, setExpanded] = useState(false);
+  const meta = nodeMeta(entry.type);
   const color = STATUS_COLOR[entry.status] ?? colors.textMuted;
-  const hasBody = entry.input != null || entry.output != null || !!entry.error;
-  return (
-    <TouchableOpacity
-      activeOpacity={hasBody ? 0.85 : 1}
-      onPress={() => hasBody && setExpanded((v) => !v)}
-      style={[styles.stepCard, entry.status === 'failed' && styles.stepCardError]}
-      {...(webFade as any)}
+  const summary = nodeSummary(entry);
+  const expandable = isExpandable(entry);
+  const hasError = !!entry.error;
+
+  const row = (
+    <StepRow
+      icon={meta.icon}
+      label={meta.label}
+      nodeId={entry.node_id}
+      summary={summary}
+      status={entry.status}
+      statusColor={color}
+      duration={formatDuration(entry.started_at, entry.finished_at, entry.status)}
+      trailing={expandable ? (
+        <Feather
+          name={expanded ? 'chevron-down' : 'chevron-right'}
+          size={14}
+          color={colors.textMuted}
+          style={styles.stepChevron}
+        />
+      ) : null}
     >
-      <View style={styles.stepHeader}>
-        <View style={[styles.stepDot, { backgroundColor: color }]} />
-        <Text style={styles.stepNode}>{entry.node_id}</Text>
-        <Text style={styles.stepType}>{entry.type}</Text>
-        <Text style={[styles.stepStatus, { color }]}>{entry.status}</Text>
-        <Text style={styles.stepDuration}>
-          {formatDuration(entry.started_at, entry.finished_at, entry.status)}
-        </Text>
-        {hasBody ? (
-          <Feather
-            name={expanded ? 'chevron-down' : 'chevron-right'}
-            size={12}
-            color={colors.textMuted}
-          />
-        ) : null}
-      </View>
-      {expanded ? (
+      {expandable && expanded ? (
         <View style={styles.stepBody}>
           {entry.input != null ? (
             <CodeSection label="input" value={safeJson(entry.input)} />
@@ -458,6 +672,108 @@ function StepCard({ entry }: { entry: WorkflowTraceEntry }) {
           ) : null}
         </View>
       ) : null}
+    </StepRow>
+  );
+
+  // Simple nodes are a plain, non-clickable card; only substantial ones
+  // (tool calls, HTTP requests, anything that errored) get the tap-to-expand
+  // affordance.
+  if (!expandable) {
+    return (
+      <View style={[styles.stepCard, hasError && styles.stepCardError]} {...(webFade as any)}>
+        {row}
+      </View>
+    );
+  }
+  return (
+    <TouchableOpacity
+      activeOpacity={0.85}
+      onPress={() => setExpanded((v) => !v)}
+      style={[styles.stepCard, hasError && styles.stepCardError]}
+      accessibilityRole="button"
+      accessibilityLabel={`${meta.label} ${entry.node_id}, ${entry.status}. Tap to ${expanded ? 'collapse' : 'expand'}.`}
+      {...(webFade as any)}
+    >
+      {row}
+    </TouchableOpacity>
+  );
+}
+
+// An ai-prompt node ran as its own durable child session. It renders through
+// the SAME StepRow shell as every other node (so it visually belongs to the
+// same family — friendly "AI node" label on top, node id, status pill) but,
+// instead of expanding in place, tapping it deep-links into that node's full
+// conversation. Its summary line shows the model it ran on: the pinned
+// ``model_override`` immediately, upgraded to the model the child session
+// actually used (SmartRouter may have chosen it) once that session's context
+// report resolves.
+function AiNodeCard({
+  entry, onOpen,
+}: {
+  entry: WorkflowTraceEntry;
+  onOpen: (childSessionId: string) => void;
+}) {
+  const sid = entry.child_session_id;
+  const meta = nodeMeta('ai-prompt');
+  const color = STATUS_COLOR[entry.status] ?? colors.textMuted;
+  const pinned = (entry.input as Record<string, any> | undefined)?.model_override as
+    | string
+    | undefined;
+  const [model, setModel] = useState<string | undefined>(pinned || undefined);
+
+  useEffect(() => {
+    if (!sid) return;
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let attempts = 0;
+    const live = entry.status === 'running';
+    const tick = async () => {
+      try {
+        const rep = await getSessionContext(sid);
+        if (cancelled) return;
+        const m = rep?.model_label || rep?.model;
+        if (m) { setModel(m); return; }  // resolved — stop polling
+      } catch { /* ignore transient fetch errors */ }
+      attempts += 1;
+      // A live node's session may not have a model resolved on the first read;
+      // retry a few times. A finished node reads once (twice at most).
+      if (!cancelled && attempts < (live ? 6 : 2)) timer = setTimeout(tick, POLL_MS);
+    };
+    tick();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [sid, entry.status]);
+
+  const clickable = !!sid;
+  const row = (
+    <StepRow
+      icon={meta.icon}
+      label={meta.label}
+      nodeId={entry.node_id}
+      summary={model}
+      status={entry.status}
+      statusColor={color}
+      duration={formatDuration(entry.started_at, entry.finished_at, entry.status)}
+      trailing={clickable ? (
+        <Feather name="chevron-right" size={16} color={colors.textMuted} style={styles.stepChevron} />
+      ) : null}
+    />
+  );
+
+  if (!clickable) {
+    // No session yet (a node that failed before minting one) — a plain,
+    // non-clickable card, same as a simple step.
+    return <View style={styles.stepCard} {...(webFade as any)}>{row}</View>;
+  }
+  return (
+    <TouchableOpacity
+      activeOpacity={0.85}
+      onPress={() => onOpen(sid!)}
+      style={[styles.stepCard, styles.stepCardAi]}
+      accessibilityRole="button"
+      accessibilityLabel={`Open AI node ${entry.node_id} conversation`}
+      {...(Platform.OS === 'web' ? { className: 'oa-fade-in oa-row-hover oa-card-hover' } : {})}
+    >
+      {row}
     </TouchableOpacity>
   );
 }
@@ -592,6 +908,7 @@ function safeJson(v: unknown): string {
 }
 
 const styles = StyleSheet.create({
+  root: { flex: 1 },
   scroll: { flex: 1 },
   // Editorial single column, matching the Chat transcript's reading width.
   column: {
@@ -646,59 +963,99 @@ const styles = StyleSheet.create({
     fontFamily: font.mono,
   },
 
-  // Section label ("Steps")
+  // Section label ("Steps") + at-a-glance tally
+  stepsHead: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    gap: 8,
+    marginBottom: 10,
+  },
   sectionLabel: {
     fontSize: 10,
     fontWeight: '600',
     color: colors.textMuted,
     textTransform: 'uppercase',
     letterSpacing: 0.8,
-    marginBottom: 8,
   },
+  stepsTally: {
+    fontSize: 11,
+    color: colors.textMuted,
+    fontFamily: font.mono,
+  },
+
   // Workflow step card
   stepCard: {
     backgroundColor: colors.surface,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.borderLight,
-    marginBottom: 6,
+    marginBottom: 8,
     overflow: 'hidden',
   },
   stepCardError: { borderColor: colors.errorBorder },
+  // AI node cards navigate (rather than expand) — a slightly stronger border
+  // hints they lead somewhere, reinforced by the web hover affordance.
+  stepCardAi: { borderColor: colors.border },
+  // Row = colored status rail + main content column.
+  stepRow: { flexDirection: 'row', alignItems: 'stretch' },
+  stepAccent: { width: 3 },
+  stepMain: { flex: 1, minWidth: 0 },
   stepHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingVertical: 9,
+    gap: 10,
+    paddingVertical: 10,
     paddingHorizontal: 12,
   },
-  stepDot: { width: 7, height: 7, borderRadius: 4 },
-  stepNode: {
-    fontSize: 12,
-    color: colors.text,
-    fontFamily: font.mono,
+  stepIconChip: {
+    width: 28,
+    height: 28,
+    borderRadius: radius.sm,
+    backgroundColor: colors.mutedSoft,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  stepTexts: { flex: 1, minWidth: 0, gap: 2 },
+  stepTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  stepLabel: {
+    fontSize: 13,
     fontWeight: '600',
+    color: colors.text,
+    flexShrink: 1,
   },
-  stepType: {
-    flex: 1,
+  stepNodeTag: {
     fontSize: 10,
-    color: colors.primary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.4,
+    color: colors.textMuted,
+    fontFamily: font.mono,
   },
-  stepStatus: {
+  stepSummary: {
+    fontSize: 11.5,
+    color: colors.textSecondary,
+    fontFamily: font.mono,
+  },
+  stepRight: { alignItems: 'flex-end', gap: 3 },
+  stepPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderWidth: 1,
+    borderRadius: radius.pill,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  stepPillDot: { width: 5, height: 5, borderRadius: 3 },
+  stepPillText: {
     fontSize: 9,
     fontWeight: '600',
     textTransform: 'uppercase',
     letterSpacing: 0.4,
   },
   stepDuration: {
-    fontSize: 9,
+    fontSize: 9.5,
     color: colors.textMuted,
     fontFamily: font.mono,
-    minWidth: 32,
-    textAlign: 'right',
   },
+  stepChevron: { marginLeft: 2 },
   stepBody: {
     paddingHorizontal: 12,
     paddingBottom: 10,

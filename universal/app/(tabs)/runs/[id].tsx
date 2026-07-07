@@ -15,10 +15,13 @@
 import { useLocalSearchParams, useNavigation } from 'expo-router';
 import { useEffect, useLayoutEffect } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
-import { colors } from '../../../theme';
+import { colors, radius } from '../../../theme';
 import { RunDetailView } from '../../../components/RunDetailView';
-import { useHeaderInset } from '../../../components/screenHeader';
+import { useHeaderInset, HeaderRight } from '../../../components/screenHeader';
+import PopupMenu from '../../../components/PopupMenu';
+import { NO_DRAG } from '../../../components/DragRegion';
 import { useConnection } from '../../../stores/connection';
+import { useUI } from '../../../stores/ui';
 import { setBaseUrl } from '../../../services/api';
 
 export default function RunDetailScreen() {
@@ -31,6 +34,8 @@ export default function RunDetailScreen() {
   const navigation = useNavigation();
   const headerInset = useHeaderInset();
   const connConfig = useConnection((s) => s.config);
+  const contextPanelVisible = useUI((s) => s.contextPanelVisible);
+  const toggleContextPanel = useUI((s) => s.toggleContextPanel);
 
   useEffect(() => {
     if (!connConfig) return;
@@ -39,8 +44,38 @@ export default function RunDetailScreen() {
 
   useLayoutEffect(() => {
     // Screen-name title by run kind (homogeneous; not the parent's name).
-    navigation.setOptions({ title: kind === 'workflow' ? 'Workflow run' : 'Scheduled run' });
-  }, [navigation, kind]);
+    navigation.setOptions({
+      title: kind === 'workflow' ? 'Workflow run' : 'Scheduled run',
+      // A scheduled firing renders its session's context panel (RunDetailView
+      // → TaskBody); expose the same show/hide toggle as the chat header so it
+      // can be dismissed here too. Workflow runs surface the panel only once a
+      // node's session is opened (on the chat screen, which has its own toggle).
+      headerRight:
+        kind === 'workflow'
+          ? undefined
+          : () => (
+              <HeaderRight>
+                <PopupMenu
+                  triggerIcon="more-vertical"
+                  triggerSize={18}
+                  triggerColor={colors.textSecondary}
+                  // NO_DRAG is required: the desktop header is a window-drag
+                  // region that otherwise swallows the click (why the button
+                  // wasn't tappable). Mirrors the chat screen's trigger.
+                  triggerStyle={[styles.headerMenuBtn, NO_DRAG]}
+                  accessibilityLabel="Run options"
+                  items={[
+                    {
+                      label: contextPanelVisible ? 'Hide context panel' : 'Show context panel',
+                      icon: 'pie-chart',
+                      onPress: toggleContextPanel,
+                    },
+                  ]}
+                />
+              </HeaderRight>
+            ),
+    });
+  }, [navigation, kind, contextPanelVisible, toggleContextPanel]);
 
   const ready = connConfig && id && parentId;
 
@@ -69,4 +104,9 @@ export default function RunDetailScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   statusPane: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  headerMenuBtn: {
+    width: 34, height: 34,
+    alignItems: 'center', justifyContent: 'center',
+    borderRadius: radius.md,
+  },
 });

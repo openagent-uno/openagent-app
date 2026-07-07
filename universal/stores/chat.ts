@@ -16,12 +16,14 @@ import {
   type ChatSession,
   type CompactionInfo,
   type ServerMessage,
+  type SessionContext,
   type ToolInfo,
 } from '../../common/types';
 import type { SessionEntry } from '../services/api';
 import {
   deleteSession as deleteSessionApi,
   fetchSessionRuns,
+  getSessionContext,
   runMsgToChat,
   updateSessionMetadata,
 } from '../services/api';
@@ -187,6 +189,13 @@ interface ChatState {
    *  No-op while the session is still processing (so it never clobbers a turn
    *  the user just started) or when the server returns nothing. */
   reconcileSession: (sessionId: string) => void;
+  /** Set a session's live context-window composition (from the
+   *  ``context_report`` push frame or the ``/context`` command_result). */
+  applyContextReport: (sessionId: string, report: SessionContext) => void;
+  /** Pull ``GET /api/sessions/{id}/context`` and store it — used on session
+   *  activation and after a turn completes (covers child/run sessions that
+   *  don't get the push frame). */
+  refreshContext: (sessionId: string) => void;
   /** Called on ``turn_complete`` to synchronously clear any stuck
    *  ``streaming: true`` / ``isProcessing: true`` state left behind when a
    *  gateway omits the ``response`` frame or when the RAF delta flush races
@@ -267,6 +276,10 @@ export const useChat = create<ChatState>((set, get) => ({
           .catch(() => {});
       }
     }
+    // Load the context-window composition for the newly-focused session so
+    // the panel paints immediately (before the next turn pushes a fresh one).
+    // Covers chat, sub-agent, scheduled-firing and workflow-AI-node sessions.
+    get().refreshContext(id);
   },
 
   removeSession: (id) => set((s) => {
@@ -324,7 +337,8 @@ export const useChat = create<ChatState>((set, get) => ({
       });
     }
     if (imported.length === 0 && metaById.size === 0) return;
-    const autoSelectId = get().activeSessionId ?? imported[0]?.id ?? null;
+    const prevActive = get().activeSessionId;
+    const autoSelectId = prevActive ?? imported[0]?.id ?? null;
     set((s) => ({
       sessions: [
         ...s.sessions.map((se) => {
@@ -362,6 +376,14 @@ export const useChat = create<ChatState>((set, get) => ({
           }
         })
         .catch(() => {});
+    }
+    // Paint the context panel on first load: hydration sets the active session
+    // directly (not via ``setActiveSession``), so without this the panel stayed
+    // blank until the user switched chats. Only fire when the active session is
+    // newly selected here — a metadata-only re-hydrate that keeps the same
+    // active session leaves live context to the turn/context-report frames.
+    if (autoSelectId && autoSelectId !== prevActive) {
+      get().refreshContext(autoSelectId);
     }
   },
 
@@ -858,6 +880,29 @@ export const useChat = create<ChatState>((set, get) => ({
             return { ...se, messages: msgs };
           }),
         }));
+      })
+      .catch(() => {});
+  },
+
+  applyContextReport: (sessionId, report) => set((s) => {
+    // Only patch a session we already know about — the panel binds to the
+    // active session, which always exists by the time a report arrives.
+    if (!report || !s.sessions.some((ses) => ses.id === sessionId)) return {};
+    return {
+      sessions: s.sessions.map((ses) =>
+        ses.id === sessionId ? { ...ses, contextUsage: report } : ses,
+      ),
+    };
+  }),
+
+  refreshContext: (sessionId) => {
+    if (!sessionId) return;
+    getSessionContext(sessionId)
+      .then((report) => {
+        // A valid report has a real window; the empty-session shape
+        // (context_window 0) is ignored so the panel keeps its last good state.
+        if (!report || !report.context_window) return;
+        get().applyContextReport(sessionId, report);
       })
       .catch(() => {});
   },

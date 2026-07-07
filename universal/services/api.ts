@@ -13,6 +13,7 @@ import type {
   VaultWriteResult, VaultHistory, VaultGateReport,
   VaultCommitDetail, VaultRestoreResult, VaultResetResult,
   ChatMessage, Attachment, ToolInfo, MessageAuthor, CompactionInfo,
+  SessionContext,
 } from '../../common/types';
 
 let baseUrl = '';
@@ -1095,6 +1096,14 @@ export async function fetchSessionRuns(sessionId: string, limit?: number): Promi
   const qs = limit ? `?limit=${limit}` : '';
   const data = await get<SessionRunsResponse>(`/api/sessions/${encodeURIComponent(sessionId)}/runs${qs}`);
   return data.messages || [];
+}
+
+/** Fetch the context-window composition for a session (Claude-Code /context).
+ *  Backs the always-visible context panel's initial paint + turn reconcile.
+ *  Works for any session kind (chat, sub-agent, scheduled firing, workflow
+ *  AI node) since they are all rows in the sessions table. */
+export async function getSessionContext(sessionId: string): Promise<SessionContext> {
+  return get<SessionContext>(`/api/sessions/${encodeURIComponent(sessionId)}/context`);
 }
 
 export async function updateSessionMetadata(

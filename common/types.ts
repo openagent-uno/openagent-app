@@ -36,7 +36,7 @@ export type ClientMessage =
   | {
       type: 'command';
       name: 'stop' | 'new' | 'clear' | 'reset' | 'status' | 'queue' | 'help'
-           | 'usage' | 'update' | 'restart' | 'compact' | 'model';
+           | 'usage' | 'context' | 'update' | 'restart' | 'compact' | 'model';
       session_id?: string;
       arg?: string;
     }
@@ -161,7 +161,15 @@ export type ServerMessage =
   // builds tolerated its absence — keep it optional for back-compat.
   | { type: 'error'; text: string; session_id?: string }
   | { type: 'queued'; position: number }
-  | { type: 'command_result'; text: string }
+  // ``context`` rides along on the /context command reply — the structured
+  // window breakdown for rich clients; ``text`` already carries the same as
+  // a monospace block for text-only surfaces. Additive & optional.
+  | { type: 'command_result'; text: string; context?: SessionContext }
+  // ── Live context-window composition (Claude-Code /context) ──
+  // Pushed after each turn completes so an always-visible context panel
+  // updates in realtime as the conversation grows. Same payload as
+  // ``GET /api/sessions/{id}/context``. Clients that don't know it ignore it.
+  | { type: 'context_report'; session_id: string; report: SessionContext; seq?: number; ts_ms?: number }
   | { type: 'pong' }
   // Resource-change ping: a list the desktop app might be showing
   // moved on the server. Subscribed stores refetch on receipt.
@@ -872,6 +880,12 @@ export interface ChatSession {
    *  the first user-tagged frame after session open, since the
    *  gateway has no first-class ``system_prompt`` field. */
   systemPrompt?: string;
+  /** Live context-window composition for the always-visible /context panel.
+   *  Set from the ``context_report`` frame (pushed each turn) and the
+   *  ``GET /api/sessions/{id}/context`` fetch on activation/reconcile.
+   *  Applies to every session kind — chat, sub-agent, scheduled firing,
+   *  workflow AI node — since they are all ordinary sessions. */
+  contextUsage?: SessionContext;
 }
 
 // ── System telemetry ──
@@ -1085,6 +1099,49 @@ export interface UsageData {
   monthly_budget: number;
   remaining: number | null;
   by_model: Record<string, number>;
+}
+
+/** One slice of the context-window composition (Claude-Code /context).
+ *  ``key`` is a stable id ('system'|'tools'|'messages'|'summary'|'free')
+ *  used to pick a color; ``pct`` is a share of the whole window (0..100). */
+export interface SessionContextSection {
+  key: string;
+  label: string;
+  tokens: number;
+  pct: number;
+}
+
+/** Per-session context-window usage — the shape returned by
+ *  ``GET /api/sessions/{id}/context``, carried on the ``command_result``'s
+ *  ``context`` field, and pushed live as the ``context_report`` frame.
+ *  One contract shared by the app panel, the CLI table, and chat channels.
+ *  See server ``src/core/context_report.py``. Numeric fields default to 0
+ *  (the server omits zero/None), so treat absent values as 0. */
+export interface SessionContext {
+  session_id: string;
+  /** Runtime id of the model that owns this session, e.g. "anthropic:claude-opus-4-8". */
+  model?: string;
+  /** Bare model id for display. */
+  model_label?: string;
+  /** Total context window in tokens (the gauge denominator). */
+  context_window: number;
+  /** 'fallback' => the window is an estimate (model absent from the pricing catalog). */
+  window_source?: 'openrouter' | 'fallback';
+  /** Sum of non-free section tokens (the filled portion of the gauge). */
+  used_tokens?: number;
+  free_tokens?: number;
+  used_pct?: number;
+  /** Authoritative last-turn input tokens billed by the provider (0 if none yet). */
+  measured_input_tokens?: number;
+  sections: SessionContextSection[];
+  /** Cumulative session cost in USD (null when pricing is unavailable). */
+  cost_usd?: number | null;
+  total_input_tokens?: number;
+  total_output_tokens?: number;
+  cache_read_tokens?: number;
+  reasoning_tokens?: number;
+  pricing_available?: boolean;
+  turns?: number;
 }
 
 export interface McpServerConfig {

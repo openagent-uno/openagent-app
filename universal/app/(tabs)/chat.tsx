@@ -22,11 +22,13 @@ import type { Attachment } from '../../../common/types';
 import { isHiddenChildSession, runRoutePath, type RunLaunchTarget, type MemoryTarget } from '../../../common/types';
 import { useConnection } from '../../stores/connection';
 import { useChat } from '../../stores/chat';
+import { useUI } from '../../stores/ui';
 import { useEvents } from '../../stores/events';
 import { fetchSessions } from '../../services/api';
 import ResponsiveSidebar from '../../components/ResponsiveSidebar';
 import MessageComposer, { type PendingFile, type SlashCommand } from '../../components/MessageComposer';
 import MessageList from '../../components/MessageList';
+import ContextPanel from '../../components/ContextPanel';
 import CommandPalette, { type PaletteEntry } from '../../components/CommandPalette';
 import BrandLogo from '../../components/BrandLogo';
 import { useHeaderInset, HeaderBack, HeaderMenu, HeaderRight } from '../../components/screenHeader';
@@ -73,6 +75,8 @@ export default function ChatScreen() {
   const sessions = useChat((s) => s.sessions);
   const activeSessionId = useChat((s) => s.activeSessionId);
   const sessionsHydrated = useChat((s) => s.sessionsHydrated);
+  const contextPanelVisible = useUI((s) => s.contextPanelVisible);
+  const toggleContextPanel = useUI((s) => s.toggleContextPanel);
   const createSession = useChat((s) => s.createSession);
   const setActiveSession = useChat((s) => s.setActiveSession);
   const removeSession = useChat((s) => s.removeSession);
@@ -187,6 +191,26 @@ export default function ChatScreen() {
   const activeSessionIdRef = useRef<string | null>(activeSessionId ?? null);
   activeSessionIdRef.current = activeSessionId ?? null;
 
+  // Latest-value refs mirrored on every render. The callbacks handed to the
+  // memoized <MessageList/> (onEditUser/onRegenerate/onOpenChild/…) MUST keep
+  // a stable identity, otherwise MessageList's React.memo is defeated and the
+  // whole transcript re-renders — markdown re-parse, syntax highlight, the
+  // full 60-node window — on *every keystroke* in the composer. The natural
+  // useCallback deps here are unstable: ``activeSession`` is a fresh
+  // sessions.find() object each render, ``router`` is a new object each render
+  // (useRouter), and ``ws`` flips on reconnect. Reading them through refs lets
+  // those callbacks be created once with empty/stable deps.
+  const activeSessionRef = useRef(activeSession);
+  activeSessionRef.current = activeSession;
+  const wsRef = useRef(ws);
+  wsRef.current = ws;
+  const routerRef = useRef(router);
+  routerRef.current = router;
+  // Mirrors the live composer text so the session-switch handler can flush the
+  // outgoing draft synchronously (the persist write itself is debounced).
+  const inputValueRef = useRef('');
+  inputValueRef.current = input;
+
   const browserAvailable =
     Platform.OS === 'web' &&
     typeof navigator !== 'undefined' &&
@@ -259,15 +283,29 @@ export default function ChatScreen() {
   useEffect(() => {
     if (!activeSessionId) return;
     if (hydratedSessionRef.current === activeSessionId) return;
+    const prevId = hydratedSessionRef.current;
+    // Flush the OUTGOING session's draft synchronously before swapping, so
+    // switching sessions within the persist debounce window never drops the
+    // text still sitting in the composer.
+    if (prevId) setDraftInput(prevId, inputValueRef.current);
     hydratedSessionRef.current = activeSessionId;
     const draft = activeSession?.draftInput ?? '';
     setInput(draft);
-  }, [activeSessionId, activeSession?.draftInput]);
+  }, [activeSessionId, activeSession?.draftInput, setDraftInput]);
 
-  // Persist composer text back into the active session on every change.
+  // Persist composer text back into the active session, DEBOUNCED. Writing on
+  // every keystroke rebuilt the whole ``sessions`` array in the store, which
+  // re-ran the sidebar's filter+sort (and, while searching, a full-text scan
+  // over every message of every session) and re-rendered this screen a second
+  // time per character. The draft is an in-memory convenience — it survives a
+  // session switch, not a reload — so collapsing writes to one ~400ms after
+  // typing pauses is invisible to the user and keeps the keystroke path off
+  // the store entirely. The trailing timer is cleared on switch/unmount.
   useEffect(() => {
     if (!activeSessionId) return;
-    setDraftInput(activeSessionId, input);
+    const sid = activeSessionId;
+    const t = setTimeout(() => setDraftInput(sid, input), 400);
+    return () => clearTimeout(t);
   }, [input, activeSessionId, setDraftInput]);
 
   // Deep-link: a ``?session=<id>`` param (set when a delegation card is
@@ -300,16 +338,16 @@ export default function ChatScreen() {
     // deep-link. Replacing by the canonical ``/(tabs)/chat`` path keeps the URL
     // a clean, round-trippable ``/chat?session=…`` while staying on the same
     // screen (no push, no remount).
-    router.replace({ pathname: '/(tabs)/chat', params: { session: childSessionId } });
-  }, [setActiveSession, router]);
+    routerRef.current.replace({ pathname: '/(tabs)/chat', params: { session: childSessionId } });
+  }, [setActiveSession]);
 
   // A chat turn that ran a scheduled task / workflow shows a RunLaunchCard;
   // pressing it opens that firing's execution screen (``/runs/{id}``) — the
   // same single-run destination the sidebar's Recent feed uses.
   const openRun = useCallback((target: RunLaunchTarget) => {
     const path = runRoutePath(target);
-    if (path) router.push(`/${path}` as any);
-  }, [router]);
+    if (path) routerRef.current.push(`/${path}` as any);
+  }, []);
 
   // A memory-vault tool chip deep-links into the Memory tab: a single-note op
   // opens that note's markdown screen (the same destination as clicking its
@@ -317,14 +355,14 @@ export default function ChatScreen() {
   // maintenance op opens the memory graph.
   const openMemory = useCallback((target: MemoryTarget) => {
     if (target.kind === 'note') {
-      router.push({
+      routerRef.current.push({
         pathname: '/(tabs)/memory/[...path]',
         params: { path: target.path.split('/') },
       });
     } else {
-      router.push('/(tabs)/memory');
+      routerRef.current.push('/(tabs)/memory');
     }
-  }, [router]);
+  }, []);
 
   // Drive the (drawer) header's left control. A child session — a delegation
   // sub-agent, a scheduled firing, or a workflow node — gets a real "back"
@@ -362,11 +400,11 @@ export default function ChatScreen() {
         ) : (
           <HeaderMenu />
         ),
-      // Overflow menu for the open chat — same Delete action as the sidebar
-      // row, in the navigator header. Only a top-level manual chat is
-      // deletable, so a sub-agent / run view (a child session) shows none.
+      // Overflow menu for the open chat. Every session (incl. sub-agent / run
+      // views) gets the context-panel toggle; only a top-level manual chat is
+      // deletable, so the Delete row is appended just for those.
       headerRight: () =>
-        activeSession && !isChildSession ? (
+        activeSession ? (
           <HeaderRight>
             <PopupMenu
               triggerIcon="more-vertical"
@@ -376,18 +414,23 @@ export default function ChatScreen() {
               accessibilityLabel="Chat options"
               items={[
                 {
+                  label: contextPanelVisible ? 'Hide context panel' : 'Show context panel',
+                  icon: 'pie-chart',
+                  onPress: toggleContextPanel,
+                },
+                ...(!isChildSession ? [{
                   label: 'Delete chat',
-                  icon: 'trash-2',
+                  icon: 'trash-2' as const,
                   destructive: true,
                   onPress: () => confirmAndRemove(activeSession),
-                },
+                }] : []),
               ]}
             />
           </HeaderRight>
         ) : null,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigation, isChildSession, parentSession?.id, activeSession?.id, activeSession?.title]);
+  }, [navigation, isChildSession, parentSession?.id, activeSession?.id, activeSession?.title, contextPanelVisible, toggleContextPanel]);
 
   // A freshly-spawned child session (delegation / scheduled firing / workflow
   // node) fires a ``session`` resource_event — refetch so it appears in the
@@ -703,14 +746,17 @@ export default function ChatScreen() {
   // point. The store truncates everything after the edited message so
   // the new assistant reply lands on a clean tail (ChatGPT convention).
   const handleEditUser = useCallback((messageId: string, newText: string) => {
-    if (!ws || !activeSessionId) return;
-    const ok = editUserMessage(activeSessionId, messageId, newText);
+    const conn = wsRef.current;
+    const sid = activeSessionIdRef.current;
+    const ses = activeSessionRef.current;
+    if (!conn || !sid) return;
+    const ok = editUserMessage(sid, messageId, newText);
     if (!ok) return;
-    ws.sendMessage(newText, activeSessionId, {
-      llmPin: activeSession?.llmPin,
-      systemPrompt: activeSession?.systemPrompt,
+    conn.sendMessage(newText, sid, {
+      llmPin: ses?.llmPin,
+      systemPrompt: ses?.systemPrompt,
     });
-  }, [ws, activeSessionId, activeSession, editUserMessage]);
+  }, [editUserMessage]);
 
   // Cancel an in-flight assistant turn for the active session. Turns run
   // inside a server-side StreamSession whose cancel verb is the
@@ -730,19 +776,22 @@ export default function ChatScreen() {
   // ``role: 'user'``; everything after it stays in the transcript so
   // the user can compare old vs new — ChatGPT-style.
   const handleRegenerate = useCallback(() => {
-    if (!ws || !activeSessionId || !activeSession) return;
-    const lastUser = [...activeSession.messages].reverse().find((m) => m.role === 'user');
+    const conn = wsRef.current;
+    const sid = activeSessionIdRef.current;
+    const ses = activeSessionRef.current;
+    if (!conn || !sid || !ses) return;
+    const lastUser = [...ses.messages].reverse().find((m) => m.role === 'user');
     if (!lastUser) return;
     const attachments = lastUser.attachments;
-    addUserMessage(activeSessionId, lastUser.text || '(regenerate)', attachments);
-    ws.sendMessage(lastUser.text, activeSessionId, {
-      llmPin: activeSession?.llmPin,
-      systemPrompt: activeSession?.systemPrompt,
+    addUserMessage(sid, lastUser.text || '(regenerate)', attachments);
+    conn.sendMessage(lastUser.text, sid, {
+      llmPin: ses.llmPin,
+      systemPrompt: ses.systemPrompt,
       attachments: attachments?.map((a) => ({
         type: a.type, path: a.path, filename: a.filename,
       })),
     });
-  }, [ws, activeSessionId, activeSession, addUserMessage]);
+  }, [addUserMessage]);
 
   // Up/Down recall — walk the user-message history when composer is
   // empty (or caret at boundary). Index = position from the tail.
@@ -837,7 +886,7 @@ export default function ChatScreen() {
       // goes to the agent as a normal message.
       const GATEWAY_COMMANDS = new Set([
         'compact', 'model', 'new', 'clear', 'reset', 'stop',
-        'status', 'queue', 'usage', 'update', 'restart', 'help',
+        'status', 'queue', 'usage', 'context', 'update', 'restart', 'help',
       ]);
       if (GATEWAY_COMMANDS.has(cmdName)) {
         ws.sendCommand(cmdName as any, activeSessionId, cmdArg);
@@ -1076,7 +1125,13 @@ export default function ChatScreen() {
   const screenSupported = videoSupported
     && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
 
-  const sidebarContent = (
+  // Memoized so the sidebar element keeps a STABLE reference across
+  // keystroke-driven re-renders of this screen — React then bails out of
+  // reconciling the whole session list (up to 60 rows) on every character
+  // typed into the composer. Its inputs (sessions, search, edit state) don't
+  // change while composing, so this recomputes only when the sidebar actually
+  // needs to.
+  const sidebarContent = useMemo(() => (
     <View style={[styles.sidebarInner, { paddingTop: headerInset + 10 }]}>
       <View style={styles.sidebarHead}>
         <Text style={styles.sidebarKicker}>Sessions</Text>
@@ -1228,7 +1283,12 @@ export default function ChatScreen() {
         )}
       </ScrollView>
     </View>
-  );
+  ), [
+    headerInset, createSession, sessionSearch, setSessionSearch, showAllSessions,
+    setShowAllSessions, chatSessions, editingSessionId, setEditingSessionId,
+    activeSessionId, setActiveSession, editTitle, setEditTitle, renameSession,
+    togglePinned, exportSessionAsMarkdown, confirmAndRemove,
+  ]);
 
   // Slash-command catalogue offered by the composer. ``action`` fires
   // a local handler; commands without ``action`` insert their template
@@ -1263,6 +1323,15 @@ export default function ChatScreen() {
       },
     },
     {
+      name: 'context',
+      description: 'Show this conversation’s context-window usage',
+      // The panel is always visible; this forces an immediate refresh (the
+      // command_result carries the fresh breakdown, applied in _layout.tsx).
+      action: () => {
+        if (activeSessionId) ws?.sendCommand('context', activeSessionId);
+      },
+    },
+    {
       name: 'model',
       description: 'Switch the model for this conversation',
       // Opens the composer's model picker instead of inserting "/model "
@@ -1292,6 +1361,18 @@ export default function ChatScreen() {
     },
   ];
 
+  // Composer model-picker rows. Memoized on the raw catalogue so a keystroke
+  // (which re-renders this screen) doesn't rebuild a fresh array each time and
+  // hand the composer a new ``modelOptions`` reference.
+  const modelOptions = useMemo(
+    () => llmModels.map((m) => ({
+      id: m.runtime_id,
+      label: m.display_name || m.model || m.runtime_id,
+      provider: m.provider_name,
+    })),
+    [llmModels],
+  );
+
   const paletteEntries: PaletteEntry[] = useMemo(() => chatSessions.map((s) => {
     const last = s.messages[s.messages.length - 1];
     return {
@@ -1318,6 +1399,12 @@ export default function ChatScreen() {
             </View>
           </View>
         )}
+        {/* Always-visible context-window gauge, pinned top-right. Bound to
+            the active session so it also serves sub-agent / scheduled-firing /
+            workflow-AI-node sessions opened on this same screen. */}
+        {activeSession ? (
+          <ContextPanel context={activeSession.contextUsage} topInset={headerInset} />
+        ) : null}
         {activeSession ? (
           <>
             {/* TTS banner */}
@@ -1496,11 +1583,7 @@ export default function ChatScreen() {
               onRecallPrev={recallPrev}
               onRecallNext={recallNext}
               slashCommands={slashCommands}
-              modelOptions={llmModels.map((m) => ({
-                id: m.runtime_id,
-                label: m.display_name || m.model || m.runtime_id,
-                provider: m.provider_name,
-              }))}
+              modelOptions={modelOptions}
               activeModelId={activeSession?.llmPin}
               onSelectModel={handleSelectModel}
               pendingFiles={pendingFiles}

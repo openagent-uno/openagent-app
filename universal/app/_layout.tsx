@@ -101,6 +101,22 @@ export default function RootLayout() {
       if (msg.type === 'turn_complete' && msg.session_id) {
         useChat.getState().finaliseStreaming(msg.session_id);
         useChat.getState().reconcileSession(msg.session_id);
+        // Refresh the context panel from the server after a turn settles.
+        // The main session also gets a pushed ``context_report`` below; this
+        // covers child / run / workflow-AI-node sessions (no push frame) and
+        // reconciles cumulative cost.
+        useChat.getState().refreshContext(msg.session_id);
+      }
+
+      // Live context-window composition pushed each turn → update the panel.
+      if (msg.type === 'context_report' && msg.session_id && msg.report) {
+        useChat.getState().applyContextReport(msg.session_id, msg.report);
+      }
+
+      // The /context command reply carries the same structured breakdown —
+      // apply it so typing /context refreshes the panel immediately.
+      if (msg.type === 'command_result' && msg.context) {
+        useChat.getState().applyContextReport(msg.context.session_id, msg.context);
       }
 
       // A session was deleted/pruned server-side → drop it from this sidebar
