@@ -1264,7 +1264,10 @@ export default function ChatScreen() {
     },
     {
       name: 'model',
-      description: 'Switch model: /model <name>',
+      description: 'Switch the model for this conversation',
+      // Opens the composer's model picker instead of inserting "/model "
+      // for the user to type a runtime id by hand.
+      argSource: 'models',
     },
     {
       name: 'export',

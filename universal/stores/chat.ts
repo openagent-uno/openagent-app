@@ -14,6 +14,7 @@ import {
   type Attachment,
   type ChatMessage,
   type ChatSession,
+  type CompactionInfo,
   type ServerMessage,
   type ToolInfo,
 } from '../../common/types';
@@ -465,7 +466,7 @@ export const useChat = create<ChatState>((set, get) => ({
     let stubAdded = false;
     if (
       (msg.type === 'status' || msg.type === 'delta' || msg.type === 'response'
-        || msg.type === 'seed')
+        || msg.type === 'seed' || msg.type === 'session_compacted')
       && msg.session_id
       && !s.sessions.some((x) => x.id === msg.session_id)
     ) {
@@ -535,6 +536,46 @@ export const useChat = create<ChatState>((set, get) => ({
         sessions: s.sessions.map((ses) =>
           ses.id === msg.session_id ? { ...ses, isReasoning: msg.active } : ses,
         ),
+      };
+    }
+
+    if (msg.type === 'session_compacted') {
+      // In-place compaction (vision §2). ``running`` opens a compaction
+      // card; the terminal ``done``/``error`` frame resolves that same
+      // card in place so the two render as ONE tool-style entry. A
+      // terminal frame with no running card to patch (running missed, or
+      // a manual /compact with no prior card) still lands as its own card.
+      const phase = msg.phase || 'done';
+      const info: CompactionInfo = {
+        phase,
+        foldedRuns: msg.folded_runs,
+        keptRuns: msg.kept_runs_count,
+        summaryChars: msg.summary_chars,
+        tokensBefore: msg.tokens_before,
+        tokensAfter: msg.tokens_after,
+      };
+      return {
+        sessions: s.sessions.map((ses) => {
+          if (ses.id !== msg.session_id) return ses;
+          const msgs = [...ses.messages];
+          if (phase !== 'running') {
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              if (msgs[i].role === 'compaction'
+                  && msgs[i].compactionInfo?.phase === 'running') {
+                msgs[i] = { ...msgs[i], compactionInfo: info };
+                return { ...ses, messages: msgs };
+              }
+            }
+          }
+          msgs.push({
+            id: genId(),
+            role: 'compaction' as const,
+            text: '',
+            timestamp: Date.now(),
+            compactionInfo: info,
+          });
+          return { ...ses, messages: msgs };
+        }),
       };
     }
 

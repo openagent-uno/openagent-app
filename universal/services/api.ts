@@ -12,7 +12,7 @@ import type {
   SystemSnapshot,
   VaultWriteResult, VaultHistory, VaultGateReport,
   VaultCommitDetail, VaultRestoreResult, VaultResetResult,
-  ChatMessage, Attachment, ToolInfo, MessageAuthor,
+  ChatMessage, Attachment, ToolInfo, MessageAuthor, CompactionInfo,
 } from '../../common/types';
 
 let baseUrl = '';
@@ -915,11 +915,13 @@ export async function listDbModels(opts?: {
   providerId?: number;
   framework?: 'api-based';
   enabledOnly?: boolean;
+  kind?: 'llm' | 'tts' | 'stt';
 }): Promise<ModelEntry[]> {
   const params = new URLSearchParams();
   if (opts?.providerId) params.set('provider_id', String(opts.providerId));
   if (opts?.framework) params.set('framework', opts.framework);
   if (opts?.enabledOnly) params.set('enabled_only', '1');
+  if (opts?.kind) params.set('kind', opts.kind);
   const qs = params.toString();
   const data = await get<{ models: ModelEntry[] }>(`/api/models${qs ? `?${qs}` : ''}`);
   return (data.models || []).map(normalizeModel);
@@ -1025,7 +1027,7 @@ export async function deleteSession(sessionId: string): Promise<void> {
 // via ``toolPhase(toolInfo)``; the server does not emit a status enum.
 export interface SessionRunMessage {
   id: string;
-  role: 'user' | 'assistant' | 'tool';
+  role: 'user' | 'assistant' | 'tool' | 'compaction';
   text: string;
   timestamp: number;
   toolInfo?: {
@@ -1037,6 +1039,17 @@ export interface SessionRunMessage {
     // Additional tool-execution fields (metrics, child_run_id, …) pass
     // through verbatim from the server.
     [key: string]: any;
+  };
+  /** Set on ``role: 'compaction'`` rows — a folded-turns recap (vision §2),
+   *  rebuilt into the same CompactionCard the live ``session_compacted`` frame
+   *  draws. The server always sends the terminal (done) shape here. */
+  compaction?: {
+    phase?: 'running' | 'done' | 'error';
+    folded_runs?: number;
+    kept_runs_count?: number;
+    summary_chars?: number;
+    tokens_before?: number;
+    tokens_after?: number;
   };
   attachments?: { type: 'image' | 'file' | 'voice' | 'video'; path: string; filename: string }[];
   model?: string;
@@ -1060,6 +1073,18 @@ export function runMsgToChat(m: SessionRunMessage): ChatMessage {
     text: m.text,
     timestamp: m.timestamp,
     toolInfo: m.toolInfo as ToolInfo | undefined,
+    // A compaction recap row (vision §2) rebuilds the same CompactionCard
+    // the live frame draws; the server sends the terminal (done) shape.
+    compactionInfo: m.compaction
+      ? {
+          phase: m.compaction.phase ?? 'done',
+          foldedRuns: m.compaction.folded_runs,
+          keptRuns: m.compaction.kept_runs_count,
+          summaryChars: m.compaction.summary_chars,
+          tokensBefore: m.compaction.tokens_before,
+          tokensAfter: m.compaction.tokens_after,
+        } as CompactionInfo
+      : undefined,
     attachments: m.attachments as Attachment[] | undefined,
     model: m.model,
     author: m.author as MessageAuthor | undefined,

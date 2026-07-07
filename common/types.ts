@@ -190,6 +190,25 @@ export type ServerMessage =
   // distinguishes user-typed (no UI update needed; chat already added
   // it) from STT (server-recognised — UI adds it now).
   | { type: 'turn_complete'; session_id: string }
+  // ── In-place session compaction (vision §2) ──
+  // The agent folds older turns into a recap when the context fills up.
+  // ``phase='running'`` fires before the (slow) summariser call so the UI
+  // can show a "Compacting…" card; ``phase='done'`` once the fold lands
+  // (with the run/token stats); ``phase='error'`` if the fold was skipped.
+  // Rendered as a tool-style CompactionCard in the transcript. Backward
+  // compat: clients that don't recognise this type ignore it.
+  | {
+      type: 'session_compacted';
+      session_id: string;
+      phase?: 'running' | 'done' | 'error';
+      folded_runs?: number;
+      kept_runs_count?: number;
+      summary_chars?: number;
+      tokens_before?: number;
+      tokens_after?: number;
+      seq?: number;
+      ts_ms?: number;
+    }
   | {
       type: 'text_final';
       session_id: string;
@@ -743,6 +762,25 @@ function noteTargetFor(raw: string): MemoryTarget {
   return { kind: 'note', path, title: noteTitle(path) };
 }
 
+/** Friendly, phase-aware label + detail for a compaction card. ``running``
+ *  shows the in-progress copy; ``done`` summarises the fold (turns folded and,
+ *  when known, the context freed); ``error`` reports the skip. Mirrors
+ *  ``toolDisplay`` in spirit so the compaction card reads like a tool chip. */
+export function compactionDisplay(info: CompactionInfo): { title: string; detail?: string } {
+  if (info.phase === 'running') return { title: 'Compacting conversation…' };
+  if (info.phase === 'error') return { title: 'Compaction skipped' };
+  const folded = info.foldedRuns ?? 0;
+  // A manual /compact on a conversation too short to fold reports done with
+  // zero folded runs — surface it as an explicit "nothing to do" so the
+  // command never looks like it silently failed.
+  if (folded === 0) return { title: 'Already compact — nothing to fold' };
+  const freed = (info.tokensBefore ?? 0) - (info.tokensAfter ?? 0);
+  const bits: string[] = [];
+  bits.push(`${folded} turn${folded === 1 ? '' : 's'} folded`);
+  if (freed > 0) bits.push(`~${freed.toLocaleString()} tokens freed`);
+  return { title: 'Compacted conversation', detail: bits.join(' · ') || undefined };
+}
+
 /** Who authored a message. ``human`` carries a network handle/display so the
  *  app shows the real sender (and multi-human sessions attribute correctly);
  *  ``agent`` marks an agent-self seed — the delegated task / scheduled mission
@@ -754,13 +792,33 @@ export interface MessageAuthor {
   display?: string;
 }
 
+/** In-place compaction (vision §2) rendered as a transcript entry. Live,
+ *  it's driven by the ``session_compacted`` wire frame (running → done);
+ *  on reopen it's rebuilt from the recap run's persisted stats. ``phase``
+ *  drives the card's spinner/label; the counts populate the expanded body. */
+export interface CompactionInfo {
+  phase: 'running' | 'done' | 'error';
+  /** Older turns folded into the recap. */
+  foldedRuns?: number;
+  /** Recent turns kept verbatim (recap + last N). */
+  keptRuns?: number;
+  /** Length of the recap paragraph the model produced. */
+  summaryChars?: number;
+  /** Estimated tokens of the folded turns / the recap that replaced them.
+   *  ``tokensBefore - tokensAfter`` is roughly the context freed. */
+  tokensBefore?: number;
+  tokensAfter?: number;
+}
+
 export interface ChatMessage {
   id: string;
-  role: 'user' | 'assistant' | 'tool';
+  role: 'user' | 'assistant' | 'tool' | 'compaction';
   text: string;
   timestamp: number;
   attachments?: Attachment[];
   toolInfo?: ToolInfo;
+  /** Set on ``role: 'compaction'`` messages — the compaction card payload. */
+  compactionInfo?: CompactionInfo;
   model?: string;
   /** Per-message authorship (see MessageAuthor). */
   author?: MessageAuthor;
@@ -1252,6 +1310,10 @@ export interface ScheduledTask {
   name: string;
   cron_expression: string;
   prompt: string;
+  /** Optional per-task model pin (a runtime_id such as
+   *  ``anthropic:claude-opus-4-8``). Null/absent → the firing runs on the
+   *  agent's default/router model, like a chat turn with no session pin. */
+  model?: string | null;
   enabled: boolean;
   last_run: number | null;
   next_run: number | null;
@@ -1274,11 +1336,13 @@ export interface CreateScheduledTaskInput {
   name: string;
   cron_expression: string;
   prompt: string;
+  /** Optional runtime_id to pin the firing's model. Omit for the default. */
+  model?: string | null;
   enabled?: boolean;
 }
 
 export type UpdateScheduledTaskInput = Partial<
-  Pick<ScheduledTask, 'name' | 'cron_expression' | 'prompt' | 'enabled'>
+  Pick<ScheduledTask, 'name' | 'cron_expression' | 'prompt' | 'model' | 'enabled'>
 >;
 
 // One row in a scheduled task's execution history — the analogue of

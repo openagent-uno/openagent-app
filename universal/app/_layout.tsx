@@ -83,6 +83,7 @@ export default function RootLayout() {
         || msg.type === 'response'
         || msg.type === 'seed'
         || msg.type === 'error'
+        || msg.type === 'session_compacted'
       ) {
         handleServerMessage(msg);
       }

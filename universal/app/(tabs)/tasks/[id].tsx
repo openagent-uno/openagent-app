@@ -14,14 +14,16 @@
  */
 
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { useEffect, useLayoutEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
 import {
-  ActivityIndicator, Platform, ScrollView, StyleSheet, Text, TextInput, View,
+  ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
+import Feather from '@expo/vector-icons/Feather';
 import { colors, font, radius } from '../../../theme';
 import { useConnection } from '../../../stores/connection';
 import { useTasks } from '../../../stores/tasks';
-import { setBaseUrl, getScheduledTask } from '../../../services/api';
+import { setBaseUrl, getScheduledTask, listDbModels } from '../../../services/api';
+import type { ModelEntry } from '../../../../common/types';
 import { goBack } from '../../../services/windows';
 import CronPicker from '../../../components/CronPicker';
 import { HeaderAction, useHeaderInset } from '../../../components/screenHeader';
@@ -30,9 +32,11 @@ interface TaskForm {
   name: string;
   cron_expression: string;
   prompt: string;
+  /** Optional runtime_id pinning the firing's model; null = default/router. */
+  model: string | null;
 }
 
-const EMPTY_FORM: TaskForm = { name: '', cron_expression: '', prompt: '' };
+const EMPTY_FORM: TaskForm = { name: '', cron_expression: '', prompt: '', model: null };
 
 export default function TaskEditScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -48,6 +52,10 @@ export default function TaskEditScreen() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [localError, setLocalError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  // Enabled LLM catalog for the optional per-task model pin. Loaded once so
+  // the user picks from configured models instead of typing a runtime_id.
+  const [models, setModels] = useState<ModelEntry[]>([]);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
 
   useEffect(() => {
     if (!connConfig) return;
@@ -67,6 +75,7 @@ export default function TaskEditScreen() {
             name: t.name,
             cron_expression: t.cron_expression,
             prompt: t.prompt,
+            model: t.model ?? null,
           });
         }
       } catch (e: any) {
@@ -79,6 +88,29 @@ export default function TaskEditScreen() {
       cancelled = true;
     };
   }, [connConfig, id, isNew]);
+
+  // Load the enabled LLM catalog for the model picker (non-fatal on failure —
+  // the picker just shows "Default" only).
+  useEffect(() => {
+    if (!connConfig) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = await listDbModels({ enabledOnly: true, kind: 'llm' });
+        if (!cancelled) setModels(list);
+      } catch {
+        /* non-fatal */
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [connConfig]);
+
+  // Human label for the currently-pinned model (or the default sentinel).
+  const modelLabel = useMemo(() => {
+    if (!form.model) return 'Auto (default)';
+    const m = models.find((x) => x.runtime_id === form.model);
+    return m?.display_name || form.model;
+  }, [form.model, models]);
 
   // Return to wherever the editor was opened from (the Scheduled list
   // normally) via expo-router history; cold deep-link falls back to it.
@@ -93,10 +125,14 @@ export default function TaskEditScreen() {
       setLocalError('Name, schedule, and prompt are all required.');
       return;
     }
+    // ``model`` is optional: null clears any pin so the firing uses the
+    // agent's default/router model. Always send it (create + update) so
+    // clearing a previously-pinned model persists.
+    const model = form.model || null;
     setSaving(true);
     const ok = isNew
-      ? !!(await createTask({ name, cron_expression: cron, prompt }))
-      : await updateTask(id, { name, cron_expression: cron, prompt });
+      ? !!(await createTask({ name, cron_expression: cron, prompt, model }))
+      : await updateTask(id, { name, cron_expression: cron, prompt, model });
     setSaving(false);
     if (ok) close();
   };
@@ -146,6 +182,48 @@ export default function TaskEditScreen() {
             />
           </View>
 
+          <Text style={styles.label}>Model</Text>
+          <Pressable
+            style={styles.pickerBox}
+            onPress={() => setModelMenuOpen((o) => !o)}
+            accessibilityRole="button"
+            accessibilityLabel="Pick the model for this task"
+          >
+            <Text
+              style={[styles.pickerValue, !form.model && styles.pickerValueMuted]}
+              numberOfLines={1}
+            >
+              {modelLabel}
+            </Text>
+            <Feather
+              name={modelMenuOpen ? 'chevron-up' : 'chevron-down'}
+              size={16}
+              color={colors.textMuted}
+            />
+          </Pressable>
+          {modelMenuOpen && (
+            <View style={styles.pickerMenu}>
+              <ModelOption
+                label="Auto (default)"
+                active={!form.model}
+                onPress={() => { setForm({ ...form, model: null }); setModelMenuOpen(false); }}
+              />
+              {models.map((m) => (
+                <ModelOption
+                  key={m.runtime_id}
+                  label={m.display_name || m.runtime_id}
+                  sublabel={m.display_name ? m.runtime_id : undefined}
+                  active={form.model === m.runtime_id}
+                  onPress={() => { setForm({ ...form, model: m.runtime_id }); setModelMenuOpen(false); }}
+                />
+              ))}
+            </View>
+          )}
+          <Text style={styles.hint}>
+            Leave on Auto to pick the model automatically, or pin a specific
+            model this task always fires on.
+          </Text>
+
           <Text style={styles.label}>Prompt</Text>
           {Platform.OS === 'web' ? (
             <textarea
@@ -179,6 +257,35 @@ export default function TaskEditScreen() {
   );
 }
 
+/** One row in the inline model dropdown — cross-platform (web + native). */
+function ModelOption({
+  label, sublabel, active, onPress,
+}: {
+  label: string;
+  sublabel?: string;
+  active: boolean;
+  onPress: () => void;
+}) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={styles.optionRow}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+    >
+      <View style={styles.optionText}>
+        <Text style={[styles.optionLabel, active && styles.optionLabelActive]} numberOfLines={1}>
+          {label}
+        </Text>
+        {sublabel ? (
+          <Text style={styles.optionSub} numberOfLines={1}>{sublabel}</Text>
+        ) : null}
+      </View>
+      {active ? <Feather name="check" size={15} color={colors.primary} /> : null}
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   statusPane: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24 },
@@ -196,4 +303,29 @@ const styles = StyleSheet.create({
   },
   cronSlot: { marginBottom: 14 },
   errorMsg: { marginTop: 12, fontSize: 12, color: colors.error },
+  hint: {
+    fontSize: 11, color: colors.textMuted, marginTop: 6, marginBottom: 14,
+    lineHeight: 16,
+  },
+  pickerBox: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    backgroundColor: colors.inputBg, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.border,
+    paddingHorizontal: 11, paddingVertical: 10, gap: 8,
+  },
+  pickerValue: { flex: 1, color: colors.text, fontSize: 12, fontFamily: font.mono },
+  pickerValueMuted: { color: colors.textSecondary },
+  pickerMenu: {
+    marginTop: 6, borderRadius: radius.md, borderWidth: 1, borderColor: colors.border,
+    backgroundColor: colors.inputBg, overflow: 'hidden',
+  },
+  optionRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    paddingHorizontal: 11, paddingVertical: 10,
+    borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.border,
+  },
+  optionText: { flex: 1 },
+  optionLabel: { color: colors.text, fontSize: 12, fontFamily: font.sans },
+  optionLabelActive: { color: colors.primary, fontWeight: '600' },
+  optionSub: { color: colors.textMuted, fontSize: 10, fontFamily: font.mono, marginTop: 2 },
 });

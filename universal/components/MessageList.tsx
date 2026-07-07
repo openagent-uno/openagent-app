@@ -13,7 +13,7 @@
 
 import { memo, useState, useMemo } from 'react';
 import Feather from '@expo/vector-icons/Feather';
-import { View, Text, TouchableOpacity, StyleSheet, Platform, Image } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import {
   toolPhase,
   runLaunchTarget,
@@ -23,14 +23,16 @@ import {
   delegationLabel,
   toolDisplay,
   memoryTarget,
+  compactionDisplay,
   type Attachment,
   type ChatMessage,
+  type CompactionInfo,
   type MessageAuthor,
   type MemoryTarget,
   type RunLaunchTarget,
   type ToolInfo,
 } from '../../common/types';
-import { downloadFile, fileUrl } from '../services/api';
+import AttachmentBlock from './Attachments';
 import Markdown from './Markdown';
 import DelegationCard from './DelegationCard';
 import RunLaunchCard from './RunLaunchCard';
@@ -100,6 +102,12 @@ function MessageListBase({
     return null;
   }, [visible]);
   const renderMessage = (msg: ChatMessage) => {
+    if (msg.role === 'compaction') {
+      // In-place compaction (vision §2) renders as a tool-style card:
+      // a live "Compacting…" spinner that resolves to "Compacted
+      // conversation", with the run/token stats in the expanded body.
+      return <CompactionCard key={msg.id} info={msg.compactionInfo} />;
+    }
     if (msg.role === 'tool') {
       // A delegation renders as a card (deep-links into the sub-agent's
       // child session, OpenCode-style) instead of an inline tool chip —
@@ -222,8 +230,6 @@ const UserMessage = memo(function UserMessage({
   onEdit?: (id: string, newText: string) => void;
 }) {
   const label = author?.display || author?.handle || fallbackLabel || 'You';
-  const inlineImages = attachments?.filter((a) => a.type === 'image') ?? [];
-  const otherAttach = attachments?.filter((a) => a.type !== 'image') ?? [];
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(text);
   return (
@@ -304,16 +310,7 @@ const UserMessage = memo(function UserMessage({
         ) : (
           text ? <Text style={styles.userText} selectable>{text}</Text> : null
         )}
-        {!editing && inlineImages.map((att, i) => (
-          <InlineImage key={`img-${att.path}-${i}`} attachment={att} />
-        ))}
-        {!editing && otherAttach.length > 0 && (
-          <View style={styles.attachmentsRow}>
-            {otherAttach.map((att, i) => (
-              <AttachmentView key={`${att.path}-${i}`} attachment={att} />
-            ))}
-          </View>
-        )}
+        {!editing && <AttachmentBlock attachments={attachments} />}
       </View>
     </View>
   );
@@ -330,8 +327,6 @@ const AssistantMessage = memo(function AssistantMessage({
   onRegenerate?: () => void;
 }) {
   const label = author?.display || 'OpenAgent';
-  const inlineImages = attachments?.filter((a) => a.type === 'image') ?? [];
-  const otherAttach = attachments?.filter((a) => a.type !== 'image') ?? [];
   return (
     <View
       style={styles.assistantBlock}
@@ -361,16 +356,7 @@ const AssistantMessage = memo(function AssistantMessage({
       </View>
       <View style={styles.assistantBody}>
         <Markdown text={text} streaming={streaming} />
-        {inlineImages.map((att, i) => (
-          <InlineImage key={`img-${att.path}-${i}`} attachment={att} downloadable />
-        ))}
-        {otherAttach.length > 0 && (
-          <View style={styles.attachmentsRow}>
-            {otherAttach.map((att, i) => (
-              <AttachmentView key={`${att.path}-${i}`} attachment={att} downloadable />
-            ))}
-          </View>
-        )}
+        <AttachmentBlock attachments={attachments} downloadable />
       </View>
     </View>
   );
@@ -402,68 +388,6 @@ function CopyButton({ text }: { text: string }) {
         size={11}
         color={copied ? colors.success : colors.textMuted}
       />
-    </TouchableOpacity>
-  );
-}
-
-function InlineImage({
-  attachment, downloadable = false,
-}: { attachment: Attachment; downloadable?: boolean }) {
-  const src = fileUrl(attachment.path);
-  const image = (
-    <Image
-      source={{ uri: src }}
-      style={styles.inlineImage}
-      resizeMode="contain"
-    />
-  );
-  if (!downloadable) return <View style={styles.imageContainer}>{image}</View>;
-  return (
-    <TouchableOpacity
-      style={styles.imageContainer}
-      onPress={async () => {
-        try { await downloadFile(attachment.path, attachment.filename); } catch (e) { console.error('Download failed:', e); }
-      }}
-    >
-      {image}
-    </TouchableOpacity>
-  );
-}
-
-function AttachmentView({
-  attachment, downloadable = false,
-}: { attachment: Attachment; downloadable?: boolean }) {
-  const iconName = attachment.type === 'image'
-    ? 'image'
-    : attachment.type === 'voice'
-      ? 'mic'
-      : attachment.type === 'video'
-        ? 'film'
-        : 'file';
-  const chipInner = (
-    <>
-      <Feather name={iconName as any} size={11} color={colors.textSecondary} />
-      <Text style={styles.attachmentText} numberOfLines={1}>
-        {attachment.filename}
-      </Text>
-      {downloadable ? <Feather name="download" size={10} color={colors.primary} /> : null}
-    </>
-  );
-  if (!downloadable) {
-    return <View style={styles.attachmentChip}>{chipInner}</View>;
-  }
-  return (
-    <TouchableOpacity
-      style={styles.attachmentChip}
-      onPress={async () => {
-        try {
-          await downloadFile(attachment.path, attachment.filename);
-        } catch (e) {
-          console.error('Download failed:', e);
-        }
-      }}
-    >
-      {chipInner}
     </TouchableOpacity>
   );
 }
@@ -656,6 +580,87 @@ const ToolCard = memo(function ToolCard({
   );
 });
 
+// Right-hand phase label for the compaction card, mirroring ToolCard's
+// running/done/error status word.
+const COMPACTION_STATUS_LABEL: Record<CompactionInfo['phase'], string> = {
+  running: 'compacting',
+  done: 'done',
+  error: 'skipped',
+};
+
+// In-place compaction (vision §2) rendered as a tool-style card: a live
+// "Compacting conversation…" spinner that resolves to "Compacted
+// conversation", with the run/token stats in the expandable body — the
+// same card whether driven by the live ``session_compacted`` frame or
+// rebuilt from a recap run on reopen.
+const CompactionCard = memo(function CompactionCard({ info }: { info?: CompactionInfo }) {
+  const [expanded, setExpanded] = useState(false);
+  const phase = info?.phase ?? 'done';
+  const display = compactionDisplay(info ?? { phase });
+  const statusColor = phase === 'error'
+    ? colors.error
+    : phase === 'running' ? colors.warning : colors.success;
+  const freed = (info?.tokensBefore ?? 0) - (info?.tokensAfter ?? 0);
+  // Only offer the expander when we actually carry numbers — a live
+  // "running" frame (or a legacy recap row) may have none.
+  const rows: [string, string][] = [];
+  if (info?.foldedRuns) rows.push(['Turns folded', String(info.foldedRuns)]);
+  if (info?.keptRuns) rows.push(['Turns kept', String(info.keptRuns)]);
+  if (info?.tokensBefore) rows.push(['Tokens before', info.tokensBefore.toLocaleString()]);
+  if (info?.tokensAfter) rows.push(['Tokens after', info.tokensAfter.toLocaleString()]);
+  if (freed > 0) rows.push(['Context freed', `~${freed.toLocaleString()} tokens`]);
+  if (info?.summaryChars) rows.push(['Recap size', `${info.summaryChars.toLocaleString()} chars`]);
+  const canExpand = rows.length > 0;
+
+  return (
+    <TouchableOpacity
+      activeOpacity={canExpand ? 0.85 : 1}
+      onPress={() => { if (canExpand) setExpanded(!expanded); }}
+      style={[styles.toolCard, styles.compactionCard]}
+      // @ts-ignore — web hover affordance
+      {...(Platform.OS === 'web' ? { className: 'oa-msg-in oa-card-hover' } : {})}
+    >
+      <View style={styles.toolCardHeader}>
+        <View
+          style={[styles.toolStatusDot, { backgroundColor: statusColor }]}
+          // @ts-ignore — web-only pulse while the fold runs
+          {...(Platform.OS === 'web' && phase === 'running' ? { className: 'oa-pulse' } : {})}
+        />
+        <Feather name="archive" size={12} color={colors.accent} />
+        <View style={styles.toolCardTitleWrap}>
+          <Text style={styles.toolCardName} numberOfLines={1}>
+            {display.title}
+            {display.detail ? (
+              <Text style={styles.toolCardDetail}>{`  ${display.detail}`}</Text>
+            ) : null}
+          </Text>
+        </View>
+        <Text style={[styles.toolStatusText, { color: statusColor }]}>
+          {COMPACTION_STATUS_LABEL[phase]}
+        </Text>
+        {canExpand && (
+          <Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={12} color={colors.textMuted} />
+        )}
+      </View>
+
+      {expanded && canExpand && (
+        <View style={styles.toolCardBody}>
+          <Text style={styles.toolSectionTitle}>Compaction</Text>
+          <View style={styles.toolCodeBlock}>
+            {rows.map(([k, v]) => (
+              <Text key={k} style={styles.toolCodeText}>
+                <Text style={{ color: colors.primary }}>{k}</Text>
+                <Text style={{ color: colors.textMuted }}>: </Text>
+                {v}
+              </Text>
+            ))}
+          </View>
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+});
+
 const styles = StyleSheet.create({
   // "Load earlier" — widens the rendered transcript window.
   loadEarlier: {
@@ -806,6 +811,12 @@ const styles = StyleSheet.create({
   toolCardMemory: {
     borderLeftWidth: 2, borderLeftColor: colors.accent,
   },
+  // Compaction card — same accent left border as memory chips so a
+  // system-level "the agent folded context" event reads distinctly from
+  // a plain tool chip.
+  compactionCard: {
+    borderLeftWidth: 2, borderLeftColor: colors.accent,
+  },
   toolCardHeader: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingVertical: 8, paddingHorizontal: 12,
@@ -851,31 +862,5 @@ const styles = StyleSheet.create({
   toolCodeText: {
     fontSize: 11, color: colors.codeText,
     fontFamily: font.mono, lineHeight: 16,
-  },
-
-  // Attachments
-  attachmentsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
-  attachmentChip: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: colors.surface,
-    borderRadius: radius.sm, paddingHorizontal: 8, paddingVertical: 4,
-    borderWidth: 1, borderColor: colors.border,
-    maxWidth: 220,
-  },
-  attachmentText: {
-    color: colors.textSecondary, fontSize: 11, fontWeight: '500',
-    flexShrink: 1,
-  },
-
-  // Inline images
-  imageContainer: { marginTop: 8, marginBottom: 8 },
-  inlineImage: {
-    width: '100%',
-    maxWidth: 480,
-    height: 280,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.borderLight,
-    backgroundColor: colors.codeBg,
   },
 });

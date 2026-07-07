@@ -21,6 +21,12 @@ export interface SlashCommand {
   description?: string;
   /** When set, fires this and clears the composer instead of inserting text. */
   action?: () => void;
+  /** Mirrors the gateway command spec's ``arg_source``. When set to
+   *  ``'models'`` the composer opens its built-in model picker on accept
+   *  instead of inserting ``/name `` for the user to type an id by hand.
+   *  Keeps the picker behaviour generic — any future pickable command
+   *  works without new composer code. */
+  argSource?: 'models';
 }
 
 export interface PendingFile {
@@ -149,11 +155,20 @@ export default function MessageComposer({
     ? slashCommands!.filter((c) => c.name.toLowerCase().startsWith(slashQuery))
     : [];
   const [slashActive, setSlashActive] = useState(0);
+  const [modelMenuOpen, setModelMenuOpen] = useState(false);
   useEffect(() => {
     // Keep the highlight in range as the candidate list shrinks/grows.
     if (slashActive >= slashMatches.length) setSlashActive(0);
   }, [slashMatches.length, slashActive]);
   const acceptSlash = useCallback((cmd: SlashCommand) => {
+    // A command whose argument is picked from the model list opens the
+    // composer's built-in picker instead of dropping the user into a
+    // free-text "/model " they'd have to complete by hand.
+    if (cmd.argSource === 'models' && onSelectModel && modelOptions && modelOptions.length > 0) {
+      setModelMenuOpen(true);
+      onInputChange('');
+      return;
+    }
     if (cmd.action) {
       cmd.action();
       onInputChange('');
@@ -162,8 +177,7 @@ export default function MessageComposer({
     // Insert the canonical "/name " into the composer so the user can
     // keep typing the argument.
     onInputChange(`/${cmd.name} `);
-  }, [onInputChange]);
-  const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  }, [onInputChange, onSelectModel, modelOptions]);
   const activeModel = modelOptions?.find((m) => m.id === activeModelId);
   const files = pendingFiles ?? [];
   // Failed and still-uploading entries stay in the list as visible
@@ -417,7 +431,7 @@ export default function MessageComposer({
                       />
                       <View style={styles.modelRowText}>
                         <Text style={styles.modelRowTitle}>Auto</Text>
-                        <Text style={styles.modelRowSub}>Let SmartRouter pick</Text>
+                        <Text style={styles.modelRowSub}>Best model picked automatically</Text>
                       </View>
                     </TouchableOpacity>
                     {modelOptions.map((m) => (
