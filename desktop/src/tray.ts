@@ -27,26 +27,27 @@ let recentAgentList: string[] = [];
 /**
  * Resolve the tray icon path across dev and production environments.
  *
- * In dev, the icon lives in ``desktop/buildResources/icon.png`` relative
- * to the source root. In production, electron-builder ships the icon
- * alongside the compiled JS in the asar (copied by the bundle script).
+ * In dev, the icon lives in ``universal/assets/openagent-icon.png``.
+ * In production, the bundle script copies it into ``dist/tray-icon.png``
+ * so it ships inside the asar alongside the compiled JS.
  */
 function resolveTrayIconPath(): string {
-  // Production: icon copied into dist/ by the bundle script.
-  const prodPath = path.join(__dirname, 'icon.png');
+  // Production: tray icon copied into dist/ by the bundle script.
+  const prodPath = path.join(__dirname, 'tray-icon.png');
   try {
     if (fs.existsSync(prodPath)) return prodPath;
   } catch { /* fall through */ }
 
-  // Dev: icon in the buildResources directory.
-  return path.join(__dirname, '..', 'buildResources', 'icon.png');
+  // Dev: icon in the universal assets directory.
+  return path.join(__dirname, '..', '..', 'universal', 'assets', 'openagent-icon.png');
 }
 
 /**
- * Load the OpenAgent logo as a tray icon.
+ * Load the OpenAgent polygon-bird logo as a tray icon.
  *
- * Resizes the full app icon to tray dimensions and, on macOS, marks it
- * as a template image so it adapts to light/dark menu bar automatically.
+ * Resizes the logo to tray dimensions. Uses the native colour image
+ * with its transparent background — NOT a template mask — so the bird
+ * shape is recognisable rather than a featureless silhouette.
  */
 function generateTrayIcon(): NativeImage {
   const iconPath = resolveTrayIconPath();
@@ -63,12 +64,6 @@ function generateTrayIcon(): NativeImage {
   // Windows notification area is 16×16, Linux is 22×22.
   const size = process.platform === 'win32' ? 16 : 22;
   img = img.resize({ width: size, height: size });
-
-  // macOS template images: the alpha channel defines the shape and the
-  // system renders it in the correct colour for light/dark mode.
-  if (process.platform === 'darwin') {
-    img.setTemplateImage(true);
-  }
 
   return img;
 }

@@ -45,8 +45,10 @@ const targets = [
 for (const t of targets) bundle(t);
 
 // Copy the tray icon into dist/ so it ships inside the asar at runtime.
-const trayIconSrc = path.resolve(__dirname, '..', 'buildResources', 'icon.png');
-const trayIconDst = path.join(dist, 'icon.png');
+// Uses the standalone polygon-bird logo (not the full app icon) so the
+// tray shows the bird shape against a transparent background.
+const trayIconSrc = path.resolve(__dirname, '..', '..', 'universal', 'assets', 'openagent-icon.png');
+const trayIconDst = path.join(dist, 'tray-icon.png');
 fs.copyFileSync(trayIconSrc, trayIconDst);
 console.log(`[bundle] copied tray icon: ${trayIconSrc} → ${trayIconDst}`);
 
