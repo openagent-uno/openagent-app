@@ -93,10 +93,19 @@ export default function RootLayout() {
         || msg.type === 'delta'
         || msg.type === 'response'
         || msg.type === 'seed'
+        || msg.type === 'text_final'
         || msg.type === 'error'
         || msg.type === 'session_compacted'
       ) {
         handleServerMessage(msg);
+      }
+
+      if (msg.type === 'live_state' && msg.session_id) {
+        useChat.getState().applyLiveState(
+          msg.session_id,
+          (msg.frames || []) as any,
+          msg.active,
+        );
       }
 
       // End of a logical assistant turn → snap the live transcript to the

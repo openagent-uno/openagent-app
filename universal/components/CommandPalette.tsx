@@ -151,7 +151,7 @@ function CommandPaletteBase({ visible, onClose, entries, placeholder = 'Switch s
                 key={e.id}
                 style={[styles.row, i === active && styles.rowActive]}
                 onPress={() => { e.onSelect(); onClose(); }}
-                onMouseEnter={() => setActive(i)}
+                {...(Platform.OS === 'web' ? { onMouseEnter: () => setActive(i) } as any : {})}
               >
                 {e.pinned && (
                   <Feather name="bookmark" size={10} color={colors.primary} />

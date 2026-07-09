@@ -147,6 +147,204 @@ function scheduleDeltaFlush(
   }
 }
 
+function sameLiveStart(a: ChatMessage | undefined, b: ChatMessage | undefined): boolean {
+  if (!a || !b) return false;
+  return a.role === b.role
+    && a.text === b.text
+    && (a.author?.kind ?? '') === (b.author?.kind ?? '')
+    && (a.author?.handle ?? '') === (b.author?.handle ?? '');
+}
+
+function appendOrPatchTool(messages: ChatMessage[], toolInfo: ToolInfo): ChatMessage[] {
+  const phase = toolPhase(toolInfo);
+  const msgs = [...messages];
+  const callId = toolInfo.tool_call_id;
+  const childSid = toolInfo.child_session_id;
+  const matches = (existing: ToolInfo): boolean => {
+    if (callId && existing.tool_call_id) return existing.tool_call_id === callId;
+    if (childSid && existing.child_session_id) return existing.child_session_id === childSid;
+    return existing.tool_name === toolInfo.tool_name;
+  };
+
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const existing = msgs[i].toolInfo;
+    if (!existing) continue;
+    if (phase === 'running') {
+      if (callId && existing.tool_call_id === callId) {
+        msgs[i] = { ...msgs[i], toolInfo: { ...existing, ...toolInfo } };
+        return msgs;
+      }
+    } else if (matches(existing) && toolPhase(existing) === 'running') {
+      msgs[i] = { ...msgs[i], toolInfo };
+      return msgs;
+    }
+  }
+
+  const d = toolDisplay(toolInfo);
+  msgs.push({
+    id: genId(),
+    role: 'tool',
+    text: phase === 'running'
+      ? (d.detail ? `${d.title} ${d.detail}` : d.title)
+      : phase === 'error'
+        ? `✗ ${toolInfo.tool_name} failed`
+        : `✓ ${toolInfo.tool_name} done`,
+    timestamp: Date.now(),
+    toolInfo,
+  });
+  return msgs;
+}
+
+function liveMessagesFromFrames(
+  frames: ServerMessage[],
+  active: boolean,
+): {
+  messages: ChatMessage[];
+  isProcessing: boolean;
+  isReasoning?: boolean;
+  statusText?: string;
+} {
+  let messages: ChatMessage[] = [];
+  let isProcessing = active;
+  let isReasoning = false;
+  let statusText: string | undefined;
+
+  const pushUser = (text: string, attachments?: Attachment[], author?: ChatMessage['author']) => {
+    if (!text) return;
+    const last = messages[messages.length - 1];
+    if (last?.role === 'user' && last.text === text && (last.author?.kind ?? '') === (author?.kind ?? '')) {
+      return;
+    }
+    messages.push({
+      id: genId(),
+      role: 'user',
+      text,
+      timestamp: Date.now(),
+      attachments: attachments && attachments.length ? attachments : undefined,
+      author,
+    });
+  };
+
+  for (const frame of frames) {
+    if (!frame || typeof frame !== 'object') continue;
+    if (frame.type === 'text_final') {
+      pushUser(frame.text || '', frame.attachments, undefined);
+      isProcessing = true;
+      continue;
+    }
+    if (frame.type === 'seed') {
+      pushUser(frame.text || '', undefined, frame.author);
+      isProcessing = true;
+      continue;
+    }
+    if (frame.type === 'reasoning') {
+      isReasoning = !!frame.active;
+      continue;
+    }
+    if (frame.type === 'session_compacted') {
+      const info: CompactionInfo = {
+        phase: frame.phase || 'done',
+        foldedRuns: frame.folded_runs,
+        keptRuns: frame.kept_runs_count,
+        summaryChars: frame.summary_chars,
+        tokensBefore: frame.tokens_before,
+        tokensAfter: frame.tokens_after,
+      };
+      messages.push({
+        id: genId(),
+        role: 'compaction',
+        text: '',
+        timestamp: Date.now(),
+        compactionInfo: info,
+      });
+      continue;
+    }
+    if (frame.type === 'status') {
+      const text = frame.text || '';
+      let toolInfo: ToolInfo | undefined;
+      try {
+        const parsed = JSON.parse(text);
+        if (parsed && parsed.tool_name) toolInfo = parsed as ToolInfo;
+      } catch { /* plain text */ }
+      if (toolInfo) {
+        messages = appendOrPatchTool(messages, toolInfo);
+      } else if (text.startsWith('Using ')) {
+        messages.push({ id: genId(), role: 'tool', text, timestamp: Date.now() });
+      } else if (text) {
+        statusText = text;
+      }
+      isReasoning = false;
+      continue;
+    }
+    if (frame.type === 'delta') {
+      const delta = frame.text || '';
+      if (!delta) continue;
+      const last = messages[messages.length - 1];
+      if (last?.role === 'assistant' && last.streaming) {
+        messages[messages.length - 1] = { ...last, text: last.text + delta };
+      } else {
+        messages.push({
+          id: genId(),
+          role: 'assistant',
+          text: delta,
+          timestamp: Date.now(),
+          streaming: true,
+        });
+      }
+      statusText = undefined;
+      isReasoning = false;
+      continue;
+    }
+    if (frame.type === 'response') {
+      const last = messages[messages.length - 1];
+      if (last?.role === 'assistant' && last.streaming) {
+        messages[messages.length - 1] = {
+          ...last,
+          text: frame.text,
+          attachments: frame.attachments ?? undefined,
+          model: frame.model,
+          streaming: false,
+        };
+      } else {
+        messages.push({
+          id: genId(),
+          role: 'assistant',
+          text: frame.text,
+          timestamp: Date.now(),
+          attachments: frame.attachments ?? undefined,
+          model: frame.model,
+        });
+      }
+      isProcessing = false;
+      isReasoning = false;
+      statusText = undefined;
+      continue;
+    }
+    if (frame.type === 'error') {
+      messages.push({
+        id: genId(),
+        role: 'assistant',
+        text: `Error: ${frame.text}`,
+        timestamp: Date.now(),
+      });
+      isProcessing = false;
+      isReasoning = false;
+      statusText = undefined;
+      continue;
+    }
+    if (frame.type === 'turn_complete') {
+      messages = messages.map((m) =>
+        m.role === 'assistant' && m.streaming ? { ...m, streaming: false } : m,
+      );
+      isProcessing = false;
+      isReasoning = false;
+      statusText = undefined;
+    }
+  }
+
+  return { messages, isProcessing, isReasoning, statusText };
+}
+
 interface ChatState {
   sessions: ChatSession[];
   activeSessionId: string | null;
@@ -180,6 +378,10 @@ interface ChatState {
    *  outgoing turn is rebased on the new prompt. */
   setSystemPrompt: (sessionId: string, prompt: string) => void;
   handleServerMessage: (msg: ServerMessage) => void;
+  /** Apply a server-owned snapshot of a turn that is still running after the
+   *  client detached/reconnected. Replaces the live tail instead of replaying
+   *  frames into the existing transcript, so reconnects stay idempotent. */
+  applyLiveState: (sessionId: string, frames: ServerMessage[], active?: boolean) => void;
   /** Re-derive a session's transcript from the server (the database) after a
    *  turn completes, so the LIVE view becomes byte-identical to what a
    *  reopen/rehydration shows — same data, same source. The optimistic live
@@ -478,6 +680,61 @@ export const useChat = create<ChatState>((set, get) => ({
     }));
   },
 
+  applyLiveState: (sessionId, frames, active = true) => {
+    if (!sessionId || !Array.isArray(frames)) return;
+    pendingDeltas.delete(sessionId);
+    const live = liveMessagesFromFrames(frames, active);
+    const contextFrame = [...frames]
+      .reverse()
+      .find((frame): frame is Extract<ServerMessage, { type: 'context_report' }> =>
+        frame?.type === 'context_report' && !!frame.report,
+      );
+    const contextReport = contextFrame?.report;
+    set((s) => {
+      const known = s.sessions.some((ses) => ses.id === sessionId);
+      const baseSessions = known
+        ? s.sessions
+        : capHiddenStubs([
+            ...s.sessions,
+            {
+              id: sessionId,
+              messages: [],
+              isProcessing: false,
+              ...childStubFor(sessionId),
+            } as ChatSession,
+          ], s.activeSessionId);
+
+      return {
+        sessions: baseSessions.map((ses) => {
+          if (ses.id !== sessionId) return ses;
+          const liveMessages = live.messages;
+          let messages = ses.messages;
+          if (liveMessages.length > 0) {
+            let replaceFrom = -1;
+            for (let i = messages.length - 1; i >= 0; i--) {
+              if (sameLiveStart(messages[i], liveMessages[0])) {
+                replaceFrom = i;
+                break;
+              }
+            }
+            const prefix = replaceFrom >= 0 ? messages.slice(0, replaceFrom) : messages;
+            messages = [...prefix, ...liveMessages];
+          }
+          return {
+            ...ses,
+            messages,
+            isProcessing: live.isProcessing,
+            isReasoning: live.isReasoning,
+            statusText: live.statusText,
+            contextUsage: contextReport || ses.contextUsage,
+            lastActiveAt: Math.floor(Date.now() / 1000),
+            hasUnread: s.activeSessionId === sessionId ? ses.hasUnread : true,
+          };
+        }),
+      };
+    });
+  },
+
   handleServerMessage: (msg) => set((s) => {
     // A streaming frame may arrive for a freshly-spawned child session (a
     // delegated sub-agent streaming live) a beat before the sidebar's
@@ -488,7 +745,7 @@ export const useChat = create<ChatState>((set, get) => ({
     let stubAdded = false;
     if (
       (msg.type === 'status' || msg.type === 'delta' || msg.type === 'response'
-        || msg.type === 'seed' || msg.type === 'session_compacted')
+        || msg.type === 'seed' || msg.type === 'session_compacted' || msg.type === 'text_final')
       && msg.session_id
       && !s.sessions.some((x) => x.id === msg.session_id)
     ) {
@@ -513,6 +770,31 @@ export const useChat = create<ChatState>((set, get) => ({
         ], s.activeSessionId),
       };
       stubAdded = true;
+    }
+
+    if (msg.type === 'text_final') {
+      const text = msg.text || '';
+      if (!text) return stubAdded ? { sessions: s.sessions } : {};
+      return {
+        sessions: s.sessions.map((ses) => {
+          if (ses.id !== msg.session_id) return ses;
+          const last = ses.messages[ses.messages.length - 1];
+          if (last?.role === 'user' && last.text === text) return ses;
+          return {
+            ...ses,
+            isProcessing: true,
+            statusText: undefined,
+            lastActiveAt: Math.floor(Date.now() / 1000),
+            messages: [...ses.messages, {
+              id: genId(),
+              role: 'user' as const,
+              text,
+              timestamp: Date.now(),
+              attachments: msg.attachments && msg.attachments.length ? msg.attachments : undefined,
+            }],
+          };
+        }),
+      };
     }
 
     if (msg.type === 'seed') {
@@ -614,78 +896,10 @@ export const useChat = create<ChatState>((set, get) => ({
       } catch { /* plain text status */ }
 
       if (toolInfo) {
-        const phase = toolPhase(toolInfo);
         return {
           sessions: s.sessions.map((ses) => {
             if (ses.id !== msg.session_id) return ses;
-            if (phase === 'running') {
-              // Patch an existing running chip for the SAME tool call in place
-              // rather than appending a duplicate — a delegation re-streams its
-              // running frame once the child session id is minted (to flip the
-              // card clickable), and a member's own tool calls may re-emit.
-              const callId = toolInfo!.tool_call_id;
-              if (callId) {
-                const msgs = [...ses.messages];
-                for (let i = msgs.length - 1; i >= 0; i--) {
-                  const ex = msgs[i].toolInfo;
-                  if (ex && ex.tool_call_id === callId) {
-                    msgs[i] = { ...msgs[i], toolInfo: { ...ex, ...toolInfo } };
-                    return { ...ses, messages: msgs };
-                  }
-                }
-              }
-              return {
-                ...ses,
-                messages: [...ses.messages, {
-                  id: genId(),
-                  role: 'tool' as const,
-                  // Friendly fallback text (sidebar previews, no-toolInfo
-                  // render path). The chip itself re-derives the label from
-                  // ``toolInfo`` via toolDisplay.
-                  text: (() => {
-                    const d = toolDisplay(toolInfo!);
-                    return d.detail ? `${d.title} ${d.detail}` : d.title;
-                  })(),
-                  timestamp: Date.now(),
-                  toolInfo,
-                }],
-              };
-            }
-            // ``completed`` or ``error``: locate the matching running chip
-            // and replace its toolInfo in place. Prefer matching by
-            // ``tool_call_id`` (then ``child_session_id``) so that with many
-            // concurrent ``delegate_task`` calls each result attaches to the
-            // RIGHT chip; fall back to tool_name for older frames that omit
-            // the id.
-            const callId = toolInfo!.tool_call_id;
-            const childSid = toolInfo!.child_session_id;
-            const matches = (existing: ToolInfo): boolean => {
-              if (callId && existing.tool_call_id) return existing.tool_call_id === callId;
-              if (childSid && existing.child_session_id) return existing.child_session_id === childSid;
-              return existing.tool_name === toolInfo!.tool_name;
-            };
-            const msgs = [...ses.messages];
-            let found = false;
-            for (let i = msgs.length - 1; i >= 0; i--) {
-              const existing = msgs[i].toolInfo;
-              if (existing && matches(existing) && toolPhase(existing) === 'running') {
-                msgs[i] = { ...msgs[i], toolInfo: toolInfo! };
-                found = true;
-                break;
-              }
-            }
-            if (!found) {
-              msgs.push({
-                id: genId(),
-                role: 'tool' as const,
-                text: phase === 'error'
-                  ? `✗ ${toolInfo!.tool_name} failed`
-                  : `✓ ${toolInfo!.tool_name} done`,
-                timestamp: Date.now(),
-                toolInfo,
-              });
-            }
-            return { ...ses, messages: msgs };
+            return { ...ses, messages: appendOrPatchTool(ses.messages, toolInfo!) };
           }),
         };
       }

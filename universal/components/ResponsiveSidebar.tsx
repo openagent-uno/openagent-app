@@ -71,10 +71,10 @@ export default function ResponsiveSidebar({ sidebar, children }: Props) {
     <ContentCtx.Provider value={{ sidebar, children }}>
       <NavigationIndependentTree>
         <Nav.Navigator
+          defaultStatus="open"
           screenOptions={{
             headerShown: false,
             drawerType: 'front',
-            defaultStatus: 'open',
             drawerStyle: {
               width: SIDEBAR_WIDTH,
               backgroundColor: 'transparent',

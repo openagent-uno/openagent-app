@@ -131,6 +131,11 @@ export type ResourceAction = 'created' | 'updated' | 'deleted' | 'changed';
 export type ServerMessage =
   | { type: 'auth_ok'; agent_name: string; version: string }
   | { type: 'auth_error'; reason: string }
+  // Rehydration snapshot for a turn that is still live on the server.
+  // Frames reuse the normal stream wire types (text_final/status/delta/etc.)
+  // so clients can rebuild the not-yet-persisted tail without inventing a
+  // parallel transcript shape.
+  | { type: 'live_state'; session_id: string; active: boolean; frames: any[]; updated_at?: number }
   | { type: 'status'; text: string; session_id: string }
   // ── Reasoning indicator (transient, session-scoped) ──
   // ``active=true`` while the agent is thinking with no visible output yet;

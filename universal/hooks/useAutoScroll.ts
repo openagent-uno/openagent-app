@@ -38,7 +38,7 @@ export interface UseAutoScrollResult {
   /** Programmatically scroll to the bottom and re-pin. */
   scrollToBottom: (animated?: boolean) => void;
   /** Attach to the ScrollView ref. */
-  scrollRef: React.RefObject<ScrollView>;
+  scrollRef: React.RefObject<ScrollView | null>;
 }
 
 export function useAutoScroll(opts: UseAutoScrollOpts): UseAutoScrollResult {

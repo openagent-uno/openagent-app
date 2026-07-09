@@ -66,9 +66,9 @@ export class OpenAgentWS {
 
     this.ws.onopen = () => {
       console.log('[WS] connected, sending auth...');
-      // Fresh WS → server-side StreamSessions for our prior sessions
-      // are gone. Drop the cached "we already opened it" tracking so
-      // the next sendMessage re-opens.
+      // Fresh WS → this transport has not announced any stream sessions yet.
+      // Drop the local cache so the next sendMessage re-sends session_open
+      // and lets the server rebind to any still-running StreamSession.
       this.openedSessions.clear();
       this.authed = false;
       // Auth is the only frame the server accepts pre-auth; everything
