@@ -4,15 +4,33 @@
  * Dev:  loads from Expo web dev server (localhost:8081)
  * Prod: serves web-build via a local HTTP server (Expo Router needs
  *       proper URL routing which file:// can't provide)
+ *
+ * Integrates window-manager, shortcuts, menu, tray, and dock modules
+ * for a complete desktop-window management experience.
  */
 
-import { app, BrowserWindow, shell, dialog, protocol, ipcMain } from 'electron';
+import { app, BrowserWindow, shell, dialog, protocol, ipcMain, Menu } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as http from 'http';
 import { registerStorageHandlers } from './services/storage';
 import { registerLoopbackHandlers, stopAllLoopbacks } from './services/loopback';
 import { decodeTicket } from './network/ticket';
+
+// ── New desktop-controls modules ──
+import {
+  registerWindow,
+  unregisterWindow,
+  getPrimaryWindow as getPrimaryFromRegistry,
+  getAllWindows,
+  focusWindow,
+  closeWindow,
+  getWindowCount,
+} from './window-manager';
+import { registerAllShortcuts, unregisterAllShortcuts, getShortcutsMap } from './shortcuts';
+import { buildMenu, rebuildMenu, setupMenuAutoRebuild } from './menu';
+import { createTray, updateTrayAgentList, destroyTray } from './tray';
+import { setupDockMenu, updateDockAgentList } from './dock';
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.heic', '.tiff']);
 
@@ -289,9 +307,28 @@ function createWindow(opts: CreateWindowOptions = {}): BrowserWindow {
 
   if (markChild) relayChildIds.add(win.webContents.id);
 
+  // ── Register with the central window manager ──
+  const windowType = connectAccountId
+    ? 'standalone-agent'
+    : markChild
+      ? 'relay-child'
+      : 'primary';
+  registerWindow(win, {
+    type: windowType,
+    accountId: connectAccountId,
+    title: 'OpenAgent',
+    route,
+  });
+
   win.on('closed', () => {
     childWindows.delete(win);
     relayChildIds.delete(win.webContents.id);
+    // Also unregister from the central registry.
+    unregisterWindow(win.webContents.id);
+
+    // Rebuild the menu so the Window list updates.
+    rebuildMenu();
+
     // Closing an OS window destroys its renderer without running React
     // cleanup, so a terminal window can't send its own ``terminal_close``.
     // Relay one through the primary window's gateway socket here so the
@@ -368,6 +405,106 @@ app.whenReady().then(async () => {
   registerDialogHandlers();
   registerLoopbackHandlers();
 
+  // ── Desktop controls setup ──
+
+  // Register global keyboard shortcuts.
+  registerAllShortcuts();
+
+  // Build and set the initial application menu.
+  const menu = buildMenu();
+  Menu.setApplicationMenu(menu);
+
+  // Auto-rebuild the menu on window focus changes (updates the Window list).
+  setupMenuAutoRebuild();
+
+  // Create the system tray.
+  createTray();
+
+  // Set up the macOS dock menu.
+  setupDockMenu();
+
+  // ── IPC: Menu-initiated actions ──
+
+  // Renderer requests a new relay-child window at root.
+  ipcMain.handle('menu:newWindow', () => {
+    createWindow({ route: '', markChild: true });
+    rebuildMenu();
+  });
+
+  // Renderer requests a new standalone agent window.
+  // The renderer sends a connectAccountId if known, else we prompt.
+  ipcMain.handle('menu:newAgentWindow', (_event, accountId?: string) => {
+    if (typeof accountId === 'string' && accountId.length > 0) {
+      createWindow({ connectAccountId: accountId });
+    } else {
+      // Open a standalone window without a pre-bound account.
+      // It will prompt the user to pick an agent on its own.
+      createWindow({});
+    }
+    rebuildMenu();
+  });
+
+  // Renderer triggers the agent switcher (primary window will show the
+  // agent selection UI).
+  ipcMain.handle('menu:switchAgent', () => {
+    const primary = getPrimaryFromRegistry();
+    if (primary && !primary.isDestroyed()) {
+      primary.webContents.send('menu:switchAgent');
+    }
+  });
+
+  // Renderer wants to open the Settings route.
+  ipcMain.handle('menu:openSettings', () => {
+    const primary = getPrimaryFromRegistry();
+    if (primary && !primary.isDestroyed()) {
+      primary.webContents.send('menu:openSettings');
+    }
+  });
+
+  // Renderer wants to open the Keyboard Shortcuts documentation.
+  ipcMain.handle('menu:openShortcuts', () => {
+    const primary = getPrimaryFromRegistry();
+    if (primary && !primary.isDestroyed()) {
+      primary.webContents.send('menu:openShortcuts');
+    }
+  });
+
+  // Focus a specific window by its webContents id.
+  ipcMain.handle('menu:focusWindow', (_event, id: number) => {
+    if (typeof id === 'number') {
+      focusWindow(id);
+    }
+  });
+
+  // Cycle focus through all open windows (next in the list).
+  ipcMain.handle('menu:cycleWindows', () => {
+    const all = getAllWindows().filter((e) => !e.win.isDestroyed());
+    if (all.length === 0) return;
+
+    const focusedId = BrowserWindow.getFocusedWindow()?.webContents.id ?? -1;
+    const currentIndex = all.findIndex((e) => e.id === focusedId);
+    const nextIndex = (currentIndex + 1) % all.length;
+    const next = all[nextIndex];
+    if (next) focusWindow(next.id);
+  });
+
+  // Return the keyboard shortcuts documentation map.
+  ipcMain.handle('shortcuts:getMap', () => {
+    return getShortcutsMap();
+  });
+
+  // Quick actions that need main-process side effects
+  ipcMain.handle('menu:quickJump', () => {
+    // The menu already sent the IPC to the focused renderer.
+    return true;
+  });
+
+  ipcMain.handle('menu:quickCreate', () => {
+    return true;
+  });
+
+  // ── IPC: Existing handlers ──
+
   // Renderer-initiated quit: exposes an IPC the in-app close button can call.
   ipcMain.handle('app:quit', () => {
     app.quit();
@@ -403,7 +540,9 @@ app.whenReady().then(async () => {
     if (typeof route !== 'string' || !route) {
       throw new Error('window:open requires a non-empty route string');
     }
-    createWindow({ route, markChild: true });
+    const win = createWindow({ route, markChild: true });
+    rebuildMenu();
+    return win.webContents.id;
   });
 
   // Renderer asks the main process to open a *standalone* agent window: a
@@ -414,12 +553,15 @@ app.whenReady().then(async () => {
     if (typeof accountId !== 'string' || !accountId) {
       throw new Error('window:openAgent requires a non-empty accountId string');
     }
-    createWindow({ connectAccountId: accountId });
+    const win = createWindow({ connectAccountId: accountId });
+    rebuildMenu();
+    return win.webContents.id;
   });
 
   // Renderer asks the main process to close all sub-windows.
   ipcMain.handle('window:closeAllChildren', () => {
     closeAllChildWindows();
+    rebuildMenu();
   });
 
   // Multi-window WS relay — the primary window's WS is shared with its
@@ -480,6 +622,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     stopAllLoopbacks();
     if (staticServer) staticServer.close();
+    destroyTray();
+    unregisterAllShortcuts();
     app.quit();
   }
 });
@@ -508,4 +652,19 @@ app.on('second-instance', () => {
 
 app.on('before-quit', () => {
   if (staticServer) staticServer.close();
+  destroyTray();
+  unregisterAllShortcuts();
+});
+
+// ── Notify renderers of focus changes ──
+
+app.on('browser-window-focus', (_event, win) => {
+  if (!win.isDestroyed()) {
+    const id = win.webContents.id;
+    for (const entry of getAllWindows()) {
+      if (!entry.win.isDestroyed()) {
+        entry.win.webContents.send('window:focusChanged', id);
+      }
+    }
+  }
 });

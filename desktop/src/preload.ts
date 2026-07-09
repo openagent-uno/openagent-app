@@ -11,6 +11,43 @@ const isChild = (() => {
   } catch { return false; }
 })();
 
+/**
+ * Set up listeners for all known menu:* IPC channels and invoke a
+ * single callback with the action name and any arguments.
+ * Returns an unsubscribe function.
+ */
+function makeMenuActionSubscription(
+  cb: (action: string, ...args: unknown[]) => void,
+): () => void {
+  // All menu channels that the main process may send.
+  const channels = [
+    'menu:newWindow',
+    'menu:newAgentWindow',
+    'menu:switchAgent',
+    'menu:openSettings',
+    'menu:openShortcuts',
+    'menu:checkForUpdates',
+    'menu:closeAllChildren',
+    'menu:cycleWindows',
+    'menu:focusWindow',
+    'menu:openAgent',
+  ] as const;
+
+  const handlers = channels.map((channel) => {
+    const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) => {
+      cb(channel, ...args);
+    };
+    ipcRenderer.on(channel, handler);
+    return { channel, handler };
+  });
+
+  return () => {
+    for (const { channel, handler } of handlers) {
+      ipcRenderer.removeListener(channel, handler);
+    }
+  };
+}
+
 contextBridge.exposeInMainWorld('desktop', {
   platform: process.platform,
   isDesktop: true,
@@ -118,4 +155,41 @@ contextBridge.exposeInMainWorld('desktop', {
     bindTo: string;
     networkName: string;
   } | null> => ipcRenderer.invoke('network:decode-ticket', ticket),
+
+  // ── Menu actions (new) ──
+
+  /**
+   * Listen for menu-initiated actions. The callback receives the action
+   * name (e.g. 'menu:switchAgent', 'menu:openSettings') and any
+   * additional arguments passed by the menu handler.
+   * Returns an unsubscribe function.
+   */
+  onMenuAction: (cb: (action: string, ...args: unknown[]) => void): (() => void) => {
+    return makeMenuActionSubscription(cb);
+  },
+
+  // Navigate to a named route within the app (Memory Vault, Tasks, etc.)
+  navigate: (route: string): void => {
+    ipcRenderer.send('menu:navigate', route);
+  },
+
+  /**
+   * Retrieve the keyboard shortcuts documentation map.
+   * Returns a record of accelerator → label.
+   */
+  getShortcuts: (): Promise<Record<string, string>> =>
+    ipcRenderer.invoke('shortcuts:getMap'),
+
+  /**
+   * Listen for window focus changes. The callback receives the
+   * webContents id of the newly focused window.
+   * Returns an unsubscribe function.
+   */
+  onWindowFocusChange: (cb: (windowId: number) => void): (() => void) => {
+    const handler = (_event: any, id: number) => cb(id);
+    ipcRenderer.on('window:focusChanged', handler);
+    return () => {
+      ipcRenderer.removeListener('window:focusChanged', handler);
+    };
+  },
 });
