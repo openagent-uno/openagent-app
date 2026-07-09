@@ -44,65 +44,33 @@ function resolveTrayIconPath(): string {
 }
 
 /**
- * Load the OpenAgent polygon-bird logo as a tray icon.
+ * Load the OpenAgent icon as a macOS template tray icon.
  *
- * Renders the bird in white at the native tray size with padding so the
- * shape is crisp and not stretched edge-to-edge.
+ * On macOS template images are rendered by the system in the correct
+ * colour for the current menu-bar appearance (dark in light mode,
+ * white in dark mode). We resize to tray-native size (22pt macOS,
+ * 16px Windows) and avoid pixel-level manipulation — the source PNG
+ * is already crisp at these dimensions.
  */
 function generateTrayIcon(): NativeImage {
   const iconPath = resolveTrayIconPath();
   const sourceImg = nativeImage.createFromPath(iconPath);
 
   if (sourceImg.isEmpty()) {
-    console.error(`[tray] Failed to load icon from ${iconPath}`);
+    console.error(`[tray] failed to load icon from ${iconPath}`);
     return nativeImage.createEmpty();
   }
 
   const traySize = process.platform === 'win32' ? 16 : 22;
-  const padding = Math.max(2, Math.round(traySize * 0.1));
-  const contentMax = traySize - padding * 2;
+  const resized = sourceImg.resize({ width: traySize, height: traySize });
 
-  const srcSize = sourceImg.getSize();
-  const srcBitmap = sourceImg.toBitmap(); // BGRA, one byte per channel
-
-  // Fit the polygon bird inside the padded area, preserving aspect ratio.
-  const scale = Math.min(contentMax / srcSize.width, contentMax / srcSize.height);
-  const drawW = Math.round(srcSize.width * scale);
-  const drawH = Math.round(srcSize.height * scale);
-
-  // Build at 2× for retina sharpness, then downscale.
-  const scaleFactor = 2;
-  const canvas = traySize * scaleFactor;
-  const buffer = Buffer.alloc(canvas * canvas * 4, 0);
-
-  const ox = Math.round((canvas - drawW * scaleFactor) / 2);
-  const oy = Math.round((canvas - drawH * scaleFactor) / 2);
-
-  // Nearest-neighbour scale into the output buffer.
-  // Every non-transparent source pixel becomes white in the output.
-  for (let dy = 0; dy < drawH * scaleFactor; dy++) {
-    for (let dx = 0; dx < drawW * scaleFactor; dx++) {
-      const sx = Math.floor((dx / scaleFactor) / scale);
-      const sy = Math.floor((dy / scaleFactor) / scale);
-      const si = (sy * srcSize.width + sx) * 4;
-      const sa = srcBitmap[si + 3]; // source alpha
-
-      if (sa > 128) {
-        const di = ((oy + dy) * canvas + (ox + dx)) * 4;
-        buffer[di] = 255;     // B
-        buffer[di + 1] = 255; // G
-        buffer[di + 2] = 255; // R
-        buffer[di + 3] = sa;  // A
-      }
-    }
+  // Template mode: macOS draws the icon's alpha channel, ignoring
+  // RGB, so it automatically looks correct in light AND dark menu bars.
+  if (process.platform === 'darwin') {
+    resized.setTemplateImage(true);
   }
 
-  const img = nativeImage.createFromBitmap(buffer, {
-    width: canvas,
-    height: canvas,
-  });
-
-  return img.resize({ width: traySize, height: traySize });
+  return resized;
 }
 
 // ── Tray menu builder ──
@@ -224,26 +192,38 @@ function buildTrayMenu(): Menu {
 export function createTray(): Tray | null {
   if (tray) return tray;
 
-  const icon = generateTrayIcon();
-  tray = new Tray(icon);
-  tray.setToolTip('OpenAgent');
-
-  const menu = buildTrayMenu();
-  tray.setContextMenu(menu);
-
-  // Click on tray icon toggles the primary window.
-  tray.on('click', () => {
-    const primary = getPrimaryWindow();
-    if (primary && !primary.isDestroyed()) {
-      if (primary.isVisible() && !primary.isMinimized()) {
-        primary.hide();
-      } else {
-        if (primary.isMinimized()) primary.restore();
-        primary.show();
-        primary.focus();
-      }
+  try {
+    const icon = generateTrayIcon();
+    if (icon.isEmpty()) {
+      console.error('[tray] cannot create tray: icon is empty');
+      return null;
     }
-  });
+
+    tray = new Tray(icon);
+    tray.setToolTip('OpenAgent');
+
+    const menu = buildTrayMenu();
+    tray.setContextMenu(menu);
+
+    // Click on tray icon toggles the primary window.
+    tray.on('click', () => {
+      const primary = getPrimaryWindow();
+      if (primary && !primary.isDestroyed()) {
+        if (primary.isVisible() && !primary.isMinimized()) {
+          primary.hide();
+        } else {
+          if (primary.isMinimized()) primary.restore();
+          primary.show();
+          primary.focus();
+        }
+      }
+    });
+
+    console.log('[tray] created successfully');
+  } catch (err) {
+    console.error('[tray] creation failed:', err);
+    tray = null;
+  }
 
   return tray;
 }
