@@ -616,7 +616,7 @@ function _openWebsocket(
   // gateway refused the cert pre-handshake) used to be invisible —
   // ``onclose`` only logged + scheduled a 3 s reconnect. Now the WS
   // surfaces them through onClose so we clear the loading state.
-  ws.onClose((info) => {
+  ws.onClose(async (info) => {
     if (info.reason === 'post_auth') {
       // Mid-session drop — the WS auto-reconnect kicks in; surface a
       // "Reconnecting…" hint so the user knows why their messages have
@@ -630,6 +630,31 @@ function _openWebsocket(
       finalize();
       if (!isCurrent()) return;
       const detail = info.detail || `WebSocket closed before authentication (code=${info.code})`;
+
+      // Post-auth retries exhausted → the loopback's iroh transport is
+      // likely dead while the proxy port is still bound (common after
+      // macOS sleep or network change). Try restarting the loopback.
+      if (info.reason === 'retries_exhausted') {
+        const acctId = get().activeAccountId;
+        if (acctId) {
+          const account = get().accounts.find((a) => a.id === acctId);
+          if (account) {
+            // We can't restart the loopback without the password, but we
+            // can at least stop the dead one and surface a clear error
+            // with a reconnect prompt instead of "Reconnecting…" forever.
+            try { await desktop()?.stopLoopback({ accountId: acctId }); } catch { /* ignore */ }
+            set({
+              isConnected: false,
+              isConnecting: false,
+              isReconnecting: false,
+              error: 'Connection lost. The secure tunnel to your agent stopped responding — this can happen after your Mac wakes from sleep or changes networks. Enter your password to reconnect.',
+            });
+            ws.disconnect();
+            return;
+          }
+        }
+      }
+
       set({
         isConnected: false,
         isConnecting: false,

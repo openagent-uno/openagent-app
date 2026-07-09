@@ -38,7 +38,11 @@ export class OpenAgentWS {
   private authed = false;
   private everAuthed = false;
   private reconnectAttempts = 0;
-  private static MAX_RECONNECT = 3;
+  private static MAX_PRE_AUTH_RECONNECT = 3;
+  /** Post-auth reconnects get more budget than pre-auth (the session was
+   *  already live), but not unlimited — a dead loopback must eventually
+   *  surface so the store can restart it rather than looping forever. */
+  private static MAX_POST_AUTH_RECONNECT = 5;
   private _transport: any = null; // IpcWebSocket in Electron child windows
 
   constructor(url: string, token?: string) {
@@ -102,7 +106,7 @@ export class OpenAgentWS {
       // drops keep the existing gentle 3 s reconnect — those are
       // network blips during a working session.
       if (!this.everAuthed) {
-        const giveUp = this.reconnectAttempts >= OpenAgentWS.MAX_RECONNECT;
+        const giveUp = this.reconnectAttempts >= OpenAgentWS.MAX_PRE_AUTH_RECONNECT;
         this.notifyClose({
           reason: giveUp ? 'retries_exhausted' : 'pre_auth',
           code: event.code,
@@ -115,15 +119,18 @@ export class OpenAgentWS {
         return;
       }
 
-      // Already-authed session → keep the post-auth reconnect loop.
-      // wasAuthed is informational; close handlers can decide whether
-      // to react (e.g. show a "reconnecting…" toast).
+      // Already-authed session — try reconnects with a cap. A dead
+      // loopback (iroh transport gone while the proxy port is still
+      // bound) would otherwise loop forever: TCP connect to localhost
+      // succeeds, auth times out after 15 s, onclose fires again.
+      const postAuthGiveUp = this.reconnectAttempts >= OpenAgentWS.MAX_POST_AUTH_RECONNECT;
       this.notifyClose({
-        reason: 'post_auth',
+        reason: postAuthGiveUp ? 'retries_exhausted' : 'post_auth',
         code: event.code,
         detail: event.reason || undefined,
       });
-      if (this.shouldReconnect && wasAuthed) {
+      if (this.shouldReconnect && wasAuthed && !postAuthGiveUp) {
+        this.reconnectAttempts += 1;
         this.reconnectTimer = setTimeout(() => this.connect(), 3000);
       }
     };
