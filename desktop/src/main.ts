@@ -398,6 +398,35 @@ function setupAutoUpdater(): void {
   autoUpdater.checkForUpdatesAndNotify();
 }
 
+// ── IPC: Window-control handlers (module-level so they're registered
+// before ``activate`` can fire and create a window on macOS). ──
+
+ipcMain.handle('app:quit', () => {
+  app.quit();
+});
+
+ipcMain.handle('window:minimize', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win && !win.isDestroyed()) win.minimize();
+});
+
+ipcMain.handle('window:maximize', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win && !win.isDestroyed()) {
+    win.isMaximized() ? win.unmaximize() : win.maximize();
+  }
+});
+
+ipcMain.handle('window:close', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  if (win && !win.isDestroyed()) win.close();
+});
+
+ipcMain.handle('window:isMaximized', (event) => {
+  const win = BrowserWindow.fromWebContents(event.sender);
+  return win && !win.isDestroyed() ? win.isMaximized() : false;
+});
+
 // ── Lifecycle ──
 
 app.whenReady().then(async () => {
@@ -504,34 +533,6 @@ app.whenReady().then(async () => {
   });
 
   // ── IPC: Existing handlers ──
-
-  // Renderer-initiated quit: exposes an IPC the in-app close button can call.
-  ipcMain.handle('app:quit', () => {
-    app.quit();
-  });
-
-  // Custom window controls (cross-platform, Jarvis-themed).
-  ipcMain.handle('window:minimize', (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (win && !win.isDestroyed()) win.minimize();
-  });
-
-  ipcMain.handle('window:maximize', (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (win && !win.isDestroyed()) {
-      win.isMaximized() ? win.unmaximize() : win.maximize();
-    }
-  });
-
-  ipcMain.handle('window:close', (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    if (win && !win.isDestroyed()) win.close();
-  });
-
-  ipcMain.handle('window:isMaximized', (event) => {
-    const win = BrowserWindow.fromWebContents(event.sender);
-    return win && !win.isDestroyed() ? win.isMaximized() : false;
-  });
 
   // Renderer asks the main process to open a new window for a tab route.
   // These are *relay* children — they share the primary window's agent
