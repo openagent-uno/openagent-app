@@ -38,10 +38,10 @@ const MAX_MARKDOWN_CHARS = 80000;
 
 function MarkdownBase({ text, streaming }: Props) {
   const blocks = useMemo(
-    () => (streaming || text.length > MAX_MARKDOWN_CHARS ? null : parseBlocks(text)),
-    [text, streaming],
+    () => (text.length > MAX_MARKDOWN_CHARS ? null : parseBlocks(text)),
+    [text],
   );
-  if (streaming || !blocks) {
+  if (!blocks) {
     return (
       <View>
         <Text style={styles.paragraph} selectable>
