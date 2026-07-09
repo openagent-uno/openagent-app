@@ -45,27 +45,63 @@ function resolveTrayIconPath(): string {
 /**
  * Load the OpenAgent polygon-bird logo as a tray icon.
  *
- * Resizes the logo to tray dimensions. Uses the native colour image
- * with its transparent background — NOT a template mask — so the bird
- * shape is recognisable rather than a featureless silhouette.
+ * Renders the bird in white at the native tray size with padding so the
+ * shape is crisp and not stretched edge-to-edge.
  */
 function generateTrayIcon(): NativeImage {
   const iconPath = resolveTrayIconPath();
-  let img = nativeImage.createFromPath(iconPath);
+  const sourceImg = nativeImage.createFromPath(iconPath);
 
-  // If the icon couldn't be loaded, fall back to a minimal empty image
-  // so the tray still appears (just blank) rather than crashing.
-  if (img.isEmpty()) {
+  if (sourceImg.isEmpty()) {
     console.error(`[tray] Failed to load icon from ${iconPath}`);
     return nativeImage.createEmpty();
   }
 
-  // Tray icons: macOS menu bar is 22×22 pt (44×44 px @2x),
-  // Windows notification area is 16×16, Linux is 22×22.
-  const size = process.platform === 'win32' ? 16 : 22;
-  img = img.resize({ width: size, height: size });
+  const traySize = process.platform === 'win32' ? 16 : 22;
+  const padding = Math.max(2, Math.round(traySize * 0.1));
+  const contentMax = traySize - padding * 2;
 
-  return img;
+  const srcSize = sourceImg.getSize();
+  const srcBitmap = sourceImg.toBitmap(); // BGRA, one byte per channel
+
+  // Fit the polygon bird inside the padded area, preserving aspect ratio.
+  const scale = Math.min(contentMax / srcSize.width, contentMax / srcSize.height);
+  const drawW = Math.round(srcSize.width * scale);
+  const drawH = Math.round(srcSize.height * scale);
+
+  // Build at 2× for retina sharpness, then downscale.
+  const scaleFactor = 2;
+  const canvas = traySize * scaleFactor;
+  const buffer = Buffer.alloc(canvas * canvas * 4, 0);
+
+  const ox = Math.round((canvas - drawW * scaleFactor) / 2);
+  const oy = Math.round((canvas - drawH * scaleFactor) / 2);
+
+  // Nearest-neighbour scale into the output buffer.
+  // Every non-transparent source pixel becomes white in the output.
+  for (let dy = 0; dy < drawH * scaleFactor; dy++) {
+    for (let dx = 0; dx < drawW * scaleFactor; dx++) {
+      const sx = Math.floor((dx / scaleFactor) / scale);
+      const sy = Math.floor((dy / scaleFactor) / scale);
+      const si = (sy * srcSize.width + sx) * 4;
+      const sa = srcBitmap[si + 3]; // source alpha
+
+      if (sa > 128) {
+        const di = ((oy + dy) * canvas + (ox + dx)) * 4;
+        buffer[di] = 255;     // B
+        buffer[di + 1] = 255; // G
+        buffer[di + 2] = 255; // R
+        buffer[di + 3] = sa;  // A
+      }
+    }
+  }
+
+  const img = nativeImage.createFromBitmap(buffer, {
+    width: canvas,
+    height: canvas,
+  });
+
+  return img.resize({ width: traySize, height: traySize });
 }
 
 // ── Tray menu builder ──
