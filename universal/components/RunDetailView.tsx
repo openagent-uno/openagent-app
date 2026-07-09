@@ -33,6 +33,7 @@ import {
 import { runRoutePath, type SessionContext } from '../../common/types';
 import { openDetached } from '../services/windows';
 import { useChat } from '../stores/chat';
+import { useAutoScroll } from '../hooks/useAutoScroll';
 import Markdown from './Markdown';
 import MessageList from './MessageList';
 import ContextPanel from './ContextPanel';
@@ -407,9 +408,37 @@ export function RunDetailView({
   const run = wfRun ?? taskRun;
   if (!run) return null;
 
+  // Track deps for auto-scroll: the run status (live vs done), workflow
+  // trace length/statuses, and the task's session message count all drive
+  // content growth that should keep us pinned to the bottom.
+  const scrollTrackDeps = [
+    run.status,
+    wfRun?.trace.length,
+    wfRun?.trace.map((e) => e.status).join(','),
+    taskRun?.session_id,
+  ];
+  const {
+    scrollRef,
+    onScroll,
+    onContentSizeChange,
+    isPinned,
+    scrollToBottom,
+  } = useAutoScroll({ trackDeps: scrollTrackDeps });
+
   return (
     <View style={styles.root}>
-      <ScrollView style={styles.scroll} contentContainerStyle={styles.column}>
+      <ScrollView
+        ref={scrollRef}
+        style={styles.scroll}
+        contentContainerStyle={styles.column}
+        onScroll={onScroll}
+        onContentSizeChange={onContentSizeChange}
+        scrollEventThrottle={100}
+        // Always show the scrollbar so the user sees there's
+        // scrollable content even when the transcript is short.
+        // @ts-ignore — RN Web prop, no-op on native
+        persistentScrollbar
+      >
         <RunHeader
           name={name}
           kindIcon={kind === 'workflow' ? 'git-branch' : 'clock'}
@@ -423,6 +452,20 @@ export function RunDetailView({
         />
         {wfRun ? <WorkflowBody run={wfRun} /> : taskRun ? <TaskBody run={taskRun} /> : null}
       </ScrollView>
+      {/* Jump-to-bottom pill: shown when the user has scrolled away from the
+          bottom. Same position and style as the chat screen's pill so it
+          reads as a consistent affordance across all screens. */}
+      {!isPinned && (
+        <TouchableOpacity
+          style={styles.jumpToBottom}
+          onPress={() => scrollToBottom(true)}
+          accessibilityLabel="Jump to bottom"
+          // @ts-ignore
+          {...(Platform.OS === 'web' ? { className: 'oa-hover-lift oa-fade-in' } : {})}
+        >
+          <Feather name="chevron-down" size={14} color={colors.text} />
+        </TouchableOpacity>
+      )}
       {/* Floating context panel, top-right — same placement as the chat screen.
           A scheduled firing has one owning session; workflow runs surface it per
           AI node instead (open the node to see that session's panel). */}
@@ -910,6 +953,25 @@ function safeJson(v: unknown): string {
 const styles = StyleSheet.create({
   root: { flex: 1 },
   scroll: { flex: 1 },
+  jumpToBottom: {
+    position: 'absolute',
+    bottom: 24,
+    alignSelf: 'center',
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    zIndex: 5,
+    shadowColor: colors.shadowColor,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.6,
+    shadowRadius: 6,
+    elevation: 3,
+  },
   // Editorial single column, matching the Chat transcript's reading width.
   column: {
     paddingHorizontal: 20,

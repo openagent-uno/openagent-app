@@ -36,6 +36,7 @@ import PopupMenu from '../../components/PopupMenu';
 import { NO_DRAG } from '../../components/DragRegion';
 import { goBack } from '../../services/windows';
 import { useNavHistory } from '../../stores/navHistory';
+import { useAutoScroll } from '../../hooks/useAutoScroll';
 import { Skeleton, SkeletonLines } from '../../components/Skeleton';
 import { useConfirm } from '../../components/ConfirmDialog';
 import { uploadFile, guessMimeType, listDbModels } from '../../services/api';
@@ -171,7 +172,6 @@ export default function ChatScreen() {
   const setVoiceConfig = useVoiceConfig((s) => s.setConfig);
   const mediaRecorderRef = useRef<any>(null);
   const chunksRef = useRef<Blob[]>([]);
-  const scrollRef = useRef<ScrollView>(null);
   // The composer's underlying text field, so a stray printable keystroke
   // anywhere on the chat screen can be routed into it (type-to-focus).
   const composerInputRef = useRef<any>(null);
@@ -443,33 +443,24 @@ export default function ChatScreen() {
     return off;
   }, [hydrateFromServer]);
 
-  // Auto-scroll only when the user is already pinned to the bottom.
-  // If they've scrolled up to read history, we don't yank them back —
-  // instead the jump-to-bottom pill appears and lets them opt in.
-  const [pinnedToBottom, setPinnedToBottom] = useState(true);
-  const scrollToBottom = useCallback((animated = true) => {
-    scrollRef.current?.scrollToEnd({ animated });
-    setPinnedToBottom(true);
-  }, []);
-  useEffect(() => {
-    if (!pinnedToBottom) return;
-    const id = setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 60);
-    return () => clearTimeout(id);
-    // ``activeSession?.messages`` reference also flips on every delta
-    // when the last message's text grows — so we track length AND the
-    // tail's text length, which is enough granularity for streaming
-    // without re-scheduling on tool-card updates that don't grow text.
-  }, [
-    pinnedToBottom,
-    activeSession?.messages.length,
-    activeSession?.statusText,
-    activeSession?.messages[activeSession.messages.length - 1]?.text.length,
-  ]);
-  const handleScroll = useCallback((e: any) => {
-    const { layoutMeasurement, contentOffset, contentSize } = e.nativeEvent;
-    const distanceFromBottom = contentSize.height - (contentOffset.y + layoutMeasurement.height);
-    setPinnedToBottom(distanceFromBottom < 60);
-  }, []);
+  // Auto-scroll: stick to the bottom while the agent streams live updates.
+  // When the user scrolls away from the bottom, auto-scroll pauses and a
+  // jump-to-bottom pill appears. Scrolling back to the very bottom
+  // re-engages auto-scroll — the same pattern as Claude Code, VS Code,
+  // Slack, and every chat application.
+  const {
+    scrollRef,
+    onScroll,
+    onContentSizeChange,
+    isPinned,
+    scrollToBottom,
+  } = useAutoScroll({
+    trackDeps: [
+      activeSession?.messages.length,
+      activeSession?.statusText,
+      activeSession?.messages[activeSession?.messages.length - 1]?.text.length,
+    ],
+  });
 
   // Shared upload pipeline used by every file-source surface (native
   // file dialog on desktop, hidden ``<input type=file>`` on plain web,
@@ -1469,8 +1460,13 @@ export default function ChatScreen() {
               // pad the content so the first message clears the header.
               style={[styles.messages, { marginTop: -headerInset }]}
               contentContainerStyle={[styles.messagesContent, { paddingTop: headerInset + 12 }]}
-              onScroll={handleScroll}
-              scrollEventThrottle={120}
+              onScroll={onScroll}
+              onContentSizeChange={onContentSizeChange}
+              scrollEventThrottle={100}
+              // Always show the scrollbar so the user sees there's
+              // scrollable content even when the transcript is short.
+              // @ts-ignore — RN Web prop, no-op on native
+              persistentScrollbar
             >
               <View style={styles.messagesInner}>
                 {(activeSession.parentSessionId || (activeSession.origin && activeSession.origin !== 'chat')) ? (
@@ -1558,7 +1554,7 @@ export default function ChatScreen() {
                 </TouchableOpacity>
               </View>
             ) : null}
-            {!pinnedToBottom && (
+            {!isPinned && (
               <TouchableOpacity
                 style={styles.jumpToBottom}
                 onPress={() => scrollToBottom(true)}
