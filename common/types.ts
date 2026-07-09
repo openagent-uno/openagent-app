@@ -1252,6 +1252,22 @@ export interface GraphData {
   edges: { source: string; target: string }[];
 }
 
+// ── Vault search types ──
+
+/** One match within a file from ``/api/vault/search/in-file``. */
+export interface InFileMatch {
+  line: number;
+  col: number;
+  text: string;
+}
+
+/** Result of ``GET /api/vault/search/in-file?path=…&q=…``. */
+export interface InFileSearchResult {
+  path: string;
+  matches: InFileMatch[];
+  count: number;
+}
+
 // ── Vault write / move / history / gate ──
 
 // One validation finding surfaced by the gateway when a note is written.

@@ -13,17 +13,266 @@
  * body. No inner file-tree sidebar — note navigation is the graph screen.
  */
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  Platform, ScrollView, StyleSheet, Text, TextInput, View,
+  Animated, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
+import Feather from '@expo/vector-icons/Feather';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import Markdown from '../../../components/Markdown';
 import { HeaderRight, HeaderIconButton, HeaderAction, useHeaderInset } from '../../../components/screenHeader';
 import { useConnection } from '../../../stores/connection';
 import { useVault } from '../../../stores/vault';
 import { setBaseUrl } from '../../../services/api';
-import { colors, font, radius } from '../../../theme';
+import { colors, font, radius, glassSurface } from '../../../theme';
+
+// ── In-file search helpers ──
+
+/** Escape regex special chars in a plain-text query. */
+function escapeRegExp(query: string): string {
+  return query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Find all occurrences of `query` in `text`. Returns array of {start, end}. */
+function findMatches(
+  text: string,
+  query: string,
+  isRegex: boolean,
+): Array<{ start: number; end: number }> {
+  if (!query) return [];
+  const results: Array<{ start: number; end: number }> = [];
+  try {
+    const pattern = isRegex ? query : escapeRegExp(query);
+    const regex = new RegExp(pattern, 'gi');
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(text)) !== null) {
+      results.push({ start: match.index, end: match.index + match[0].length });
+      // Avoid infinite loop on zero-length matches.
+      if (match[0].length === 0) regex.lastIndex++;
+    }
+  } catch {
+    // Invalid regex — return empty, caller shows a badge.
+  }
+  return results;
+}
+
+// ── Search bar (web-native, DOM-aware) ──
+
+interface SearchBarProps {
+  visible: boolean;
+  query: string;
+  onChangeQuery: (q: string) => void;
+  matchCount: number;
+  currentIdx: number;
+  onPrev: () => void;
+  onNext: () => void;
+  regexMode: boolean;
+  onToggleRegex: () => void;
+  onClose: () => void;
+  regexError: boolean;
+}
+
+function SearchBar({
+  visible, query, onChangeQuery,
+  matchCount, currentIdx,
+  onPrev, onNext,
+  regexMode, onToggleRegex, onClose,
+  regexError,
+}: SearchBarProps) {
+  const slideAnim = useRef(new Animated.Value(visible ? 1 : 0)).current;
+  const inputRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    Animated.timing(slideAnim, {
+      toValue: visible ? 1 : 0,
+      duration: 160,
+      useNativeDriver: true,
+    }).start();
+    if (visible) {
+      // Focus the input on the next frame after the animation starts.
+      requestAnimationFrame(() => inputRef.current?.focus());
+    }
+  }, [visible, slideAnim]);
+
+  if (!visible) return null;
+
+  const translateY = slideAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [-48, 0],
+  });
+
+  return (
+    <Animated.View
+      style={[
+        searchBarStyles.container,
+        { transform: [{ translateY }], opacity: slideAnim },
+      ]}
+    >
+      <Feather name="search" size={14} color={colors.textMuted} style={{ marginLeft: 8 }} />
+      <TextInput
+        ref={inputRef}
+        value={query}
+        onChangeText={onChangeQuery}
+        placeholder="Find in file…"
+        placeholderTextColor={colors.textMuted}
+        style={searchBarStyles.input}
+        autoCapitalize="none"
+        autoCorrect={false}
+        spellCheck={false}
+        returnKeyType="search"
+        // Keyboard navigation is handled by the parent's keydown listener
+      />
+      {query.length > 0 && (
+        <View style={searchBarStyles.matchInfo}>
+          {regexError ? (
+            <Text style={searchBarStyles.regexError}>Invalid regex</Text>
+          ) : (
+            <Text style={searchBarStyles.matchCount}>
+              {matchCount > 0 ? `${currentIdx + 1}/${matchCount}` : '0/0'}
+            </Text>
+          )}
+        </View>
+      )}
+      <Pressable
+        onPress={onPrev}
+        disabled={matchCount === 0}
+        hitSlop={6}
+        style={({ pressed }) => [
+          searchBarStyles.arrowBtn,
+          pressed && { backgroundColor: colors.hover },
+        ]}
+        accessibilityLabel="Previous match"
+      >
+        <Feather name="chevron-up" size={14} color={matchCount > 0 ? colors.text : colors.textMuted} />
+      </Pressable>
+      <Pressable
+        onPress={onNext}
+        disabled={matchCount === 0}
+        hitSlop={6}
+        style={({ pressed }) => [
+          searchBarStyles.arrowBtn,
+          pressed && { backgroundColor: colors.hover },
+        ]}
+        accessibilityLabel="Next match"
+      >
+        <Feather name="chevron-down" size={14} color={matchCount > 0 ? colors.text : colors.textMuted} />
+      </Pressable>
+      <Pressable
+        onPress={onToggleRegex}
+        hitSlop={6}
+        style={({ pressed }) => [
+          searchBarStyles.regexBtn,
+          regexMode && searchBarStyles.regexBtnActive,
+          pressed && { backgroundColor: colors.hover },
+        ]}
+        accessibilityLabel="Toggle regex"
+      >
+        <Text style={[
+          searchBarStyles.regexLabel,
+          regexMode && searchBarStyles.regexLabelActive,
+        ]}>
+          .*
+        </Text>
+      </Pressable>
+      <Pressable
+        onPress={onClose}
+        hitSlop={6}
+        style={({ pressed }) => [
+          searchBarStyles.closeBtn,
+          pressed && { backgroundColor: colors.hover },
+        ]}
+        accessibilityLabel="Close search"
+      >
+        <Feather name="x" size={14} color={colors.textMuted} />
+      </Pressable>
+    </Animated.View>
+  );
+}
+
+const searchBarStyles = StyleSheet.create({
+  container: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 4,
+    paddingVertical: 3,
+    marginHorizontal: 10,
+    marginTop: 2,
+    marginBottom: 2,
+    borderRadius: radius.md,
+    backgroundColor: glassSurface.backgroundColor,
+    borderWidth: 1,
+    borderColor: colors.border,
+    ...(Platform.OS === 'web'
+      ? ({
+          backdropFilter: glassSurface.webFilter,
+          WebkitBackdropFilter: glassSurface.webFilter,
+        } as any)
+      : {}),
+  },
+  input: {
+    flex: 1,
+    height: 28,
+    paddingHorizontal: 8,
+    fontSize: 13,
+    fontFamily: font.sans,
+    color: colors.text,
+    backgroundColor: 'transparent',
+    outline: 'none' as any,
+    border: 'none' as any,
+  },
+  matchInfo: {
+    paddingHorizontal: 6,
+    minWidth: 48,
+    alignItems: 'center',
+  },
+  matchCount: {
+    fontSize: 11,
+    fontFamily: font.mono,
+    color: colors.textMuted,
+  },
+  regexError: {
+    fontSize: 11,
+    fontFamily: font.mono,
+    color: colors.error,
+    fontWeight: '600',
+  },
+  arrowBtn: {
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.xs,
+  },
+  regexBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: radius.xs,
+    borderWidth: 1,
+    borderColor: 'transparent',
+  },
+  regexBtnActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primaryLight,
+  },
+  regexLabel: {
+    fontSize: 11,
+    fontFamily: font.mono,
+    fontWeight: '700',
+    color: colors.textMuted,
+  },
+  regexLabelActive: {
+    color: colors.primary,
+  },
+  closeBtn: {
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.xs,
+    marginRight: 2,
+  },
+});
 
 export default function MemoryNoteScreen() {
   const navigation = useNavigation();
@@ -44,6 +293,49 @@ export default function MemoryNoteScreen() {
   } = useVault();
 
   const [rawMode, setRawMode] = useState(false);
+
+  // ── In-file search ──
+  const [searchVisible, setSearchVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchCurrentIdx, setSearchCurrentIdx] = useState(0);
+  const [searchRegexMode, setSearchRegexMode] = useState(false);
+  const scrollViewRef = useRef<ScrollView>(null);
+  const previewContainerRef = useRef<View>(null);
+
+  const searchMatches = useMemo(
+    () => findMatches(editorContent ?? '', searchQuery, searchRegexMode),
+    [editorContent, searchQuery, searchRegexMode],
+  );
+
+  const searchRegexError = useMemo(() => {
+    if (!searchQuery || !searchRegexMode) return false;
+    try {
+      new RegExp(searchQuery, 'gi');
+      return false;
+    } catch {
+      return true;
+    }
+  }, [searchQuery, searchRegexMode]);
+
+  const navigateMatch = useCallback((direction: 1 | -1) => {
+    if (searchMatches.length === 0) return;
+    setSearchCurrentIdx((prev) => {
+      const next = prev + direction;
+      if (next < 0) return searchMatches.length - 1;
+      if (next >= searchMatches.length) return 0;
+      return next;
+    });
+  }, [searchMatches.length]);
+
+  const openSearch = useCallback(() => {
+    setSearchVisible(true);
+  }, []);
+
+  const closeSearch = useCallback(() => {
+    setSearchVisible(false);
+    setSearchQuery('');
+    setSearchCurrentIdx(0);
+  }, []);
 
   // Initial data — same set the graph screen loads, in case the user
   // deep-linked straight to a note.
@@ -76,18 +368,39 @@ export default function MemoryNoteScreen() {
     saveNote().then(() => loadNotes());
   }, [saveNote, loadNotes]);
 
-  // Ctrl/Cmd+S saves.
+  // ── Keyboard shortcuts (web) ──
   useEffect(() => {
     if (Platform.OS !== 'web') return;
     const handler = (e: KeyboardEvent) => {
+      // Ctrl/Cmd+S saves.
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault();
         handleSave();
+        return;
+      }
+      // Ctrl/Cmd+F opens search.
+      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
+        e.preventDefault();
+        openSearch();
+        return;
+      }
+      // Escape closes search.
+      if (e.key === 'Escape' && searchVisible) {
+        e.preventDefault();
+        closeSearch();
+        return;
+      }
+      // Enter/Shift+Enter navigate matches (only when search is visible
+      // and the focus is inside the search bar or the document body).
+      if (e.key === 'Enter' && searchVisible) {
+        e.preventDefault();
+        navigateMatch(e.shiftKey ? -1 : 1);
+        return;
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [handleSave]);
+  }, [handleSave, openSearch, closeSearch, navigateMatch, searchVisible]);
 
   // Push the per-note git history screen.
   const openHistory = useCallback(() => {
@@ -127,12 +440,18 @@ export default function MemoryNoteScreen() {
     navigation.setOptions({ title: 'Memory file' });
   }, [navigation]);
 
-  // History / Rename / Edit-Preview / Save in the nav header's right slot.
+  // History / Search / Rename / Edit-Preview / Save in the nav header's right slot.
   useLayoutEffect(() => {
     navigation.setOptions({
       headerRight: () => (
         <HeaderRight>
           <HeaderIconButton icon="clock" accessibilityLabel="History" onPress={openHistory} />
+          <HeaderIconButton
+            icon="search"
+            active={searchVisible}
+            accessibilityLabel="Search"
+            onPress={openSearch}
+          />
           {Platform.OS === 'web' && (
             <HeaderIconButton icon="type" accessibilityLabel="Rename" onPress={handleRename} />
           )}
@@ -153,7 +472,127 @@ export default function MemoryNoteScreen() {
     // ``notePath``; including the callbacks themselves would loop, because
     // ``useRouter()`` hands back a fresh reference each render.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigation, rawMode, editorDirty, notePath]);
+  }, [navigation, rawMode, editorDirty, notePath, searchVisible, openSearch]);
+
+  // ── DOM-based search highlighting (web only, preview mode) ──
+  // After the React tree commits, walk the rendered preview container's
+  // text nodes and wrap each match in a <mark> element so highlights are
+  // visible in the rendered Markdown. Runs on every search/query change.
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    if (!searchVisible || rawMode || !previewContainerRef.current) return;
+
+    const container = previewContainerRef.current as unknown as HTMLElement;
+    if (!container || typeof container.querySelector !== 'function') return;
+
+    // 1. Remove all previously injected marks and restore text nodes.
+    const existingMarks = container.querySelectorAll('mark.oa-search-hl');
+    existingMarks.forEach((mark) => {
+      const parent = mark.parentNode;
+      if (!parent) return;
+      parent.replaceChild(document.createTextNode(mark.textContent ?? ''), mark);
+      parent.normalize();
+    });
+
+    if (!searchQuery || searchMatches.length === 0) return;
+
+    // 2. Build a regex from the query.
+    let pattern: string;
+    try {
+      pattern = searchRegexMode ? searchQuery : escapeRegExp(searchQuery);
+    } catch {
+      return;
+    }
+    let regex: RegExp;
+    try {
+      regex = new RegExp(pattern, 'gi');
+    } catch {
+      return;
+    }
+
+    // 3. Walk text nodes, split matches into <mark> elements.
+    const walker = document.createTreeWalker(
+      container,
+      NodeFilter.SHOW_TEXT,
+      null,
+    );
+
+    const textNodes: Text[] = [];
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
+      textNodes.push(node as Text);
+    }
+
+    let matchIdx = 0;
+    const matchElements: HTMLElement[] = [];
+
+    for (const textNode of textNodes) {
+      const text = textNode.textContent ?? '';
+      // Reset per-node so we get fresh matches.
+      regex.lastIndex = 0;
+      const segments: Array<{ text: string; isMatch: boolean }> = [];
+      let lastIdx = 0;
+      let m: RegExpExecArray | null;
+
+      while ((m = regex.exec(text)) !== null) {
+        if (m[0].length === 0) {
+          regex.lastIndex++;
+          continue;
+        }
+        if (m.index > lastIdx) {
+          segments.push({ text: text.slice(lastIdx, m.index), isMatch: false });
+        }
+        segments.push({ text: m[0], isMatch: true });
+        lastIdx = m.index + m[0].length;
+      }
+      if (lastIdx < text.length) {
+        segments.push({ text: text.slice(lastIdx), isMatch: false });
+      }
+
+      if (segments.length <= 1) continue;
+
+      const fragment = document.createDocumentFragment();
+      for (const seg of segments) {
+        if (seg.isMatch) {
+          const markEl = document.createElement('mark');
+          markEl.className = 'oa-search-hl';
+          markEl.setAttribute('data-match-idx', String(matchIdx));
+          const isCurrent = matchIdx === searchCurrentIdx;
+          markEl.style.cssText = isCurrent
+            ? `background-color: ${colors.warning}; color: inherit; border-radius: 2px; padding: 0 1px;`
+            : `background-color: rgba(255, 255, 0, 0.3); color: inherit; border-radius: 2px; padding: 0 1px;`;
+          markEl.textContent = seg.text;
+          fragment.appendChild(markEl);
+          matchElements.push(markEl);
+          matchIdx++;
+        } else {
+          fragment.appendChild(document.createTextNode(seg.text));
+        }
+      }
+      textNode.parentNode?.replaceChild(fragment, textNode);
+    }
+
+    // 4. Scroll the current match into view.
+    if (matchElements.length > 0 && searchCurrentIdx < matchElements.length) {
+      const current = matchElements[searchCurrentIdx];
+      try {
+        current.scrollIntoView({
+          behavior: 'smooth',
+          block: 'center',
+        });
+      } catch {
+        // ignore
+      }
+    }
+  }, [
+    searchVisible,
+    rawMode,
+    searchQuery,
+    searchMatches,
+    searchCurrentIdx,
+    searchRegexMode,
+    editorContent,
+  ]);
 
   const showStatus = lastErrors.length > 0
     || (!editorDirty && (lastWarnings.length > 0 || !!lastCommit));
@@ -186,6 +625,24 @@ export default function MemoryNoteScreen() {
         </View>
       )}
 
+      {/* In-file search bar */}
+      <SearchBar
+        visible={searchVisible}
+        query={searchQuery}
+        onChangeQuery={(q) => {
+          setSearchQuery(q);
+          setSearchCurrentIdx(0);
+        }}
+        matchCount={searchMatches.length}
+        currentIdx={searchCurrentIdx}
+        onPrev={() => navigateMatch(-1)}
+        onNext={() => navigateMatch(1)}
+        regexMode={searchRegexMode}
+        onToggleRegex={() => setSearchRegexMode((v) => !v)}
+        onClose={closeSearch}
+        regexError={searchRegexError}
+      />
+
       {rawMode ? (
         Platform.OS === 'web' ? (
           <textarea
@@ -211,8 +668,14 @@ export default function MemoryNoteScreen() {
           </ScrollView>
         )
       ) : (
-        <ScrollView style={styles.previewScroll} contentContainerStyle={styles.previewContent}>
-          <Markdown text={editorContent} />
+        <ScrollView
+          ref={scrollViewRef}
+          style={styles.previewScroll}
+          contentContainerStyle={styles.previewContent}
+        >
+          <View ref={previewContainerRef}>
+            <Markdown text={editorContent} />
+          </View>
         </ScrollView>
       )}
     </View>

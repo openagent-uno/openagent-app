@@ -17,6 +17,10 @@ import { colors, font, getRawColors } from '../theme';
 interface Props {
   data: GraphData;
   onSelectNode?: (id: string) => void;
+  /** When set, matching node ids render at full opacity with a glow ring;
+   *  non-matching nodes are dimmed to 0.2 alpha. Pass an empty/undefined
+   *  set to restore normal rendering. */
+  highlightNodeIds?: Set<string>;
   width?: number;
   height?: number;
 }
@@ -179,11 +183,15 @@ function tick(nodes: SimNode[], edges: SimEdge[], alpha: number) {
 
 // ── React component ──
 
-export default function GraphView({ data, onSelectNode, width, height }: Props) {
+export default function GraphView({ data, onSelectNode, highlightNodeIds, width, height }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const simRef = useRef<{ nodes: SimNode[]; edges: SimEdge[]; maxDegree: number }>({ nodes: [], edges: [], maxDegree: 0 });
   const frameRef = useRef<number>(0);
   const alphaRef = useRef(1);
+  // Keep a ref so the rAF closure always reads the latest highlight set
+  // (the render useEffect only re-runs on containerSize changes).
+  const highlightRef = useRef<Set<string> | undefined>(highlightNodeIds);
+  highlightRef.current = highlightNodeIds;
 
   // Camera state
   const camRef = useRef({ x: 0, y: 0, zoom: 1 });
@@ -285,44 +293,82 @@ export default function GraphView({ data, onSelectNode, width, height }: Props) 
       ctx.scale(cam.zoom, cam.zoom);
       ctx.translate(cam.x, cam.y);
 
-      // Edges
+      // Edges — when highlighting, only draw edges connected to at least
+      // one highlighted node, at reduced opacity; otherwise draw normally.
+      const hl = highlightRef.current;
+      const hasHl = hl && hl.size > 0;
       ctx.strokeStyle = palette.graphEdge;
       ctx.lineWidth = 1 / cam.zoom;
       ctx.beginPath();
       for (const e of edges) {
         const s = nodes[e.source], t = nodes[e.target];
+        if (hasHl && !hl!.has(s.id) && !hl!.has(t.id)) continue;
         ctx.moveTo(s.x, s.y);
         ctx.lineTo(t.x, t.y);
       }
+      ctx.globalAlpha = hasHl ? 0.25 : 1;
       ctx.stroke();
+      ctx.globalAlpha = 1;
 
       // Nodes — solid fill on hover, 72% alpha otherwise (softer in-field).
       // Color is driven by connectivity: hubs render in brand red, leaves
       // in muted gray.
+      // When ``highlightRef.current`` is set, matching nodes render at full
+      // opacity with a glow ring; non-matching nodes dim to 0.2 alpha.
+      const hl2 = highlightRef.current;
+      const hasHl2 = hl2 && hl2.size > 0;
       for (let i = 0; i < nodes.length; i++) {
         const n = nodes[i];
         const isHover = i === hoverRef.current;
+        const isHighlighted = !hasHl2 || hl2!.has(n.id);
         const c = degreeColor(n.degree, maxDegree, palette);
-        ctx.beginPath();
-        ctx.arc(n.x, n.y, n.radius + (isHover ? 2 : 0), 0, Math.PI * 2);
-        ctx.fillStyle = isHover ? c : c + 'B8';
-        ctx.fill();
-        // Thin ring on every node in the border color so they pop against
-        // the warm background; brand ring on hover for emphasis.
-        ctx.strokeStyle = isHover ? palette.graphRing : palette.graphEdge;
-        ctx.lineWidth = (isHover ? 2 : 1) / cam.zoom;
-        ctx.stroke();
+
+        if (hasHl2 && !isHighlighted) {
+          // Dimmed non-matching node
+          ctx.beginPath();
+          ctx.arc(n.x, n.y, n.radius, 0, Math.PI * 2);
+          ctx.fillStyle = c + '33'; // ~0.2 alpha
+          ctx.fill();
+          ctx.strokeStyle = palette.graphNodeMuted + '55';
+          ctx.lineWidth = 0.5 / cam.zoom;
+          ctx.stroke();
+        } else {
+          // Full-opacity node (highlighted or all nodes normal)
+          const radius = n.radius + (isHover ? 2 : 0);
+          ctx.beginPath();
+          ctx.arc(n.x, n.y, radius, 0, Math.PI * 2);
+          ctx.fillStyle = isHover ? c : c + 'B8';
+          ctx.fill();
+          // Glow ring for highlighted nodes — brighter, slightly larger
+          if (hasHl2 && isHighlighted) {
+            // Outer glow ring
+            ctx.beginPath();
+            ctx.arc(n.x, n.y, radius + 2.5, 0, Math.PI * 2);
+            ctx.strokeStyle = palette.primary + '88';
+            ctx.lineWidth = 2.5 / cam.zoom;
+            ctx.stroke();
+          }
+          // Thin ring
+          ctx.strokeStyle = isHover ? palette.graphRing : palette.graphEdge;
+          ctx.lineWidth = (isHover ? 2 : 1) / cam.zoom;
+          ctx.stroke();
+        }
       }
 
       // Labels (only when zoomed in enough or hovered)
       const labelThreshold = 0.7;
       if (cam.zoom > labelThreshold || hoverRef.current >= 0) {
-        ctx.fillStyle = palette.graphLabel;
+        const hl3 = highlightRef.current;
+        const hasHl3 = hl3 && hl3.size > 0;
         ctx.font = `${11 / cam.zoom}px ${font.sans}`;
         ctx.textAlign = 'center';
         for (let i = 0; i < nodes.length; i++) {
           const n = nodes[i];
           if (cam.zoom <= labelThreshold && i !== hoverRef.current) continue;
+          const isHighlighted = !hasHl3 || hl3!.has(n.id);
+          ctx.fillStyle = hasHl3 && !isHighlighted
+            ? palette.graphLabel + '44'
+            : palette.graphLabel;
           ctx.fillText(n.label, n.x, n.y + n.radius + 14 / cam.zoom);
         }
       }

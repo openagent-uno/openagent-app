@@ -3,7 +3,8 @@
  */
 
 import type {
-  VaultNote, GraphData, AgentConfig, ProviderConfig, ModelsResponse,
+  VaultNote, InFileMatch, InFileSearchResult,
+  GraphData, AgentConfig, ProviderConfig, ModelsResponse,
   UsageData, ModelCatalogEntry, DailyUsageEntry, ScheduledTask,
   CreateScheduledTaskInput, UpdateScheduledTaskInput, TaskRun, MCPEntry,
   ModelEntry, ModelFramework, AvailableModel,
@@ -271,6 +272,29 @@ export async function searchNotes(query: string): Promise<VaultNote[]> {
     `/api/vault/search?q=${encodeURIComponent(query)}`
   );
   return (data.results ?? []).map(normalizeNote);
+}
+
+// Search notes by file name / path only.
+export async function searchNotesByFileName(query: string, limit?: number): Promise<VaultNote[]> {
+  const params = new URLSearchParams({ q: query });
+  if (limit !== undefined) params.set('limit', String(limit));
+  const data = await get<{ results: VaultNote[] }>(
+    `/api/vault/search/files?${params.toString()}`
+  );
+  return (data.results ?? []).map(normalizeNote);
+}
+
+// Search within a specific file, optionally using regex.
+export async function searchInFile(
+  path: string,
+  query: string,
+  regex: boolean = false,
+): Promise<InFileSearchResult> {
+  const params = new URLSearchParams({ path, q: query });
+  if (regex) params.set('regex', 'true');
+  return get<InFileSearchResult>(
+    `/api/vault/search/in-file?${params.toString()}`
+  );
 }
 
 export async function getGraph(): Promise<GraphData> {

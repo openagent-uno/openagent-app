@@ -3,7 +3,10 @@
  */
 
 import { create } from 'zustand';
-import type { VaultNote, GraphData, VaultWarning } from '../../common/types';
+import type {
+  VaultNote, GraphData, VaultWarning,
+  InFileMatch, InFileSearchResult,
+} from '../../common/types';
 import * as api from '../services/api';
 
 interface VaultState {
@@ -14,6 +17,9 @@ interface VaultState {
   editorDirty: boolean;
   searchQuery: string;
   searchResults: VaultNote[];
+  /** Set of matching note paths from the most recent search — used by the
+   *  graph view to highlight matching nodes. */
+  highlightNodeIds: Set<string>;
   loading: boolean;
   error: string | null;
   // Result of the most recent ``saveNote`` — the editor header surfaces
@@ -23,6 +29,12 @@ interface VaultState {
   // Set when the last save was REJECTED by the quality gate (nothing
   // written). The editor shows these and keeps the text so the user can fix.
   lastErrors: VaultWarning[];
+  // ── In-file search state ──
+  inFileSearchQuery: string;
+  inFileSearchRegex: boolean;
+  inFileSearchResults: InFileMatch[];
+  inFileSearchActive: boolean;
+  inFileSearchCurrentIdx: number;
 
   loadNotes: () => Promise<void>;
   loadGraph: () => Promise<void>;
@@ -32,6 +44,13 @@ interface VaultState {
   moveNote: (from: string, to: string) => Promise<void>;
   search: (query: string) => Promise<void>;
   clearSearch: () => void;
+  // ── New search capabilities ──
+  searchFileNames: (query: string) => Promise<void>;
+  searchInFile: (path: string, query: string, regex?: boolean) => Promise<void>;
+  openInFileSearch: () => void;
+  closeInFileSearch: () => void;
+  nextInFileMatch: () => void;
+  prevInFileMatch: () => void;
 }
 
 export const useVault = create<VaultState>((set, get) => ({
@@ -42,11 +61,17 @@ export const useVault = create<VaultState>((set, get) => ({
   editorDirty: false,
   searchQuery: '',
   searchResults: [],
+  highlightNodeIds: new Set<string>(),
   loading: false,
   error: null,
   lastWarnings: [],
   lastCommit: null,
   lastErrors: [],
+  inFileSearchQuery: '',
+  inFileSearchRegex: false,
+  inFileSearchResults: [],
+  inFileSearchActive: false,
+  inFileSearchCurrentIdx: -1,
 
   loadNotes: async () => {
     set({ loading: true, error: null });
@@ -128,16 +153,73 @@ export const useVault = create<VaultState>((set, get) => ({
   search: async (query) => {
     set({ searchQuery: query });
     if (!query.trim()) {
-      set({ searchResults: [] });
+      set({ searchResults: [], highlightNodeIds: new Set() });
       return;
     }
     try {
       const results = await api.searchNotes(query);
-      set({ searchResults: results });
+      const highlightNodeIds = new Set(results.map((n) => n.path));
+      set({ searchResults: results, highlightNodeIds });
     } catch (e: any) {
       set({ error: e.message });
     }
   },
 
-  clearSearch: () => set({ searchQuery: '', searchResults: [] }),
+  clearSearch: () => set({ searchQuery: '', searchResults: [], highlightNodeIds: new Set() }),
+
+  searchFileNames: async (query) => {
+    set({ searchQuery: query });
+    if (!query.trim()) {
+      set({ searchResults: [], highlightNodeIds: new Set() });
+      return;
+    }
+    try {
+      const results = await api.searchNotesByFileName(query);
+      const highlightNodeIds = new Set(results.map((n) => n.path));
+      set({ searchResults: results, highlightNodeIds });
+    } catch (e: any) {
+      set({ error: e.message });
+    }
+  },
+
+  searchInFile: async (path, query, regex = false) => {
+    set({ inFileSearchQuery: query, inFileSearchRegex: regex });
+    if (!query.trim()) {
+      set({ inFileSearchResults: [], inFileSearchCurrentIdx: -1 });
+      return;
+    }
+    try {
+      const result = await api.searchInFile(path, query, regex);
+      set({
+        inFileSearchResults: result.matches,
+        inFileSearchCurrentIdx: result.matches.length > 0 ? 0 : -1,
+      });
+    } catch (e: any) {
+      set({ error: e.message });
+    }
+  },
+
+  openInFileSearch: () => set({ inFileSearchActive: true }),
+
+  closeInFileSearch: () => set({
+    inFileSearchActive: false,
+    inFileSearchQuery: '',
+    inFileSearchRegex: false,
+    inFileSearchResults: [],
+    inFileSearchCurrentIdx: -1,
+  }),
+
+  nextInFileMatch: () => {
+    const { inFileSearchResults, inFileSearchCurrentIdx } = get();
+    if (inFileSearchResults.length === 0) return;
+    const next = (inFileSearchCurrentIdx + 1) % inFileSearchResults.length;
+    set({ inFileSearchCurrentIdx: next });
+  },
+
+  prevInFileMatch: () => {
+    const { inFileSearchResults, inFileSearchCurrentIdx } = get();
+    if (inFileSearchResults.length === 0) return;
+    const prev = (inFileSearchCurrentIdx - 1 + inFileSearchResults.length) % inFileSearchResults.length;
+    set({ inFileSearchCurrentIdx: prev });
+  },
 }));
