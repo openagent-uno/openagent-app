@@ -2,7 +2,7 @@ import { Stack, useUnstableGlobalHref } from 'expo-router';
 import { useEffect, useRef } from 'react';
 import { Animated, View, StyleSheet, Platform } from 'react-native';
 import { ThemeProvider, type Theme } from '@react-navigation/native';
-import { useConnection } from '../stores/connection';
+import { useConnection, directedAccountId, rememberDirectedAccount } from '../stores/connection';
 import { useChat } from '../stores/chat';
 import { useNavHistory, trailHref } from '../stores/navHistory';
 import { ConfirmProvider } from '../components/ConfirmDialog';
@@ -50,6 +50,7 @@ export default function RootLayout() {
   const handleServerMessage = useChat((s) => s.handleServerMessage);
   const loadAccounts = useConnection((s) => s.loadAccounts);
   const resumeConnection = useConnection((s) => s.resumeConnection);
+  const connectDirected = useConnection((s) => s.connectDirected);
   const isDesktop = desktop()?.isDesktop === true;
   const isChild = desktop()?.isChild === true;
   // macOS shows native traffic lights in the sidebar's top-left, so it
@@ -69,8 +70,18 @@ export default function RootLayout() {
 
   useEffect(() => {
     loadAccounts().then(() => {
-      resumeConnection();
+      // A standalone agent window (``?connect=<id>``) opens its own
+      // connection to that account's already-running loopback; a normal
+      // window resumes the shared active-connection slot.
+      const target = directedAccountId();
+      if (target) {
+        rememberDirectedAccount(target);
+        connectDirected(target);
+      } else {
+        resumeConnection();
+      }
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {

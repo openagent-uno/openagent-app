@@ -58,13 +58,27 @@ export default function AgentSwitcher({ variant }: { variant: Variant }) {
     connectAccount,
     joinNetwork,
     removeAccount,
+    openAccountWindow,
   } = useConnection();
 
   const active = accounts.find((a) => a.id === activeAccountId);
   const activeName = active ? extractAgentName(active) : (agentName || 'Not connected');
   const initial = activeName.slice(0, 1).toUpperCase();
 
+  // Desktop can host many windows, each on its own agent. There, signing
+  // into an agent opens it in a NEW window (this one keeps its agent);
+  // elsewhere (web / native, single window) it's the classic in-place
+  // switch.
+  const isElectron =
+    typeof window !== 'undefined' && (window as any).desktop?.isDesktop === true;
+
   const [open, setOpen] = useState(false);
+  // The account whose "open in a new window" is in flight (button label).
+  const [busyId, setBusyId] = useState<string | null>(null);
+  // Errors from the open-in-window flow are local to the sheet — the store's
+  // global ``error`` belongs to this window's own connection, which the
+  // multi-window flow never disturbs.
+  const [localError, setLocalError] = useState<string | null>(null);
   // Which saved account has its sign-in password row unfolded.
   const [signInId, setSignInId] = useState<string | null>(null);
   const [password, setPassword] = useState('');
@@ -89,6 +103,8 @@ export default function AgentSwitcher({ variant }: { variant: Variant }) {
     setJoinPw('');
     setIntent(null);
     setAttempted(false);
+    setBusyId(null);
+    setLocalError(null);
   };
 
   // Close the sheet once a switch / join lands.
@@ -122,8 +138,38 @@ export default function AgentSwitcher({ variant }: { variant: Variant }) {
     setPassword('');
   };
 
-  const doSignIn = () => {
+  // Desktop: open ``id`` in a NEW window, keeping this window on its own
+  // agent. Tries the passwordless path first (loopback already up — the
+  // active agent, or one already open in another window); when it needs
+  // credentials we unfold that row's password field and retry on submit.
+  const openInWindow = async (id: string, pw?: string) => {
+    setBusyId(id);
+    setLocalError(null);
+    const res = await openAccountWindow(id, pw);
+    setBusyId(null);
+    if (res.ok) { close(); return; }
+    if (!pw && res.error && /password/i.test(res.error)) {
+      setAdding(false);
+      setSignInId(id);
+      setPassword('');
+      return;
+    }
+    setLocalError(res.error || 'Could not open that agent.');
+  };
+
+  // Row tap: open a new window on desktop; classic in-place switch elsewhere.
+  const onRowPress = (id: string) => {
+    if (isElectron) void openInWindow(id);
+    else beginSignIn(id);
+  };
+
+  // Submit of an unfolded password row.
+  const doSubmit = () => {
     if (!signInId || !password) return;
+    if (isElectron) {
+      void openInWindow(signInId, password);
+      return;
+    }
     setAttempted(true);
     void connectAccount(signInId, password);
     setPassword('');
@@ -213,6 +259,9 @@ export default function AgentSwitcher({ variant }: { variant: Variant }) {
           >
             <View style={styles.sheetRail} />
             <Text style={styles.sheetTitle}>{adding ? 'Add an agent' : 'Your agents'}</Text>
+            {!adding && isElectron ? (
+              <Text style={styles.sheetHint}>Each agent opens in its own window.</Text>
+            ) : null}
 
             {adding ? (
               <View style={styles.joinForm}>
@@ -280,10 +329,13 @@ export default function AgentSwitcher({ variant }: { variant: Variant }) {
                           <View style={styles.row}>
                             <Pressable
                               style={styles.rowMain}
-                              onPress={() => beginSignIn(a.id)}
-                              disabled={isActive}
+                              onPress={() => onRowPress(a.id)}
+                              // On desktop even the active agent is tappable —
+                              // it opens a second window on the same agent.
+                              disabled={(isActive && !isElectron) || busyId === a.id}
                               accessibilityRole="button"
                               accessibilityState={{ selected: isActive }}
+                              accessibilityHint={isElectron ? 'Opens this agent in a new window' : undefined}
                               // @ts-ignore web hover
                               {...(Platform.OS === 'web' ? { className: 'oa-hover-lift' } : {})}
                             >
@@ -294,11 +346,14 @@ export default function AgentSwitcher({ variant }: { variant: Variant }) {
                                 <Text style={styles.rowName} numberOfLines={1}>{label}</Text>
                                 <Text style={styles.rowSub} numberOfLines={1}>@{a.handle}</Text>
                               </View>
-                              {isActive ? (
-                                <Feather name="check" size={16} color={colors.accent} />
-                              ) : (
-                                <Feather name="chevron-right" size={15} color={colors.textMuted} />
+                              {isActive && (
+                                <Feather name="check" size={16} color={colors.accent} style={isElectron ? styles.rowCheck : undefined} />
                               )}
+                              {isElectron ? (
+                                <Feather name="external-link" size={14} color={colors.textMuted} />
+                              ) : !isActive ? (
+                                <Feather name="chevron-right" size={15} color={colors.textMuted} />
+                              ) : null}
                             </Pressable>
                             <Pressable
                               onPress={() => onRemove(a.id, a.name)}
@@ -318,14 +373,18 @@ export default function AgentSwitcher({ variant }: { variant: Variant }) {
                                 secureTextEntry
                                 autoFocus
                                 containerStyle={{ flex: 1, marginTop: 0 }}
-                                onSubmitEditing={doSignIn}
+                                onSubmitEditing={doSubmit}
                               />
                               <Button
-                                label={isConnecting ? '…' : 'Switch'}
+                                label={
+                                  isElectron
+                                    ? (busyId === a.id ? 'Opening…' : 'Open')
+                                    : (isConnecting ? '…' : 'Switch')
+                                }
                                 variant="primary"
                                 size="sm"
-                                onPress={doSignIn}
-                                disabled={isConnecting || !password}
+                                onPress={doSubmit}
+                                disabled={(isElectron ? busyId === a.id : isConnecting) || !password}
                               />
                             </View>
                           ) : null}
@@ -333,7 +392,9 @@ export default function AgentSwitcher({ variant }: { variant: Variant }) {
                       );
                     })
                   )}
-                  {error && !adding ? <Text style={styles.err}>{error}</Text> : null}
+                  {(localError || (!isElectron && error)) ? (
+                    <Text style={styles.err}>{localError || error}</Text>
+                  ) : null}
                 </ScrollView>
 
                 <View style={styles.addFoot}>
@@ -468,6 +529,15 @@ const styles = StyleSheet.create({
     letterSpacing: tracking.wider,
     fontWeight: '600',
   },
+  sheetHint: {
+    fontFamily: font.sans,
+    fontSize: 11,
+    color: colors.textMuted,
+    paddingHorizontal: spacing.lg,
+    marginTop: -spacing.xs,
+    paddingBottom: spacing.sm,
+    lineHeight: 15,
+  },
   list: { maxHeight: 380 },
   listContent: { paddingBottom: spacing.xs },
   empty: {
@@ -502,6 +572,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   rowAvatarText: { fontFamily: font.display, fontSize: 12.5, color: colors.accent, fontWeight: '600' },
+  rowCheck: { marginRight: 6 },
   rowText: { flex: 1, gap: 2, minWidth: 0 },
   rowName: { fontFamily: font.sans, fontSize: 13.5, color: colors.text, fontWeight: '600' },
   rowSub: { fontFamily: font.mono, fontSize: 11, color: colors.textMuted },

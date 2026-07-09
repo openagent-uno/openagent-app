@@ -16,7 +16,7 @@ import Feather from '@expo/vector-icons/Feather';
 import { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
-import { useConnection } from '../stores/connection';
+import { useConnection, directedAccountId } from '../stores/connection';
 import { useChat } from '../stores/chat';
 import { useConfirm } from '../components/ConfirmDialog';
 import Button from '../components/Button';
@@ -38,6 +38,11 @@ function extractAgentName(acc: { name: string; handle: string }): string {
 
 export default function LoginScreen() {
   const router = useRouter();
+  // Standalone agent window marker: this login screen belongs to a window
+  // opened bound to a specific account (``?connect=<accountId>``, mirrored
+  // to per-window sessionStorage). _layout's boot already kicks off a
+  // passwordless connect to that account's running loopback.
+  const connectId = directedAccountId();
   // The login screen has no sidebar, so on macOS it carries its own window
   // controls + drag strip (the sidebar hosts them everywhere else; Win/Linux
   // get them from the global chrome Header).
@@ -48,6 +53,7 @@ export default function LoginScreen() {
     accounts, isConnected, isConnecting, error, agentName,
     joinNetwork, connectAccount, removeAccount,
   } = useConnection();
+  const connectingAccount = connectId ? accounts.find((a) => a.id === connectId) : undefined;
   const createSession = useChat((s) => s.createSession);
   const sessions = useChat((s) => s.sessions);
   const sessionsHydrated = useChat((s) => s.sessionsHydrated);
@@ -105,6 +111,19 @@ export default function LoginScreen() {
       setSigninAccountId(accounts[0].id);
     }
   }, [mode, accounts.length]);
+
+  // Standalone agent window: preselect the bound account and mark the
+  // attempt so the success effect above redirects to chat once the
+  // passwordless connect (kicked off in _layout) lands. If that loopback
+  // isn't up (rare), the user just types the password on the preselected
+  // account and signs in normally.
+  useEffect(() => {
+    if (typeof connectId === 'string' && connectId) {
+      attemptedRef.current = true;
+      setMode('signin');
+      setSigninAccountId(connectId);
+    }
+  }, [connectId]);
 
   // Decode the ticket whenever it changes so the form can auto-fill
   // the handle for ``role=device`` tickets (the user only has to type
@@ -214,6 +233,15 @@ export default function LoginScreen() {
             <JarvisClock size="md" />
           </View>
         </View>
+
+        {/* Standalone agent window opening its own connection — show a
+            "connecting" line instead of a bare login form while the
+            passwordless connect lands. */}
+        {connectId && isConnecting && (
+          <Text style={[styles.subtitle, { textAlign: 'center' }]}>
+            Connecting to {connectingAccount ? extractAgentName(connectingAccount) : 'agent'}…
+          </Text>
+        )}
 
         {hasSaved && (
           <>

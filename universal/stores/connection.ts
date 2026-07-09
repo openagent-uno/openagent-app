@@ -114,6 +114,9 @@ interface DesktopAPI {
   }) => Promise<number>;
   stopLoopback: (args: { accountId: string }) => Promise<void>;
   getLoopbackPort: (accountId: string) => Promise<number | null>;
+  /** Open a standalone agent window bound to ``accountId`` (own
+   *  connection). Present only in Electron; used for multi-window. */
+  openAgentWindow?: (accountId: string) => Promise<void>;
 }
 
 function desktop(): DesktopAPI | null {
@@ -125,6 +128,37 @@ function desktop(): DesktopAPI | null {
   const d = (window as any).desktop;
   if (!d || typeof d.startLoopback !== 'function') return null;
   return d as DesktopAPI;
+}
+
+const DIRECTED_ACCOUNT_KEY = 'openagent:directedAccount';
+
+/** This renderer is a *directed* (standalone agent) window — it was opened
+ *  with ``?connect=<accountId>`` and owns its own connection to that
+ *  account. Such windows derive their identity from the URL and must NOT
+ *  touch the shared ``ACTIVE_CONNECTION_KEY`` slot (that belongs to the
+ *  primary window's cold-start resume).
+ *
+ *  The ``?connect=`` marker is dropped from the URL once we redirect into
+ *  the tab stack, so we mirror it into per-window ``sessionStorage`` (each
+ *  Electron BrowserWindow has its own) and fall back to that — this keeps a
+ *  standalone window bound to its agent across renderer reloads. Returns the
+ *  target accountId, or null for a normal (primary) window. */
+export function directedAccountId(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const fromUrl = new URLSearchParams(window.location.search).get('connect');
+    if (fromUrl && fromUrl.length > 0) return fromUrl;
+    return (window as any).sessionStorage?.getItem(DIRECTED_ACCOUNT_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
+/** Pin the directed account into this window's sessionStorage so a reload
+ *  reconnects to it even after we've navigated away from ``/?connect=``. */
+export function rememberDirectedAccount(id: string): void {
+  if (typeof window === 'undefined') return;
+  try { (window as any).sessionStorage?.setItem(DIRECTED_ACCOUNT_KEY, id); } catch { /* ignore */ }
 }
 
 export interface JoinNetworkArgs {
@@ -169,6 +203,19 @@ interface ConnectionState {
   connectAccount: (accountId: string, password: string) => Promise<void>;
   disconnect: () => Promise<void>;
   resumeConnection: () => Promise<void>;
+
+  // Multi-window (Electron desktop only)
+  /** Open ``accountId`` in a *new* standalone window without disturbing
+   *  this window's connection. Ensures the account's loopback is up
+   *  (spawning it with ``password`` when it isn't yet), then asks the main
+   *  process to open a window bound to that account — which connects to the
+   *  now-running loopback passwordlessly. Returns ``{ ok }`` so the caller
+   *  can surface a humanised error inline. */
+  openAccountWindow: (accountId: string, password?: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Boot path for a standalone window (``?connect=<id>``): connect to the
+   *  account's already-running loopback with no password. No-op when the
+   *  loopback isn't up (the window falls back to the login screen). */
+  connectDirected: (accountId: string) => Promise<void>;
 }
 
 export const useConnection = create<ConnectionState>((set, get) => ({
@@ -332,7 +379,13 @@ export const useConnection = create<ConnectionState>((set, get) => ({
       agentVersion: null,
       activeAccountId: null,
     });
-    // Clear persisted connection so sub-windows don't try to resume it.
+    // A standalone agent window neither owns the shared resume slot nor
+    // exclusively owns its loopback (a sibling window may be on the same
+    // account). It just drops its own WS; the loopback is reaped on app
+    // quit (stopAllLoopbacks). A primary window clears the slot and tears
+    // down its sidecar as before.
+    if (directedAccountId()) return;
+    // Clear persisted connection so a reload doesn't try to resume it.
     await storage.removeItem(ACTIVE_CONNECTION_KEY);
     // Best-effort sidecar cleanup. Even if this fails we're already
     // disconnected from the renderer's perspective.
@@ -357,6 +410,69 @@ export const useConnection = create<ConnectionState>((set, get) => ({
     if (!account) return;
     _openWebsocket(get, set, { ...account, sidecarPort: port }, activeAccountId);
   },
+
+  // ── multi-window (Electron) ──
+
+  openAccountWindow: async (accountId, password) => {
+    const d = desktop();
+    if (!d || typeof d.openAgentWindow !== 'function') {
+      return { ok: false, error: 'Opening another agent in its own window requires the desktop app.' };
+    }
+    const account = get().accounts.find((a) => a.id === accountId);
+    if (!account) return { ok: false, error: 'Account not found' };
+
+    // Bring up (or reuse) this account's loopback WITHOUT tearing down any
+    // other connection — this window keeps its current agent. Two windows on
+    // the same account share one loopback: ``startLoopback`` is idempotent
+    // and returns the existing port (so an already-running agent needs no
+    // password). We only need the password to spawn a loopback that isn't up
+    // yet; it never leaves this window.
+    try {
+      const existingPort = await d.getLoopbackPort(accountId);
+      if (!existingPort) {
+        if (!password) {
+          return { ok: false, error: 'Enter the password to open this agent.' };
+        }
+        await d.startLoopback({
+          accountId,
+          password,
+          handle: account.handle,
+          network: account.network,
+          agent: account.agentHandle,
+        });
+      }
+    } catch (e: any) {
+      return { ok: false, error: humanizeLoginError(e?.message || String(e)) };
+    }
+
+    // Loopback is up — hand off to the main process, which opens a standalone
+    // window at ``/?connect=<accountId>`` that connects passwordlessly.
+    try {
+      await d.openAgentWindow(accountId);
+    } catch (e: any) {
+      return { ok: false, error: humanizeLoginError(e?.message || String(e)) };
+    }
+    return { ok: true };
+  },
+
+  connectDirected: async (accountId) => {
+    const d = desktop();
+    if (!d) return;
+    // Guard against a double-connect if boot runs this twice.
+    if (get().ws) return;
+    const port = await d.getLoopbackPort(accountId);
+    // No live loopback for this account → can't connect without a password;
+    // leave the window on the login screen (index.tsx preselects the account).
+    if (!port) return;
+    const account = get().accounts.find((a) => a.id === accountId);
+    if (!account) return;
+    set({ isConnecting: true, error: null, activeAccountId: accountId });
+    _openWebsocket(
+      get, set,
+      { ...account, sidecarPort: port }, accountId,
+      { persistActive: false },
+    );
+  },
 }));
 
 /** Hard cap on how long we wait for the gateway's auth_ok / auth_error
@@ -368,12 +484,19 @@ export const useConnection = create<ConnectionState>((set, get) => ({
  *  UI in "Connecting…" forever. */
 const WS_AUTH_TIMEOUT_MS = 15_000;
 
-/** Wire up the WebSocket once we have a sidecar port. */
+/** Wire up the WebSocket once we have a sidecar port.
+ *
+ * ``opts.persistActive`` (default true) controls whether an ``auth_ok``
+ * writes the shared ``ACTIVE_CONNECTION_KEY`` slot. Standalone agent
+ * windows pass ``false``: their account identity lives in the URL
+ * (``?connect=<id>``), so they must not clobber the primary window's
+ * cold-start resume target. */
 function _openWebsocket(
   get: () => ConnectionState,
   set: (s: Partial<ConnectionState>) => void,
   config: ConnectionConfig & { sidecarPort: number },
   accountId: string,
+  opts: { persistActive?: boolean } = {},
 ) {
   let isChild = false;
   try {
@@ -454,12 +577,17 @@ function _openWebsocket(
         set({ accounts: updated });
         storage.setItem(STORAGE_KEY, JSON.stringify(updated));
       }
-      // Persist the active connection so sub-windows can resume
-      // without re-entering credentials.
-      storage.setItem(ACTIVE_CONNECTION_KEY, JSON.stringify({
-        accountId,
-        sidecarPort: config.sidecarPort,
-      }));
+      // Persist the active connection so a renderer reload can resume
+      // without re-entering credentials. Skipped for standalone agent
+      // windows (they resume from their own ``?connect=`` URL instead) so
+      // they don't overwrite the primary window's resume target — including
+      // the login-fallback path, hence the ``directedAccountId()`` guard.
+      if (opts.persistActive !== false && !directedAccountId()) {
+        storage.setItem(ACTIVE_CONNECTION_KEY, JSON.stringify({
+          accountId,
+          sidecarPort: config.sidecarPort,
+        }));
+      }
       // Hydrate the chat sidebar with every session the server
       // already knows about for this device.
       const chat = useChat.getState();

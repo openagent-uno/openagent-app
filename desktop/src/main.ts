@@ -133,7 +133,14 @@ if (!gotLock) {
 }
 
 let mainWindow: BrowserWindow | null = null;
+// Every secondary window (relay-child OR standalone agent window). Tracked so
+// closing the primary can tear them all down.
 const childWindows = new Set<BrowserWindow>();
+// webContents ids of *relay* children only — the ones that tunnel their WS
+// through the primary window (opened with ``markChild``). Standalone agent
+// windows (own loopback + own WS) are deliberately excluded so the primary's
+// broadcast never leaks another agent's frames into them.
+const relayChildIds = new Set<number>();
 let primaryWindowId: number | null = null;
 let staticServer: http.Server | null = null;
 let staticPort = 0;
@@ -233,7 +240,21 @@ function terminalIdFromRoute(route?: string): string | null {
   return m ? decodeURIComponent(m[1]) : null;
 }
 
-function createWindow(route?: string): BrowserWindow {
+interface CreateWindowOptions {
+  /** Relative route to load (no leading slash). Omitted → app root. */
+  route?: string;
+  /** Mark as a relay child: tunnels its WS through the primary window's
+   *  live socket (shared agent). Used for same-agent detached views. */
+  markChild?: boolean;
+  /** Standalone agent window: boots at ``/?connect=<id>`` and opens its
+   *  OWN connection to that account's already-running loopback. Mutually
+   *  exclusive with ``markChild`` — a standalone window is never a relay
+   *  child. */
+  connectAccountId?: string;
+}
+
+function createWindow(opts: CreateWindowOptions = {}): BrowserWindow {
+  const { route, markChild = false, connectAccountId } = opts;
   const isMac = process.platform === 'darwin';
   const win = new BrowserWindow({
     title: 'OpenAgent',
@@ -254,21 +275,23 @@ function createWindow(route?: string): BrowserWindow {
   });
 
   const baseUrl = isDev ? 'http://localhost:8081' : `http://127.0.0.1:${staticPort}`;
-  // Routes may already carry a query string (e.g. ``terminal/<id>?cwd=…``),
-  // so merge ``child=1`` with the right separator instead of always
-  // appending ``?child=1`` — a second ``?`` would swallow the marker.
-  const url = route
-    ? `${baseUrl}/${route}${route.includes('?') ? '&' : '?'}child=1`
-    : baseUrl;
-  win.loadURL(url);
+  // Build the URL through the URL API so query params compose safely even
+  // when the route already carries one (e.g. ``terminal/<id>?cwd=…``).
+  const target = new URL(route ? `${baseUrl}/${route}` : baseUrl);
+  if (connectAccountId) target.searchParams.set('connect', connectAccountId);
+  if (markChild) target.searchParams.set('child', '1');
+  win.loadURL(target.toString());
 
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
     return { action: 'deny' };
   });
 
+  if (markChild) relayChildIds.add(win.webContents.id);
+
   win.on('closed', () => {
     childWindows.delete(win);
+    relayChildIds.delete(win.webContents.id);
     // Closing an OS window destroys its renderer without running React
     // cleanup, so a terminal window can't send its own ``terminal_close``.
     // Relay one through the primary window's gateway socket here so the
@@ -374,11 +397,24 @@ app.whenReady().then(async () => {
   });
 
   // Renderer asks the main process to open a new window for a tab route.
+  // These are *relay* children — they share the primary window's agent
+  // connection (WS tunnelled through the primary).
   ipcMain.handle('window:open', (_event, route: string) => {
     if (typeof route !== 'string' || !route) {
       throw new Error('window:open requires a non-empty route string');
     }
-    createWindow(route);
+    createWindow({ route, markChild: true });
+  });
+
+  // Renderer asks the main process to open a *standalone* agent window: a
+  // full app window bound to a specific account that opens its OWN
+  // connection (its own loopback + WS), independent of the primary. This is
+  // what powers "open another agent in a new window" from the switcher.
+  ipcMain.handle('window:openAgent', (_event, accountId: string) => {
+    if (typeof accountId !== 'string' || !accountId) {
+      throw new Error('window:openAgent requires a non-empty accountId string');
+    }
+    createWindow({ connectAccountId: accountId });
   });
 
   // Renderer asks the main process to close all sub-windows.
@@ -386,9 +422,13 @@ app.whenReady().then(async () => {
     closeAllChildWindows();
   });
 
-  // Multi-window WS relay — the primary window's WS is shared.
+  // Multi-window WS relay — the primary window's WS is shared with its
+  // *relay* children only. Standalone agent windows carry their own
+  // connection and are never part of this fan-out (their ids are not in
+  // ``relayChildIds``), so agent A's frames can't leak into an agent-B
+  // window.
   ipcMain.on('ws:relay-out', (event, payload: string) => {
-    if (event.sender.id === primaryWindowId) return;
+    if (!relayChildIds.has(event.sender.id)) return;
     const primary = primaryWindowId
       ? BrowserWindow.fromId(primaryWindowId)
       : null;
@@ -399,8 +439,9 @@ app.whenReady().then(async () => {
 
   ipcMain.on('ws:relay-broadcast', (event, payload: string) => {
     if (event.sender.id !== primaryWindowId) return;
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (win.webContents.id !== primaryWindowId && !win.isDestroyed()) {
+    for (const id of relayChildIds) {
+      const win = BrowserWindow.fromId(id);
+      if (win && !win.isDestroyed()) {
         win.webContents.send('ws:relay-to-child', payload);
       }
     }

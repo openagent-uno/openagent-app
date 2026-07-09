@@ -51,8 +51,15 @@ contextBridge.exposeInMainWorld('desktop', {
   close: (): Promise<void> => ipcRenderer.invoke('window:close'),
   isMaximized: (): Promise<boolean> => ipcRenderer.invoke('window:isMaximized'),
 
-  // Open a new window for a tab route (desktop-only multi-window).
+  // Open a new window for a tab route (desktop-only multi-window). The new
+  // window is a *relay child* — it shares this window's agent connection.
   openWindow: (route: string): Promise<void> => ipcRenderer.invoke('window:open', route),
+
+  // Open a *standalone* agent window bound to ``accountId`` — a full app
+  // window with its OWN connection (own loopback + WS), independent of this
+  // one. Powers "open another agent in a new window" from the switcher.
+  openAgentWindow: (accountId: string): Promise<void> =>
+    ipcRenderer.invoke('window:openAgent', accountId),
 
   // Close all sub-windows (called on agent switch or main window close).
   closeAllChildren: (): Promise<void> => ipcRenderer.invoke('window:closeAllChildren'),
