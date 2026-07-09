@@ -44,6 +44,12 @@ const targets = [
 ];
 for (const t of targets) bundle(t);
 
+// Copy the tray icon into dist/ so it ships inside the asar at runtime.
+const trayIconSrc = path.resolve(__dirname, '..', 'buildResources', 'icon.png');
+const trayIconDst = path.join(dist, 'icon.png');
+fs.copyFileSync(trayIconSrc, trayIconDst);
+console.log(`[bundle] copied tray icon: ${trayIconSrc} → ${trayIconDst}`);
+
 // Guard: fail loudly if either ESM-only dep wasn't actually inlined in any target.
 const offenders = [/require\(["']@noble\/ed25519["']\)/, /require\(["']cbor2["']\)/];
 for (const t of targets) {

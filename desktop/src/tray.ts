@@ -6,6 +6,7 @@
  */
 
 import { app, BrowserWindow, Menu, MenuItemConstructorOptions, nativeImage, NativeImage, Tray } from 'electron';
+import * as fs from 'fs';
 import * as path from 'path';
 import {
   getPrimaryWindow,
@@ -21,57 +22,55 @@ let tray: Tray | null = null;
 /** Cached agent list shared between tray and dock. */
 let recentAgentList: string[] = [];
 
-// ── Icon generation ──
+// ── Icon ──
 
 /**
- * Generate a simple 22×22 tray icon as a NativeImage.
- * Draws a filled circle with an "OA"-like motif so the tray icon is
- * recognisable even without a dedicated icon asset.
+ * Resolve the tray icon path across dev and production environments.
+ *
+ * In dev, the icon lives in ``desktop/buildResources/icon.png`` relative
+ * to the source root. In production, electron-builder ships the icon
+ * alongside the compiled JS in the asar (copied by the bundle script).
+ */
+function resolveTrayIconPath(): string {
+  // Production: icon copied into dist/ by the bundle script.
+  const prodPath = path.join(__dirname, 'icon.png');
+  try {
+    if (fs.existsSync(prodPath)) return prodPath;
+  } catch { /* fall through */ }
+
+  // Dev: icon in the buildResources directory.
+  return path.join(__dirname, '..', 'buildResources', 'icon.png');
+}
+
+/**
+ * Load the OpenAgent logo as a tray icon.
+ *
+ * Resizes the full app icon to tray dimensions and, on macOS, marks it
+ * as a template image so it adapts to light/dark menu bar automatically.
  */
 function generateTrayIcon(): NativeImage {
-  const size = 22;
-  const scale = 2; // Retina-friendly
-  const canvasSize = size * scale;
+  const iconPath = resolveTrayIconPath();
+  let img = nativeImage.createFromPath(iconPath);
 
-  // Create an empty BGRA buffer.
-  const buffer = Buffer.alloc(canvasSize * canvasSize * 4, 0);
-
-  const cx = canvasSize / 2;
-  const cy = canvasSize / 2;
-  const radius = (canvasSize / 2) - 2;
-  const innerRadius = radius * 0.55;
-
-  for (let y = 0; y < canvasSize; y++) {
-    for (let x = 0; x < canvasSize; x++) {
-      const dx = x - cx;
-      const dy = y - cy;
-      const dist = Math.sqrt(dx * dx + dy * dy);
-      const idx = (y * canvasSize + x) * 4;
-
-      // Outer filled circle (#7C3AED — purple, matching OA brand).
-      if (dist <= radius) {
-        buffer[idx] = 0xED;     // B
-        buffer[idx + 1] = 0x3A;  // G
-        buffer[idx + 2] = 0x7C;  // R
-        buffer[idx + 3] = 255;   // A
-
-        // Inner cutout (transparent) to make a ring / "O" shape.
-        if (dist <= innerRadius) {
-          buffer[idx] = 0;
-          buffer[idx + 1] = 0;
-          buffer[idx + 2] = 0;
-          buffer[idx + 3] = 0;
-        }
-      }
-    }
+  // If the icon couldn't be loaded, fall back to a minimal empty image
+  // so the tray still appears (just blank) rather than crashing.
+  if (img.isEmpty()) {
+    console.error(`[tray] Failed to load icon from ${iconPath}`);
+    return nativeImage.createEmpty();
   }
 
-  const img = nativeImage.createFromBuffer(buffer, {
-    width: canvasSize,
-    height: canvasSize,
-  });
-  // Downscale to the requested size (Electron handles HiDPI).
-  return img.resize({ width: size, height: size });
+  // Tray icons: macOS menu bar is 22×22 pt (44×44 px @2x),
+  // Windows notification area is 16×16, Linux is 22×22.
+  const size = process.platform === 'win32' ? 16 : 22;
+  img = img.resize({ width: size, height: size });
+
+  // macOS template images: the alpha channel defines the shape and the
+  // system renders it in the correct colour for light/dark mode.
+  if (process.platform === 'darwin') {
+    img.setTemplateImage(true);
+  }
+
+  return img;
 }
 
 // ── Tray menu builder ──
