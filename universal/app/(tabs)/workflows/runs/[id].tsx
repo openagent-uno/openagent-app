@@ -55,7 +55,7 @@ export default function WorkflowRunsScreen() {
           runs (it calls setBaseUrl right before populating ``config``), and
           the content fetches on mount. */}
       {connConfig && id ? (
-        <RunHistoryContent workflowId={id} />
+        <RunHistoryContent workflowId={id} parentName={name ?? undefined} />
       ) : (
         <View style={styles.statusPane}>
           <ActivityIndicator size="small" color={colors.textMuted} />

@@ -14,7 +14,6 @@ import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from '
 import Feather from '@expo/vector-icons/Feather';
 import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, Image,
-  Alert, TextInput,
 } from 'react-native';
 
 const logoIcon = require('../../assets/openagent-icon.png');
@@ -25,7 +24,6 @@ import { useChat } from '../../stores/chat';
 import { useUI } from '../../stores/ui';
 import { useEvents } from '../../stores/events';
 import { fetchSessions } from '../../services/api';
-import ResponsiveSidebar from '../../components/ResponsiveSidebar';
 import MessageComposer, { type PendingFile, type SlashCommand } from '../../components/MessageComposer';
 import MessageList from '../../components/MessageList';
 import ContextPanel from '../../components/ContextPanel';
@@ -82,11 +80,9 @@ export default function ChatScreen() {
   const setActiveSession = useChat((s) => s.setActiveSession);
   const removeSession = useChat((s) => s.removeSession);
   const confirm = useConfirm();
-  const renameSession = useChat((s) => s.renameSession);
   const addUserMessage = useChat((s) => s.addUserMessage);
   const editUserMessage = useChat((s) => s.editUserMessage);
   const setDraftInput = useChat((s) => s.setDraftInput);
-  const togglePinned = useChat((s) => s.togglePinned);
   const setLlmPin = useChat((s) => s.setLlmPin);
   const setSystemPrompt = useChat((s) => s.setSystemPrompt);
   const hydrateFromServer = useChat((s) => s.hydrateFromServer);
@@ -110,43 +106,24 @@ export default function ChatScreen() {
     },
     [confirm, removeSession],
   );
-  // Sidebar: apply text search, sort pinned-first then by recency
-  // (last message timestamp). Voice no longer has its own session id —
-  // it's integrated into the chat tab now.
-  const [sessionSearch, setSessionSearch] = useState('');
-  // Cap the rendered session switcher; the full sorted list stays reachable
-  // behind a "show all" toggle. Heavy users accumulate hundreds of sessions
-  // (every delegation / cron / workflow run creates one durable session).
-  const SESSION_SWITCHER_MAX = 60;
-  const [showAllSessions, setShowAllSessions] = useState(false);
-  // Memoized so the filter + sort (and, when searching, the full-text scan
-  // over every message of every session) only runs when sessions or the
-  // query actually change — not on every render of this screen.
+  // The app shell sidebar owns the visible session history. Chat keeps this
+  // sorted list only for the command palette / quick switcher.
   const chatSessions = useMemo(() => {
-    const q = sessionSearch.trim().toLowerCase();
     // Sub-agent (delegation) sessions are navigable only from their parent's
     // transcript card — never the sidebar/recent list. The active session view
     // reads from the full ``sessions`` list, so a child opened from a card
     // still renders even though it's filtered out here.
     const visible = sessions.filter((s) => !isHiddenChildSession(s));
-    const filtered = q
-      ? visible.filter((s) => {
-          if (s.title.toLowerCase().includes(q)) return true;
-          return s.messages.some((m) => m.text.toLowerCase().includes(q));
-        })
-      : visible;
-    return [...filtered].sort((a, b) => {
+    return [...visible].sort((a, b) => {
       if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
       const at = a.messages[a.messages.length - 1]?.timestamp ?? 0;
       const bt = b.messages[b.messages.length - 1]?.timestamp ?? 0;
       return bt - at;
     });
-  }, [sessions, sessionSearch]);
+  }, [sessions]);
 
   const [input, setInput] = useState('');
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
-  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
-  const [editTitle, setEditTitle] = useState('');
   const [dragActive, setDragActive] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [llmModels, setLlmModels] = useState<ModelEntry[]>([]);
@@ -330,14 +307,8 @@ export default function ChatScreen() {
   const openChildSession = useCallback((childSessionId: string) => {
     appliedParamRef.current = childSessionId;
     setActiveSession(childSessionId);
-    // Update the URL by EXPLICIT path, not router.setParams: setParams
-    // regenerates the href from the focused navigation state, which — because
-    // the chat screen mounts an inner ResponsiveSidebar (a
-    // NavigationIndependentTree whose screen is named ``__main__``) — comes out
-    // as ``/chat/__main__?session=…``, an unmatched route that 404s on reload /
-    // deep-link. Replacing by the canonical ``/(tabs)/chat`` path keeps the URL
-    // a clean, round-trippable ``/chat?session=…`` while staying on the same
-    // screen (no push, no remount).
+    // Replace by the canonical path so the URL stays a clean, round-trippable
+    // ``/chat?session=…`` while staying on the same screen (no push/remount).
     routerRef.current.replace({ pathname: '/(tabs)/chat', params: { session: childSessionId } });
   }, [setActiveSession]);
 
@@ -1116,171 +1087,6 @@ export default function ChatScreen() {
   const screenSupported = videoSupported
     && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
 
-  // Memoized so the sidebar element keeps a STABLE reference across
-  // keystroke-driven re-renders of this screen — React then bails out of
-  // reconciling the whole session list (up to 60 rows) on every character
-  // typed into the composer. Its inputs (sessions, search, edit state) don't
-  // change while composing, so this recomputes only when the sidebar actually
-  // needs to.
-  const sidebarContent = useMemo(() => (
-    <View style={[styles.sidebarInner, { paddingTop: headerInset + 10 }]}>
-      <View style={styles.sidebarHead}>
-        <Text style={styles.sidebarKicker}>Sessions</Text>
-        <TouchableOpacity
-          onPress={createSession}
-          style={styles.newBtn}
-          accessibilityLabel="New chat"
-          // @ts-ignore
-          {...(Platform.OS === 'web' ? { className: 'oa-hover-lift' } : {})}
-        >
-          <Feather name="plus" size={13} color={colors.text} />
-          <Text style={styles.newBtnText}>New</Text>
-        </TouchableOpacity>
-      </View>
-      <View style={styles.sidebarSearchRow}>
-        <Feather name="search" size={11} color={colors.textMuted} />
-        <TextInput
-          style={styles.sidebarSearchInput}
-          value={sessionSearch}
-          onChangeText={setSessionSearch}
-          placeholder="Search sessions…"
-          placeholderTextColor={colors.textMuted}
-        />
-        {sessionSearch.length > 0 && (
-          <TouchableOpacity onPress={() => setSessionSearch('')}>
-            <Feather name="x" size={11} color={colors.textMuted} />
-          </TouchableOpacity>
-        )}
-      </View>
-      <ScrollView style={styles.sessionList}>
-        {(showAllSessions ? chatSessions : chatSessions.slice(0, SESSION_SWITCHER_MAX)).map((ses) => {
-          const isEditing = editingSessionId === ses.id;
-          return (
-            <View key={ses.id} style={styles.sessionRow}>
-              <TouchableOpacity
-                style={[styles.sessionItem, ses.id === activeSessionId && styles.sessionActive]}
-                onPress={() => { setEditingSessionId(null); setActiveSession(ses.id); }}
-                onLongPress={() => {
-                  if (Platform.OS === 'web') {
-                    setEditingSessionId(ses.id);
-                    setEditTitle(ses.title);
-                  } else {
-                    Alert.alert(
-                      ses.title,
-                      undefined,
-                      [
-                        { text: 'Rename', onPress: () => { setEditingSessionId(ses.id); setEditTitle(ses.title); } },
-                        { text: ses.pinned ? 'Unpin' : 'Pin', onPress: () => togglePinned(ses.id) },
-                        { text: 'Export as Markdown', onPress: () => exportSessionAsMarkdown(ses.id) },
-                        { text: 'Delete', style: 'destructive', onPress: () => confirmAndRemove(ses) },
-                        { text: 'Cancel', style: 'cancel' },
-                      ],
-                    );
-                  }
-                }}
-                activeOpacity={0.7}
-              >
-                {ses.id === activeSessionId && <View style={styles.sessionActiveBar} />}
-                {ses.pinned && (
-                  <Feather
-                    name="bookmark"
-                    size={9}
-                    color={colors.primary}
-                    style={styles.sessionPinGlyph}
-                  />
-                )}
-                {ses.origin && ses.origin !== 'chat' ? (
-                  // Origin chip — distinguishes a delegation / scheduled / workflow
-                  // child session from a normal chat in the flat list.
-                  <Feather
-                    name={ses.origin === 'scheduler' ? 'clock' : 'git-branch'}
-                    size={9}
-                    color={colors.textMuted}
-                    style={{ marginRight: 5 }}
-                    accessibilityLabel={`${ses.origin} session`}
-                  />
-                ) : null}
-                {isEditing ? (
-                  <TextInput
-                    style={styles.sessionEditInput}
-                    value={editTitle}
-                    onChangeText={setEditTitle}
-                    onSubmitEditing={() => {
-                      const t = editTitle.trim();
-                      if (t) renameSession(ses.id, t);
-                      setEditingSessionId(null);
-                    }}
-                    onBlur={() => {
-                      const t = editTitle.trim();
-                      if (t) renameSession(ses.id, t);
-                      setEditingSessionId(null);
-                    }}
-                    autoFocus
-                    selectTextOnFocus
-                  />
-                ) : (
-                  <Text style={[styles.sessionTitle, ses.id === activeSessionId && styles.sessionTitleActive]} numberOfLines={1}>
-                    {ses.title}
-                  </Text>
-                )}
-                {ses.isProcessing ? (
-                  <View style={styles.processingDot} {...(Platform.OS === 'web' ? { className: 'oa-pulse' } : {})} />
-                ) : ses.hasUnread ? (
-                  <View style={styles.unreadDot} />
-                ) : null}
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.sessionPinBtn}
-                onPress={() => togglePinned(ses.id)}
-                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                accessibilityLabel={ses.pinned ? 'Unpin session' : 'Pin session'}
-              >
-                <Feather
-                  name="bookmark"
-                  size={11}
-                  color={ses.pinned ? colors.primary : colors.textMuted}
-                />
-              </TouchableOpacity>
-              {(!ses.origin || ses.origin === 'chat') && (
-                // Overflow menu — Delete lives behind a confirmation dialog.
-                // Offered only on manual chats, never on a sub-agent /
-                // scheduled-run / workflow row (the server rejects those).
-                <PopupMenu
-                  triggerIcon="more-horizontal"
-                  triggerSize={15}
-                  triggerColor={colors.textMuted}
-                  triggerStyle={styles.sessionDeleteBtn}
-                  accessibilityLabel={`Options for ${ses.title}`}
-                  items={[
-                    { label: 'Delete', icon: 'trash-2', destructive: true, onPress: () => confirmAndRemove(ses) },
-                  ]}
-                />
-              )}
-            </View>
-          );
-        })}
-        {!showAllSessions && chatSessions.length > SESSION_SWITCHER_MAX && (
-          <TouchableOpacity
-            style={styles.sessionShowAll}
-            onPress={() => setShowAllSessions(true)}
-            // @ts-ignore — web hover/press affordance
-            {...(Platform.OS === 'web' ? { className: 'oa-side-row oa-press' } : {})}
-          >
-            <Text style={styles.sessionShowAllText}>Show all {chatSessions.length}</Text>
-          </TouchableOpacity>
-        )}
-        {chatSessions.length === 0 && (
-          <Text style={styles.sidebarEmpty}>No sessions yet</Text>
-        )}
-      </ScrollView>
-    </View>
-  ), [
-    headerInset, createSession, sessionSearch, setSessionSearch, showAllSessions,
-    setShowAllSessions, chatSessions, editingSessionId, setEditingSessionId,
-    activeSessionId, setActiveSession, editTitle, setEditTitle, renameSession,
-    togglePinned, exportSessionAsMarkdown, confirmAndRemove,
-  ]);
-
   // Slash-command catalogue offered by the composer. ``action`` fires
   // a local handler; commands without ``action`` insert their template
   // into the input so the user can finish typing arguments.
@@ -1377,7 +1183,7 @@ export default function ChatScreen() {
   }), [chatSessions, setActiveSession]);
 
   return (
-    <ResponsiveSidebar sidebar={sidebarContent}>
+    <>
       <View style={[styles.chatArea, { paddingTop: headerInset }]}>
         {dragActive && (
           <View style={styles.dropOverlay} pointerEvents="none">
@@ -1639,7 +1445,7 @@ export default function ChatScreen() {
           <View style={styles.emptyState}>
             <BrandLogo size={96} />
             <Text style={styles.emptyTitle}>Standing by</Text>
-            <Text style={styles.emptySub}>Select a session on the left, or open a new one.</Text>
+            <Text style={styles.emptySub}>Select a session from the sidebar, or open a new one.</Text>
             <TouchableOpacity style={styles.emptyBtn} onPress={createSession}>
               <Feather name="plus" size={13} color={colors.text} />
               <Text style={styles.emptyBtnText}>New chat</Text>
@@ -1652,108 +1458,15 @@ export default function ChatScreen() {
         onClose={() => setPaletteOpen(false)}
         entries={paletteEntries}
       />
-    </ResponsiveSidebar>
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  // Sidebar
-  sidebarInner: { flex: 1, padding: 10, gap: 2 },
-  sidebarHead: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 6, paddingTop: 4, paddingBottom: 6, marginBottom: 2,
-  },
-  sidebarKicker: {
-    fontSize: 10, fontWeight: '600', color: colors.textMuted,
-    textTransform: 'uppercase', letterSpacing: 1,
-  },
-  newBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 4,
-    paddingHorizontal: 7, paddingVertical: 3,
-    borderRadius: radius.sm,
-    borderWidth: 1, borderColor: colors.border,
-    backgroundColor: colors.surface,
-  },
-  newBtnText: {
-    fontSize: 10, fontWeight: '600', color: colors.textSecondary,
-    textTransform: 'uppercase', letterSpacing: 0.8,
-  },
-  sessionList: { flex: 1 },
-  sessionRow: {
-    flexDirection: 'row', alignItems: 'center',
-    marginVertical: 1, marginHorizontal: 2,
-  },
-  sessionItem: {
-    flex: 1,
-    position: 'relative',
-    paddingVertical: 7, paddingHorizontal: 10,
-    borderRadius: radius.sm,
-    flexDirection: 'row', alignItems: 'center',
-    minWidth: 0,
-  },
-  sessionActive: { backgroundColor: colors.hover },
-  sessionActiveBar: {
-    position: 'absolute', left: 0, top: 8, bottom: 8, width: 2,
-    backgroundColor: colors.primary, borderRadius: 1,
-  },
-  sessionTitle: { color: colors.textSecondary, flex: 1, fontSize: 12.5, fontWeight: '400' },
-  sessionTitleActive: { color: colors.text, fontWeight: '500' },
-  sessionDeleteBtn: {
-    padding: 6, marginLeft: 0,
-    width: 24, height: 24,
-    alignItems: 'center', justifyContent: 'center',
-  },
   headerMenuBtn: {
     width: 34, height: 34,
     alignItems: 'center', justifyContent: 'center',
     borderRadius: radius.md,
-  },
-  sessionPinBtn: {
-    padding: 6, marginLeft: 4,
-    width: 24, height: 24,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  sessionPinGlyph: {
-    position: 'absolute', left: 4, top: 9,
-  },
-  sidebarSearchRow: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 8, paddingVertical: 5,
-    borderRadius: radius.sm,
-    backgroundColor: colors.surface,
-    borderWidth: 1, borderColor: colors.borderLight,
-    marginHorizontal: 2, marginBottom: 6,
-  },
-  sidebarSearchInput: {
-    flex: 1, color: colors.text, fontSize: 11.5,
-    paddingVertical: 0,
-    // @ts-ignore — web outline cleanup
-    ...(Platform.OS === 'web' ? { outline: 'none', border: 'none' } : {}),
-  },
-  sessionEditInput: {
-    flex: 1, color: colors.text, fontSize: 12.5,
-    borderBottomWidth: 1, borderBottomColor: colors.primary,
-    paddingVertical: 2,
-  },
-  processingDot: {
-    width: 6, height: 6, borderRadius: 3,
-    backgroundColor: colors.primary, marginLeft: 6,
-  },
-  unreadDot: {
-    width: 6, height: 6, borderRadius: 3,
-    backgroundColor: colors.primary, marginLeft: 6,
-    opacity: 0.65,
-  },
-  sidebarEmpty: {
-    fontSize: 11, color: colors.textMuted, textAlign: 'center',
-    paddingVertical: 20,
-  },
-  sessionShowAll: {
-    paddingVertical: 8, paddingHorizontal: 10, marginHorizontal: 4,
-    alignItems: 'center', borderRadius: radius.sm,
-  },
-  sessionShowAllText: {
-    fontSize: 11, color: colors.textMuted, fontFamily: font.mono,
   },
 
   // Chat area

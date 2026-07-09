@@ -15,16 +15,16 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  Animated, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
+  Platform, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
-import Feather from '@expo/vector-icons/Feather';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import Markdown from '../../../components/Markdown';
 import { HeaderRight, HeaderIconButton, HeaderAction, useHeaderInset } from '../../../components/screenHeader';
+import { MemorySearchBar } from '../../../components/memory/MemorySearch';
 import { useConnection } from '../../../stores/connection';
 import { useVault } from '../../../stores/vault';
 import { setBaseUrl } from '../../../services/api';
-import { colors, font, radius, glassSurface } from '../../../theme';
+import { colors, font, radius } from '../../../theme';
 
 // ── In-file search helpers ──
 
@@ -55,224 +55,6 @@ function findMatches(
   }
   return results;
 }
-
-// ── Search bar (web-native, DOM-aware) ──
-
-interface SearchBarProps {
-  visible: boolean;
-  query: string;
-  onChangeQuery: (q: string) => void;
-  matchCount: number;
-  currentIdx: number;
-  onPrev: () => void;
-  onNext: () => void;
-  regexMode: boolean;
-  onToggleRegex: () => void;
-  onClose: () => void;
-  regexError: boolean;
-}
-
-function SearchBar({
-  visible, query, onChangeQuery,
-  matchCount, currentIdx,
-  onPrev, onNext,
-  regexMode, onToggleRegex, onClose,
-  regexError,
-}: SearchBarProps) {
-  const slideAnim = useRef(new Animated.Value(visible ? 1 : 0)).current;
-  const inputRef = useRef<TextInput>(null);
-
-  useEffect(() => {
-    Animated.timing(slideAnim, {
-      toValue: visible ? 1 : 0,
-      duration: 160,
-      useNativeDriver: true,
-    }).start();
-    if (visible) {
-      // Focus the input on the next frame after the animation starts.
-      requestAnimationFrame(() => inputRef.current?.focus());
-    }
-  }, [visible, slideAnim]);
-
-  if (!visible) return null;
-
-  const translateY = slideAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [-48, 0],
-  });
-
-  return (
-    <Animated.View
-      style={[
-        searchBarStyles.container,
-        { transform: [{ translateY }], opacity: slideAnim },
-      ]}
-    >
-      <Feather name="search" size={14} color={colors.textMuted} style={{ marginLeft: 8 }} />
-      <TextInput
-        ref={inputRef}
-        value={query}
-        onChangeText={onChangeQuery}
-        placeholder="Find in file…"
-        placeholderTextColor={colors.textMuted}
-        style={searchBarStyles.input}
-        autoCapitalize="none"
-        autoCorrect={false}
-        spellCheck={false}
-        returnKeyType="search"
-        // Keyboard navigation is handled by the parent's keydown listener
-      />
-      {query.length > 0 && (
-        <View style={searchBarStyles.matchInfo}>
-          {regexError ? (
-            <Text style={searchBarStyles.regexError}>Invalid regex</Text>
-          ) : (
-            <Text style={searchBarStyles.matchCount}>
-              {matchCount > 0 ? `${currentIdx + 1}/${matchCount}` : '0/0'}
-            </Text>
-          )}
-        </View>
-      )}
-      <Pressable
-        onPress={onPrev}
-        disabled={matchCount === 0}
-        hitSlop={6}
-        style={({ pressed }) => [
-          searchBarStyles.arrowBtn,
-          pressed && { backgroundColor: colors.hover },
-        ]}
-        accessibilityLabel="Previous match"
-      >
-        <Feather name="chevron-up" size={14} color={matchCount > 0 ? colors.text : colors.textMuted} />
-      </Pressable>
-      <Pressable
-        onPress={onNext}
-        disabled={matchCount === 0}
-        hitSlop={6}
-        style={({ pressed }) => [
-          searchBarStyles.arrowBtn,
-          pressed && { backgroundColor: colors.hover },
-        ]}
-        accessibilityLabel="Next match"
-      >
-        <Feather name="chevron-down" size={14} color={matchCount > 0 ? colors.text : colors.textMuted} />
-      </Pressable>
-      <Pressable
-        onPress={onToggleRegex}
-        hitSlop={6}
-        style={({ pressed }) => [
-          searchBarStyles.regexBtn,
-          regexMode && searchBarStyles.regexBtnActive,
-          pressed && { backgroundColor: colors.hover },
-        ]}
-        accessibilityLabel="Toggle regex"
-      >
-        <Text style={[
-          searchBarStyles.regexLabel,
-          regexMode && searchBarStyles.regexLabelActive,
-        ]}>
-          .*
-        </Text>
-      </Pressable>
-      <Pressable
-        onPress={onClose}
-        hitSlop={6}
-        style={({ pressed }) => [
-          searchBarStyles.closeBtn,
-          pressed && { backgroundColor: colors.hover },
-        ]}
-        accessibilityLabel="Close search"
-      >
-        <Feather name="x" size={14} color={colors.textMuted} />
-      </Pressable>
-    </Animated.View>
-  );
-}
-
-const searchBarStyles = StyleSheet.create({
-  container: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 4,
-    paddingVertical: 3,
-    marginHorizontal: 10,
-    marginTop: 2,
-    marginBottom: 2,
-    borderRadius: radius.md,
-    backgroundColor: glassSurface.backgroundColor,
-    borderWidth: 1,
-    borderColor: colors.border,
-    ...(Platform.OS === 'web'
-      ? ({
-          backdropFilter: glassSurface.webFilter,
-          WebkitBackdropFilter: glassSurface.webFilter,
-        } as any)
-      : {}),
-  },
-  input: {
-    flex: 1,
-    height: 28,
-    paddingHorizontal: 8,
-    fontSize: 13,
-    fontFamily: font.sans,
-    color: colors.text,
-    backgroundColor: 'transparent',
-    outline: 'none' as any,
-    border: 'none' as any,
-  },
-  matchInfo: {
-    paddingHorizontal: 6,
-    minWidth: 48,
-    alignItems: 'center',
-  },
-  matchCount: {
-    fontSize: 11,
-    fontFamily: font.mono,
-    color: colors.textMuted,
-  },
-  regexError: {
-    fontSize: 11,
-    fontFamily: font.mono,
-    color: colors.error,
-    fontWeight: '600',
-  },
-  arrowBtn: {
-    width: 24,
-    height: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radius.xs,
-  },
-  regexBtn: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: radius.xs,
-    borderWidth: 1,
-    borderColor: 'transparent',
-  },
-  regexBtnActive: {
-    borderColor: colors.primary,
-    backgroundColor: colors.primaryLight,
-  },
-  regexLabel: {
-    fontSize: 11,
-    fontFamily: font.mono,
-    fontWeight: '700',
-    color: colors.textMuted,
-  },
-  regexLabelActive: {
-    color: colors.primary,
-  },
-  closeBtn: {
-    width: 24,
-    height: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radius.xs,
-    marginRight: 2,
-  },
-});
 
 export default function MemoryNoteScreen() {
   const navigation = useNavigation();
@@ -517,10 +299,10 @@ export default function MemoryNoteScreen() {
       null,
     );
 
-    const textNodes: Text[] = [];
+    const textNodes: CharacterData[] = [];
     let node: Node | null;
     while ((node = walker.nextNode())) {
-      textNodes.push(node as Text);
+      textNodes.push(node as CharacterData);
     }
 
     let matchIdx = 0;
@@ -626,21 +408,28 @@ export default function MemoryNoteScreen() {
       )}
 
       {/* In-file search bar */}
-      <SearchBar
+      <MemorySearchBar
         visible={searchVisible}
         query={searchQuery}
+        placeholder="Find in file..."
         onChangeQuery={(q) => {
           setSearchQuery(q);
           setSearchCurrentIdx(0);
         }}
-        matchCount={searchMatches.length}
-        currentIdx={searchCurrentIdx}
+        countLabel={
+          searchQuery.length > 0
+            ? searchMatches.length > 0
+              ? `${searchCurrentIdx + 1}/${searchMatches.length}`
+              : '0/0'
+            : undefined
+        }
         onPrev={() => navigateMatch(-1)}
         onNext={() => navigateMatch(1)}
+        prevNextDisabled={searchMatches.length === 0}
         regexMode={searchRegexMode}
         onToggleRegex={() => setSearchRegexMode((v) => !v)}
         onClose={closeSearch}
-        regexError={searchRegexError}
+        errorLabel={searchRegexError ? 'Invalid regex' : undefined}
       />
 
       {rawMode ? (

@@ -3,10 +3,9 @@
  * ``RunHistoryContent``.
  *
  * Fetches a task's recent firings from
- * ``GET /api/scheduled-tasks/{id}/runs`` and renders them as a list of
- * expandable cards. A task firing is a single agent run (no block
- * graph), so each card expands to the agent's ``output`` preview and/or
- * the ``error`` that aborted it — not a per-block trace.
+ * ``GET /api/scheduled-tasks/{id}/runs`` and renders them as a centered
+ * list of navigable run rows. A firing's transcript/output now lives in
+ * the single scheduled-run screen, so rows never expand inline.
  *
  * Chrome-less so it drops straight into the run-history *screen*
  * (``app/(tabs)/tasks/runs/[id].tsx``) under that screen's
@@ -15,8 +14,10 @@
 
 import Feather from '@expo/vector-icons/Feather';
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'expo-router';
 import {
   ActivityIndicator,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -25,6 +26,8 @@ import {
 } from 'react-native';
 import { colors, font, radius } from '../theme';
 import { getScheduledTaskRuns } from '../services/api';
+import { openDetached } from '../services/windows';
+import { runRoutePath } from '../../common/types';
 import type { TaskRun, TaskRunStatus } from '../../common/types';
 
 // Shares the workflow run palette for the statuses they have in common.
@@ -34,11 +37,17 @@ const STATUS_COLOR: Record<TaskRunStatus, string> = {
   failed: '#C94A43',
 };
 
-export function TaskRunHistoryContent({ taskId }: { taskId: string }) {
+export function TaskRunHistoryContent({
+  taskId,
+  parentName,
+}: {
+  taskId: string;
+  parentName?: string;
+}) {
+  const router = useRouter();
   const [runs, setRuns] = useState<TaskRun[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -71,13 +80,13 @@ export function TaskRunHistoryContent({ taskId }: { taskId: string }) {
 
   return (
     <View style={styles.content}>
-      {summary ? (
-        <Text style={styles.summary}>
-          {summary.total} recent run{summary.total === 1 ? '' : 's'} ·{' '}
-          {summary.ok} ok · {summary.failed} failed
-        </Text>
-      ) : null}
-      <ScrollView style={styles.scroll}>
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.listContent}>
+        {summary ? (
+          <Text style={styles.summary}>
+            {summary.total} recent run{summary.total === 1 ? '' : 's'} ·{' '}
+            {summary.ok} ok · {summary.failed} failed
+          </Text>
+        ) : null}
         {loading ? (
           <View style={styles.loadingPane}>
             <ActivityIndicator size="small" color={colors.textMuted} />
@@ -94,10 +103,15 @@ export function TaskRunHistoryContent({ taskId }: { taskId: string }) {
             <RunCard
               key={run.id}
               run={run}
-              expanded={expandedId === run.id}
-              onToggle={() =>
-                setExpandedId(expandedId === run.id ? null : run.id)
-              }
+              onOpen={() => {
+                const path = runRoutePath({
+                  kind: 'task',
+                  parentId: taskId,
+                  runId: run.id,
+                  name: parentName,
+                });
+                if (path) openDetached(router, path);
+              }}
             />
           ))
         )}
@@ -108,12 +122,10 @@ export function TaskRunHistoryContent({ taskId }: { taskId: string }) {
 
 function RunCard({
   run,
-  expanded,
-  onToggle,
+  onOpen,
 }: {
   run: TaskRun;
-  expanded: boolean;
-  onToggle: () => void;
+  onOpen: () => void;
 }) {
   const colorBand = STATUS_COLOR[run.status] || colors.textMuted;
   const duration =
@@ -122,12 +134,19 @@ function RunCard({
       : run.status === 'running'
       ? '…'
       : '—';
-  const hasBody = !!run.output || !!run.error;
   return (
-    <View style={styles.card}>
-      <TouchableOpacity onPress={onToggle} style={styles.cardHeader}>
+    <TouchableOpacity
+      onPress={onOpen}
+      activeOpacity={0.85}
+      style={styles.card}
+      accessibilityRole="button"
+      accessibilityLabel={`Open scheduled run ${run.started_at_iso || run.id}`}
+      // @ts-ignore web hover
+      {...(Platform.OS === 'web' ? { className: 'oa-card-hover' } : {})}
+    >
+      <View style={styles.cardHeader}>
         <View style={[styles.statusDot, { backgroundColor: colorBand }]} />
-        <View style={{ flex: 1 }}>
+        <View style={styles.cardText}>
           <Text style={styles.cardTitle}>
             {run.started_at_iso || run.id.slice(0, 8)}
           </Text>
@@ -135,26 +154,14 @@ function RunCard({
             {run.status} · {duration} · {run.trigger}
           </Text>
         </View>
-        {hasBody ? (
-          <Feather
-            name={expanded ? 'chevron-up' : 'chevron-down'}
-            size={14}
-            color={colors.textMuted}
-          />
-        ) : null}
-      </TouchableOpacity>
+        <Feather name="chevron-right" size={15} color={colors.textMuted} />
+      </View>
       {run.error ? (
-        <Text style={styles.cardError} numberOfLines={expanded ? undefined : 2}>
+        <Text style={styles.cardError} numberOfLines={2}>
           {run.error}
         </Text>
       ) : null}
-      {expanded && run.output ? (
-        <View style={styles.bodyWrap}>
-          <Text style={styles.bodyLabel}>output</Text>
-          <Text style={styles.bodyValue}>{run.output}</Text>
-        </View>
-      ) : null}
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -163,12 +170,19 @@ const styles = StyleSheet.create({
   summary: {
     fontSize: 11,
     color: colors.textMuted,
-    paddingHorizontal: 14,
-    paddingTop: 10,
+    marginBottom: 10,
+    fontFamily: font.mono,
   },
   scroll: {
     flex: 1,
-    padding: 10,
+  },
+  listContent: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 40,
+    maxWidth: 760,
+    width: '100%',
+    alignSelf: 'center',
   },
   loadingPane: {
     padding: 30,
@@ -189,11 +203,12 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   card: {
-    marginBottom: 6,
+    marginBottom: 8,
     borderWidth: 1,
     borderColor: colors.borderLight,
     borderRadius: radius.md,
     overflow: 'hidden',
+    backgroundColor: colors.surface,
   },
   cardHeader: {
     flexDirection: 'row',
@@ -201,6 +216,7 @@ const styles = StyleSheet.create({
     padding: 10,
     gap: 10,
   },
+  cardText: { flex: 1, minWidth: 0 },
   statusDot: {
     width: 8,
     height: 8,
@@ -225,25 +241,5 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: colors.error,
     fontFamily: font.mono,
-  },
-  bodyWrap: {
-    borderTopWidth: 1,
-    borderTopColor: colors.borderLight,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    gap: 3,
-  },
-  bodyLabel: {
-    fontSize: 9,
-    fontWeight: '600',
-    color: colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-  },
-  bodyValue: {
-    fontSize: 10,
-    color: colors.textSecondary,
-    fontFamily: font.mono,
-    lineHeight: 14,
   },
 });

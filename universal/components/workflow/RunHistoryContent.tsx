@@ -3,8 +3,9 @@
  *
  * Fetches a workflow's last runs from ``/api/workflows/{id}/runs`` +
  * ``/stats`` (via the workflows store), merges any in-flight live run on
- * top, and renders a summary line plus an expandable per-run trace list
- * (one row per block with status dot, input, output, error).
+ * top, and renders a centered list of navigable run rows. Tapping a row
+ * opens the single workflow-run screen instead of expanding trace output
+ * inline; the run detail screen owns the full transcript/trace surface.
  *
  * Carries no chrome of its own so it drops straight into the run-history
  * *screen* (``app/(tabs)/workflows/runs/[id].tsx``) under that screen's
@@ -16,8 +17,10 @@
 
 import Feather from '@expo/vector-icons/Feather';
 import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'expo-router';
 import {
   ActivityIndicator,
+  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -26,11 +29,12 @@ import {
 } from 'react-native';
 import { colors, font, radius } from '../../theme';
 import { getWorkflowRuns } from '../../services/api';
+import { openDetached } from '../../services/windows';
 import { useWorkflows } from '../../stores/workflows';
+import { runRoutePath } from '../../../common/types';
 import type {
   WorkflowRun,
   WorkflowRunStatus,
-  WorkflowTraceEntry,
 } from '../../../common/types';
 
 const STATUS_COLOR: Record<WorkflowRunStatus, string> = {
@@ -40,14 +44,20 @@ const STATUS_COLOR: Record<WorkflowRunStatus, string> = {
   cancelled: '#55524B',
 };
 
-export function RunHistoryContent({ workflowId }: { workflowId: string }) {
+export function RunHistoryContent({
+  workflowId,
+  parentName,
+}: {
+  workflowId: string;
+  parentName?: string;
+}) {
+  const router = useRouter();
   const stats = useWorkflows((s) => s.stats[workflowId]);
   const liveRun = useWorkflows((s) => s.runs[workflowId]);
   const loadStats = useWorkflows((s) => s.loadStats);
   const [runs, setRuns] = useState<WorkflowRun[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -81,16 +91,16 @@ export function RunHistoryContent({ workflowId }: { workflowId: string }) {
 
   return (
     <View style={styles.content}>
-      {stats ? (
-        <Text style={styles.summary}>
-          {stats.total_runs} run{stats.total_runs === 1 ? '' : 's'} ·{' '}
-          {(stats.success_rate * 100).toFixed(0)}% success
-          {stats.avg_duration_s != null
-            ? ` · avg ${stats.avg_duration_s.toFixed(1)}s`
-            : ''}
-        </Text>
-      ) : null}
-      <ScrollView style={styles.scroll}>
+      <ScrollView style={styles.scroll} contentContainerStyle={styles.listContent}>
+        {stats ? (
+          <Text style={styles.summary}>
+            {stats.total_runs} run{stats.total_runs === 1 ? '' : 's'} ·{' '}
+            {(stats.success_rate * 100).toFixed(0)}% success
+            {stats.avg_duration_s != null
+              ? ` · avg ${stats.avg_duration_s.toFixed(1)}s`
+              : ''}
+          </Text>
+        ) : null}
         {loading ? (
           <View style={styles.loadingPane}>
             <ActivityIndicator size="small" color={colors.textMuted} />
@@ -106,10 +116,15 @@ export function RunHistoryContent({ workflowId }: { workflowId: string }) {
             <RunCard
               key={run.id}
               run={run}
-              expanded={expandedId === run.id}
-              onToggle={() =>
-                setExpandedId(expandedId === run.id ? null : run.id)
-              }
+              onOpen={() => {
+                const path = runRoutePath({
+                  kind: 'workflow',
+                  parentId: workflowId,
+                  runId: run.id,
+                  name: parentName,
+                });
+                if (path) openDetached(router, path);
+              }}
             />
           ))
         )}
@@ -120,12 +135,10 @@ export function RunHistoryContent({ workflowId }: { workflowId: string }) {
 
 function RunCard({
   run,
-  expanded,
-  onToggle,
+  onOpen,
 }: {
   run: WorkflowRun;
-  expanded: boolean;
-  onToggle: () => void;
+  onOpen: () => void;
 }) {
   const colorBand = STATUS_COLOR[run.status] || colors.textMuted;
   const duration =
@@ -134,108 +147,36 @@ function RunCard({
       : run.status === 'running'
       ? '…'
       : '—';
+  const traceCount = run.trace?.length ?? 0;
   return (
-    <View style={styles.card}>
-      <TouchableOpacity onPress={onToggle} style={styles.cardHeader}>
+    <TouchableOpacity
+      onPress={onOpen}
+      activeOpacity={0.85}
+      style={styles.card}
+      accessibilityRole="button"
+      accessibilityLabel={`Open workflow run ${run.started_at_iso || run.id}`}
+      // @ts-ignore web hover
+      {...(Platform.OS === 'web' ? { className: 'oa-card-hover' } : {})}
+    >
+      <View style={styles.cardHeader}>
         <View style={[styles.statusDot, { backgroundColor: colorBand }]} />
-        <View style={{ flex: 1 }}>
+        <View style={styles.cardText}>
           <Text style={styles.cardTitle}>
             {run.started_at_iso || run.id.slice(0, 8)}
           </Text>
           <Text style={styles.cardMeta}>
-            {run.status} · {duration} · {run.trigger}
+            {run.status} · {duration} · {run.trigger} · {traceCount} step{traceCount === 1 ? '' : 's'}
           </Text>
         </View>
-        <Feather
-          name={expanded ? 'chevron-up' : 'chevron-down'}
-          size={14}
-          color={colors.textMuted}
-        />
-      </TouchableOpacity>
+        <Feather name="chevron-right" size={15} color={colors.textMuted} />
+      </View>
       {run.error ? (
-        <Text style={styles.cardError} numberOfLines={expanded ? undefined : 2}>
+        <Text style={styles.cardError} numberOfLines={2}>
           {run.error}
         </Text>
       ) : null}
-      {expanded ? (
-        <View style={styles.traceWrap}>
-          {(run.trace || []).length === 0 ? (
-            <Text style={styles.emptyText}>No trace entries yet.</Text>
-          ) : (
-            (run.trace || []).map((entry, i) => (
-              <TraceRow key={`${entry.node_id}-${i}`} entry={entry} />
-            ))
-          )}
-        </View>
-      ) : null}
-    </View>
+    </TouchableOpacity>
   );
-}
-
-function TraceRow({ entry }: { entry: WorkflowTraceEntry }) {
-  const [showDetails, setShowDetails] = useState(false);
-  const color =
-    entry.status === 'success'
-      ? '#15885E'
-      : entry.status === 'failed'
-      ? '#C94A43'
-      : entry.status === 'running'
-      ? '#CC8020'
-      : colors.textMuted;
-  const duration =
-    entry.finished_at != null && entry.started_at
-      ? (entry.finished_at - entry.started_at).toFixed(2) + 's'
-      : entry.status === 'running'
-      ? '…'
-      : '—';
-  return (
-    <View style={styles.traceRow}>
-      <TouchableOpacity
-        onPress={() => setShowDetails((v) => !v)}
-        style={styles.traceHeader}
-      >
-        <View style={[styles.traceDot, { backgroundColor: color }]} />
-        <Text style={styles.traceNode}>{entry.node_id}</Text>
-        <Text style={styles.traceType}>{entry.type}</Text>
-        <Text style={styles.traceStatus}>{entry.status}</Text>
-        <Text style={styles.traceDuration}>{duration}</Text>
-      </TouchableOpacity>
-      {showDetails && (
-        <View style={styles.traceDetails}>
-          {entry.input != null && (
-            <>
-              <Text style={styles.traceLabel}>input</Text>
-              <Text style={styles.traceValue}>{safeJson(entry.input)}</Text>
-            </>
-          )}
-          {entry.output != null && (
-            <>
-              <Text style={styles.traceLabel}>output</Text>
-              <Text style={styles.traceValue}>{safeJson(entry.output)}</Text>
-            </>
-          )}
-          {entry.error && (
-            <>
-              <Text style={[styles.traceLabel, { color: colors.error }]}>
-                error
-              </Text>
-              <Text style={[styles.traceValue, { color: colors.error }]}>
-                {entry.error}
-              </Text>
-            </>
-          )}
-        </View>
-      )}
-    </View>
-  );
-}
-
-function safeJson(v: unknown): string {
-  try {
-    return JSON.stringify(v, null, 2);
-  } catch {
-    return String(v);
-  }
 }
 
 const styles = StyleSheet.create({
@@ -244,12 +185,19 @@ const styles = StyleSheet.create({
   summary: {
     fontSize: 11,
     color: colors.textMuted,
-    paddingHorizontal: 14,
-    paddingTop: 10,
+    marginBottom: 10,
+    fontFamily: font.mono,
   },
   scroll: {
     flex: 1,
-    padding: 10,
+  },
+  listContent: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 40,
+    maxWidth: 760,
+    width: '100%',
+    alignSelf: 'center',
   },
   loadingPane: {
     padding: 30,
@@ -269,11 +217,12 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
   card: {
-    marginBottom: 6,
+    marginBottom: 8,
     borderWidth: 1,
     borderColor: colors.borderLight,
     borderRadius: radius.md,
     overflow: 'hidden',
+    backgroundColor: colors.surface,
   },
   cardHeader: {
     flexDirection: 'row',
@@ -281,6 +230,7 @@ const styles = StyleSheet.create({
     padding: 10,
     gap: 10,
   },
+  cardText: { flex: 1, minWidth: 0 },
   statusDot: {
     width: 8,
     height: 8,
@@ -305,73 +255,5 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: colors.error,
     fontFamily: font.mono,
-  },
-  traceWrap: {
-    borderTopWidth: 1,
-    borderTopColor: colors.borderLight,
-    padding: 4,
-  },
-  traceRow: {
-    borderRadius: radius.sm,
-  },
-  traceHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 5,
-    paddingHorizontal: 6,
-    gap: 6,
-  },
-  traceDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-  },
-  traceNode: {
-    fontSize: 10,
-    color: colors.text,
-    fontFamily: font.mono,
-    fontWeight: '600',
-    minWidth: 24,
-  },
-  traceType: {
-    fontSize: 10,
-    color: colors.primary,
-    flex: 1,
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-  },
-  traceStatus: {
-    fontSize: 9,
-    color: colors.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-  },
-  traceDuration: {
-    fontSize: 9,
-    color: colors.textMuted,
-    fontFamily: font.mono,
-    marginLeft: 6,
-    minWidth: 30,
-    textAlign: 'right',
-  },
-  traceDetails: {
-    paddingLeft: 20,
-    paddingRight: 8,
-    paddingBottom: 8,
-    gap: 3,
-  },
-  traceLabel: {
-    fontSize: 9,
-    fontWeight: '600',
-    color: colors.textSecondary,
-    textTransform: 'uppercase',
-    letterSpacing: 0.3,
-    marginTop: 4,
-  },
-  traceValue: {
-    fontSize: 10,
-    color: colors.textSecondary,
-    fontFamily: font.mono,
-    lineHeight: 14,
   },
 });

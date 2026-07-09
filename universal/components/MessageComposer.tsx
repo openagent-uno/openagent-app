@@ -11,7 +11,7 @@
  * native RN falls back to a ``<TextInput multiline>``.
  */
 
-import { useCallback, useEffect, useState, type Ref } from 'react';
+import { useCallback, useEffect, useRef, useState, type Ref } from 'react';
 import Feather from '@expo/vector-icons/Feather';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Platform, Image } from 'react-native';
 import { colors, font, radius } from '../theme';
@@ -115,6 +115,8 @@ export interface MessageComposerProps {
   inputRef?: Ref<any>;
 }
 
+const COMPOSER_INPUT_BASE_HEIGHT = 34;
+
 export default function MessageComposer({
   input,
   onInputChange,
@@ -156,10 +158,36 @@ export default function MessageComposer({
     : [];
   const [slashActive, setSlashActive] = useState(0);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const fieldRef = useRef<any>(null);
+  const baseFieldHeightRef = useRef<number | null>(null);
+  const setFieldRef = useCallback((node: any) => {
+    fieldRef.current = node;
+    if (!inputRef) return;
+    if (typeof inputRef === 'function') {
+      inputRef(node);
+      return;
+    }
+    (inputRef as any).current = node;
+  }, [inputRef]);
+
   useEffect(() => {
     // Keep the highlight in range as the candidate list shrinks/grows.
     if (slashActive >= slashMatches.length) setSlashActive(0);
   }, [slashMatches.length, slashActive]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const el = fieldRef.current as HTMLTextAreaElement | null;
+    if (!el) return;
+    const measuredBase = baseFieldHeightRef.current
+      ?? Math.ceil(el.getBoundingClientRect().height || COMPOSER_INPUT_BASE_HEIGHT);
+    baseFieldHeightRef.current = measuredBase;
+    const maxHeight = measuredBase * 4;
+    el.style.height = `${measuredBase}px`;
+    const nextHeight = Math.min(Math.max(measuredBase, el.scrollHeight), maxHeight);
+    el.style.height = `${nextHeight}px`;
+    el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
+  }, [input]);
   const acceptSlash = useCallback((cmd: SlashCommand) => {
     // A command whose argument is picked from the model list opens the
     // composer's built-in picker instead of dropping the user into a
@@ -275,9 +303,10 @@ export default function MessageComposer({
               key={c.name}
               style={[styles.slashRow, i === slashActive && styles.slashRowActive]}
               // @ts-ignore — web hover transition
-              {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
+              {...(Platform.OS === 'web'
+                ? { className: 'oa-side-row', onMouseEnter: () => setSlashActive(i) } as any
+                : {})}
               onPress={() => acceptSlash(c)}
-              onMouseEnter={() => setSlashActive(i)}
             >
               <Text style={styles.slashName}>/{c.name}</Text>
               {c.description && (
@@ -360,7 +389,7 @@ export default function MessageComposer({
         <View style={styles.inputRow}>
           {Platform.OS === 'web' ? (
             <textarea
-              ref={inputRef as any}
+              ref={setFieldRef as any}
               value={input}
               onChange={(e: any) => onInputChange(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -371,12 +400,15 @@ export default function MessageComposer({
                 paddingLeft: 0, paddingRight: 0, paddingTop: 6, paddingBottom: 6,
                 color: colors.text, fontSize: 14, lineHeight: 1.5,
                 fontFamily: font.sans,
-                maxHeight: 140, resize: 'none', outline: 'none',
+                minHeight: COMPOSER_INPUT_BASE_HEIGHT,
+                maxHeight: COMPOSER_INPUT_BASE_HEIGHT * 4,
+                overflowY: 'hidden',
+                resize: 'none', outline: 'none',
               } as any}
             />
           ) : (
             <TextInput
-              ref={inputRef as any}
+              ref={setFieldRef as any}
               style={styles.textInput}
               value={input} onChangeText={onInputChange}
               placeholder={placeholder} placeholderTextColor={colors.textMuted}
@@ -613,7 +645,8 @@ const styles = StyleSheet.create({
   textInput: {
     flex: 1, color: colors.text, fontSize: 14,
     paddingVertical: 6, paddingHorizontal: 0,
-    maxHeight: 140,
+    minHeight: COMPOSER_INPUT_BASE_HEIGHT,
+    maxHeight: COMPOSER_INPUT_BASE_HEIGHT * 4,
   },
   composerActions: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
