@@ -496,10 +496,7 @@ ipcMain.handle('menu:cycleWindows', () => {
   if (next) focusWindow(next.id);
 });
 
-// Return the keyboard shortcuts documentation map.
-ipcMain.handle('shortcuts:getMap', () => {
-  return getShortcutsMap();
-});
+// Note: shortcuts:getMap is registered inside registerAllShortcuts() in shortcuts.ts.
 
 // Quick actions that need main-process side effects
 ipcMain.handle('menu:quickJump', () => {
