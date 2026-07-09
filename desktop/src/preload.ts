@@ -31,6 +31,9 @@ function makeMenuActionSubscription(
     'menu:cycleWindows',
     'menu:focusWindow',
     'menu:openAgent',
+    'menu:navigate',
+    'menu:quickJump',
+    'menu:quickCreate',
   ] as const;
 
   const handlers = channels.map((channel) => {

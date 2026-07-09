@@ -175,3 +175,26 @@ export function updateWindowRoute(id: number, route: string): void {
   const entry = registry.get(id);
   if (entry) entry.route = route;
 }
+
+// ── Cross-module bridge: window creation ──
+// menu.ts and shortcuts.ts need to create windows but can't import the
+// `createWindow` function from main.ts (circular).  main.ts registers
+// its `createWindow` here once it's ready; consumers call the getter.
+
+type CreateWindowFn = (opts: {
+  route?: string;
+  markChild?: boolean;
+  connectAccountId?: string;
+}) => import('electron').BrowserWindow;
+
+let _createWindow: CreateWindowFn | null = null;
+
+/** Register the createWindow factory from main.ts. */
+export function setCreateWindowFactory(fn: CreateWindowFn): void {
+  _createWindow = fn;
+}
+
+/** Return the registered factory, or null if not yet registered. */
+export function getCreateWindowFactory(): CreateWindowFn | null {
+  return _createWindow;
+}

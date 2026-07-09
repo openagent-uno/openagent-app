@@ -13,6 +13,7 @@ import {
   focusWindow,
   closeWindow,
   getWindowCount,
+  getCreateWindowFactory,
   type WindowInfo,
 } from './window-manager';
 
@@ -110,12 +111,18 @@ export function buildMenu(): Menu {
       {
         label: 'New Window',
         accelerator: 'CmdOrCtrl+N',
-        click: () => sendToPrimary('menu:newWindow'),
+        click: () => {
+          const factory = getCreateWindowFactory();
+          if (factory) { factory({ markChild: true }); rebuildMenu(); }
+        },
       },
       {
         label: 'New Agent Window',
         accelerator: 'CmdOrCtrl+Shift+N',
-        click: () => sendToFocused('menu:newAgentWindow'),
+        click: () => {
+          const factory = getCreateWindowFactory();
+          if (factory) { factory({}); rebuildMenu(); }
+        },
       },
       { type: 'separator' },
       {
@@ -156,9 +163,9 @@ export function buildMenu(): Menu {
     ],
   });
 
-  // ── Go (app navigation) ──
+  // ── Navigate (app navigation) ──
   template.push({
-    label: 'Go',
+    label: 'Navigate',
     submenu: [
       {
         label: 'Memory Vault',
@@ -241,17 +248,32 @@ export function buildMenu(): Menu {
       {
         label: 'Zoom In',
         accelerator: 'CmdOrCtrl+=',
-        click: () => sendToFocused('shortcut:zoomIn'),
+        click: () => {
+          const win = BrowserWindow.getFocusedWindow();
+          if (win && !win.isDestroyed()) {
+            win.webContents.setZoomLevel(win.webContents.getZoomLevel() + 0.5);
+          }
+        },
       },
       {
         label: 'Zoom Out',
         accelerator: 'CmdOrCtrl+-',
-        click: () => sendToFocused('shortcut:zoomOut'),
+        click: () => {
+          const win = BrowserWindow.getFocusedWindow();
+          if (win && !win.isDestroyed()) {
+            win.webContents.setZoomLevel(win.webContents.getZoomLevel() - 0.5);
+          }
+        },
       },
       {
         label: 'Reset Zoom',
         accelerator: 'CmdOrCtrl+0',
-        click: () => sendToFocused('shortcut:zoomReset'),
+        click: () => {
+          const win = BrowserWindow.getFocusedWindow();
+          if (win && !win.isDestroyed()) {
+            win.webContents.setZoomLevel(0);
+          }
+        },
       },
       { type: 'separator' },
       {
@@ -296,7 +318,10 @@ export function buildMenu(): Menu {
       },
       {
         label: 'Open Agent in New Window',
-        click: () => sendToFocused('menu:newAgentWindow'),
+        click: () => {
+          const factory = getCreateWindowFactory();
+          if (factory) { factory({}); rebuildMenu(); }
+        },
       },
       {
         label: 'Active Sessions',

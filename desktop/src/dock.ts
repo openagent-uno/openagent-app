@@ -6,7 +6,7 @@
  */
 
 import { app, BrowserWindow, Menu, MenuItemConstructorOptions } from 'electron';
-import { getPrimaryWindow } from './window-manager';
+import { getPrimaryWindow, getCreateWindowFactory } from './window-manager';
 
 // ── Globals ──
 
@@ -20,19 +20,15 @@ function buildDockMenu(): Menu {
     {
       label: 'New Window',
       click: () => {
-        const primary = getPrimaryWindow();
-        if (primary && !primary.isDestroyed()) {
-          primary.webContents.send('menu:newWindow');
-        }
+        const factory = getCreateWindowFactory();
+        if (factory) factory({ markChild: true });
       },
     },
     {
       label: 'New Agent Window',
       click: () => {
-        const primary = getPrimaryWindow();
-        if (primary && !primary.isDestroyed()) {
-          primary.webContents.send('menu:newAgentWindow');
-        }
+        const factory = getCreateWindowFactory();
+        if (factory) factory({});
       },
     },
     { type: 'separator' },

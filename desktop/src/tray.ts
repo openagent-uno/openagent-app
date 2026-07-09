@@ -13,6 +13,7 @@ import {
   getWindowCount,
   getAllWindows,
   focusWindow,
+  getCreateWindowFactory,
 } from './window-manager';
 
 // ── Globals ──
@@ -132,21 +133,15 @@ function buildTrayMenu(): Menu {
     {
       label: 'New Window',
       click: () => {
-        const focused = BrowserWindow.getFocusedWindow();
-        const target = focused ?? primary;
-        if (target && !target.isDestroyed()) {
-          target.webContents.send('menu:newWindow');
-        }
+        const factory = getCreateWindowFactory();
+        if (factory) factory({ markChild: true });
       },
     },
     {
       label: 'New Agent Window',
       click: () => {
-        const focused = BrowserWindow.getFocusedWindow();
-        const target = focused ?? primary;
-        if (target && !target.isDestroyed()) {
-          target.webContents.send('menu:newAgentWindow');
-        }
+        const factory = getCreateWindowFactory();
+        if (factory) factory({});
       },
     },
     { type: 'separator' },

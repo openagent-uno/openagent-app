@@ -11,6 +11,7 @@ import {
   getAllWindows,
   focusWindow,
   closeWindow,
+  getCreateWindowFactory,
 } from './window-manager';
 
 // ── Types ──
@@ -74,14 +75,16 @@ function buildShortcutDefs(): ShortcutDef[] {
       accelerator: 'CmdOrCtrl+N',
       label: 'New Window',
       action: () => {
-        sendToFocused('menu:newWindow');
+        const factory = getCreateWindowFactory();
+        if (factory) factory({ markChild: true });
       },
     },
     {
       accelerator: 'CmdOrCtrl+Shift+N',
       label: 'New Agent Window',
       action: () => {
-        sendToFocused('menu:newAgentWindow');
+        const factory = getCreateWindowFactory();
+        if (factory) factory({});
       },
     },
     {
@@ -99,7 +102,12 @@ function buildShortcutDefs(): ShortcutDef[] {
       accelerator: 'CmdOrCtrl+Shift+W',
       label: 'Close All Child Windows',
       action: () => {
-        sendToFocused('menu:closeAllChildren');
+        const all = getAllWindows().filter((e) => !e.win.isDestroyed());
+        for (const entry of all) {
+          if (entry.type !== 'primary') {
+            closeWindow(entry.id);
+          }
+        }
       },
     },
     {
@@ -142,21 +150,30 @@ function buildShortcutDefs(): ShortcutDef[] {
       accelerator: 'CmdOrCtrl+=',
       label: 'Zoom In',
       action: () => {
-        sendToFocused('shortcut:zoomIn');
+        const win = focusedWin();
+        if (win && !win.isDestroyed()) {
+          win.webContents.setZoomLevel(win.webContents.getZoomLevel() + 0.5);
+        }
       },
     },
     {
       accelerator: 'CmdOrCtrl+-',
       label: 'Zoom Out',
       action: () => {
-        sendToFocused('shortcut:zoomOut');
+        const win = focusedWin();
+        if (win && !win.isDestroyed()) {
+          win.webContents.setZoomLevel(win.webContents.getZoomLevel() - 0.5);
+        }
       },
     },
     {
       accelerator: 'CmdOrCtrl+0',
       label: 'Reset Zoom',
       action: () => {
-        sendToFocused('shortcut:zoomReset');
+        const win = focusedWin();
+        if (win && !win.isDestroyed()) {
+          win.webContents.setZoomLevel(0);
+        }
       },
     },
 
@@ -165,7 +182,13 @@ function buildShortcutDefs(): ShortcutDef[] {
       accelerator: isMac ? 'Cmd+`' : 'Ctrl+`',
       label: 'Cycle Through Windows',
       action: () => {
-        sendToFocused('menu:cycleWindows');
+        const all = getAllWindows().filter((e) => !e.win.isDestroyed());
+        if (all.length === 0) return;
+        const focusedId = BrowserWindow.getFocusedWindow()?.webContents.id ?? -1;
+        const currentIndex = all.findIndex((e) => e.id === focusedId);
+        const nextIndex = (currentIndex + 1) % all.length;
+        const next = all[nextIndex];
+        if (next) focusWindow(next.id);
       },
     },
 
