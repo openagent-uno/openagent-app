@@ -390,6 +390,25 @@ export function RunDetailView({
     };
   }, [kind, parentId, runId]);
 
+  // Track deps for auto-scroll: the run status (live vs done), workflow
+  // trace length/statuses, and the task's session message count all drive
+  // content growth that should keep us pinned to the bottom.
+  // MUST be called before ANY early return — hooks must run on every render.
+  const scrollTrackDeps = [
+    wfRun?.status,
+    wfRun?.trace.length,
+    wfRun?.trace.map((e) => e.status).join(','),
+    taskRun?.status,
+    taskRun?.session_id,
+  ];
+  const {
+    scrollRef,
+    onScroll,
+    onContentSizeChange,
+    isPinned,
+    scrollToBottom,
+  } = useAutoScroll({ trackDeps: scrollTrackDeps });
+
   if (loading) {
     return (
       <View style={styles.statusPane}>
@@ -407,23 +426,6 @@ export function RunDetailView({
 
   const run = wfRun ?? taskRun;
   if (!run) return null;
-
-  // Track deps for auto-scroll: the run status (live vs done), workflow
-  // trace length/statuses, and the task's session message count all drive
-  // content growth that should keep us pinned to the bottom.
-  const scrollTrackDeps = [
-    run.status,
-    wfRun?.trace.length,
-    wfRun?.trace.map((e) => e.status).join(','),
-    taskRun?.session_id,
-  ];
-  const {
-    scrollRef,
-    onScroll,
-    onContentSizeChange,
-    isPinned,
-    scrollToBottom,
-  } = useAutoScroll({ trackDeps: scrollTrackDeps });
 
   return (
     <View style={styles.root}>
