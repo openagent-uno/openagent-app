@@ -26,6 +26,7 @@ import {
   focusWindow,
   closeWindow,
   getWindowCount,
+  setCreateWindowFactory,
 } from './window-manager';
 import { registerAllShortcuts, unregisterAllShortcuts, getShortcutsMap } from './shortcuts';
 import { buildMenu, rebuildMenu, setupMenuAutoRebuild } from './menu';
@@ -371,6 +372,9 @@ function closeAllChildWindows(): void {
   }
 }
 
+// Register the factory so menu/shortcuts/tray can create windows.
+setCreateWindowFactory(createWindow);
+
 // ── Auto-updater ──
 
 function setupAutoUpdater(): void {
@@ -427,6 +431,166 @@ ipcMain.handle('window:isMaximized', (event) => {
   return win && !win.isDestroyed() ? win.isMaximized() : false;
 });
 
+// ── IPC: Menu-initiated actions ──
+
+// Renderer requests a new relay-child window at root.
+ipcMain.handle('menu:newWindow', () => {
+  createWindow({ route: '', markChild: true });
+  rebuildMenu();
+});
+
+// Renderer requests a new standalone agent window.
+// The renderer sends a connectAccountId if known, else we prompt.
+ipcMain.handle('menu:newAgentWindow', (_event, accountId?: string) => {
+  if (typeof accountId === 'string' && accountId.length > 0) {
+    createWindow({ connectAccountId: accountId });
+  } else {
+    // Open a standalone window without a pre-bound account.
+    // It will prompt the user to pick an agent on its own.
+    createWindow({});
+  }
+  rebuildMenu();
+});
+
+// Renderer triggers the agent switcher (primary window will show the
+// agent selection UI).
+ipcMain.handle('menu:switchAgent', () => {
+  const primary = getPrimaryFromRegistry();
+  if (primary && !primary.isDestroyed()) {
+    primary.webContents.send('menu:switchAgent');
+  }
+});
+
+// Renderer wants to open the Settings route.
+ipcMain.handle('menu:openSettings', () => {
+  const primary = getPrimaryFromRegistry();
+  if (primary && !primary.isDestroyed()) {
+    primary.webContents.send('menu:openSettings');
+  }
+});
+
+// Renderer wants to open the Keyboard Shortcuts documentation.
+ipcMain.handle('menu:openShortcuts', () => {
+  const primary = getPrimaryFromRegistry();
+  if (primary && !primary.isDestroyed()) {
+    primary.webContents.send('menu:openShortcuts');
+  }
+});
+
+// Focus a specific window by its webContents id.
+ipcMain.handle('menu:focusWindow', (_event, id: number) => {
+  if (typeof id === 'number') {
+    focusWindow(id);
+  }
+});
+
+// Cycle focus through all open windows (next in the list).
+ipcMain.handle('menu:cycleWindows', () => {
+  const all = getAllWindows().filter((e) => !e.win.isDestroyed());
+  if (all.length === 0) return;
+
+  const focusedId = BrowserWindow.getFocusedWindow()?.webContents.id ?? -1;
+  const currentIndex = all.findIndex((e) => e.id === focusedId);
+  const nextIndex = (currentIndex + 1) % all.length;
+  const next = all[nextIndex];
+  if (next) focusWindow(next.id);
+});
+
+// Return the keyboard shortcuts documentation map.
+ipcMain.handle('shortcuts:getMap', () => {
+  return getShortcutsMap();
+});
+
+// Quick actions that need main-process side effects
+ipcMain.handle('menu:quickJump', () => {
+  // The menu already sent the IPC to the focused renderer.
+  return true;
+});
+
+ipcMain.handle('menu:quickCreate', () => {
+  return true;
+});
+
+// ── IPC: Window open/close ──
+
+// Renderer asks the main process to open a new window for a tab route.
+// These are *relay* children — they share the primary window's agent
+// connection (WS tunnelled through the primary).
+ipcMain.handle('window:open', (_event, route: string) => {
+  if (typeof route !== 'string' || !route) {
+    throw new Error('window:open requires a non-empty route string');
+  }
+  const win = createWindow({ route, markChild: true });
+  rebuildMenu();
+  return win.webContents.id;
+});
+
+// Renderer asks the main process to open a *standalone* agent window: a
+// full app window bound to a specific account that opens its OWN
+// connection (its own loopback + WS), independent of the primary. This is
+// what powers "open another agent in a new window" from the switcher.
+ipcMain.handle('window:openAgent', (_event, accountId: string) => {
+  if (typeof accountId !== 'string' || !accountId) {
+    throw new Error('window:openAgent requires a non-empty accountId string');
+  }
+  const win = createWindow({ connectAccountId: accountId });
+  rebuildMenu();
+  return win.webContents.id;
+});
+
+// Renderer asks the main process to close all sub-windows.
+ipcMain.handle('window:closeAllChildren', () => {
+  closeAllChildWindows();
+  rebuildMenu();
+});
+
+// ── IPC: Multi-window WS relay ──
+
+// Primary window's WS is shared with its *relay* children only.
+// Standalone agent windows carry their own connection and are never part
+// of this fan-out (their ids are not in ``relayChildIds``), so agent A's
+// frames can't leak into an agent-B window.
+ipcMain.on('ws:relay-out', (event, payload: string) => {
+  if (!relayChildIds.has(event.sender.id)) return;
+  const primary = primaryWindowId
+    ? BrowserWindow.fromId(primaryWindowId)
+    : null;
+  if (primary && !primary.isDestroyed()) {
+    primary.webContents.send('ws:relay-from-child', payload);
+  }
+});
+
+ipcMain.on('ws:relay-broadcast', (event, payload: string) => {
+  if (event.sender.id !== primaryWindowId) return;
+  for (const id of relayChildIds) {
+    const win = BrowserWindow.fromId(id);
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('ws:relay-to-child', payload);
+    }
+  }
+});
+
+// ── IPC: Network ──
+
+// Decode an invite ticket for the join form so it can auto-fill
+// the bound handle (and show the user what they're joining). On
+// any decode error, return null so the renderer falls back to
+// manual entry — the loopback step will surface a clearer error
+// if the ticket really is malformed.
+ipcMain.handle('network:decode-ticket', (_event, ticket: unknown) => {
+  if (typeof ticket !== 'string' || ticket.length < 8) return null;
+  try {
+    const t = decodeTicket(ticket);
+    return {
+      role: t.role,
+      bindTo: t.bindTo,
+      networkName: t.networkName,
+    };
+  } catch {
+    return null;
+  }
+});
+
 // ── Lifecycle ──
 
 app.whenReady().then(async () => {
@@ -451,163 +615,6 @@ app.whenReady().then(async () => {
 
   // Set up the macOS dock menu.
   setupDockMenu();
-
-  // ── IPC: Menu-initiated actions ──
-
-  // Renderer requests a new relay-child window at root.
-  ipcMain.handle('menu:newWindow', () => {
-    createWindow({ route: '', markChild: true });
-    rebuildMenu();
-  });
-
-  // Renderer requests a new standalone agent window.
-  // The renderer sends a connectAccountId if known, else we prompt.
-  ipcMain.handle('menu:newAgentWindow', (_event, accountId?: string) => {
-    if (typeof accountId === 'string' && accountId.length > 0) {
-      createWindow({ connectAccountId: accountId });
-    } else {
-      // Open a standalone window without a pre-bound account.
-      // It will prompt the user to pick an agent on its own.
-      createWindow({});
-    }
-    rebuildMenu();
-  });
-
-  // Renderer triggers the agent switcher (primary window will show the
-  // agent selection UI).
-  ipcMain.handle('menu:switchAgent', () => {
-    const primary = getPrimaryFromRegistry();
-    if (primary && !primary.isDestroyed()) {
-      primary.webContents.send('menu:switchAgent');
-    }
-  });
-
-  // Renderer wants to open the Settings route.
-  ipcMain.handle('menu:openSettings', () => {
-    const primary = getPrimaryFromRegistry();
-    if (primary && !primary.isDestroyed()) {
-      primary.webContents.send('menu:openSettings');
-    }
-  });
-
-  // Renderer wants to open the Keyboard Shortcuts documentation.
-  ipcMain.handle('menu:openShortcuts', () => {
-    const primary = getPrimaryFromRegistry();
-    if (primary && !primary.isDestroyed()) {
-      primary.webContents.send('menu:openShortcuts');
-    }
-  });
-
-  // Focus a specific window by its webContents id.
-  ipcMain.handle('menu:focusWindow', (_event, id: number) => {
-    if (typeof id === 'number') {
-      focusWindow(id);
-    }
-  });
-
-  // Cycle focus through all open windows (next in the list).
-  ipcMain.handle('menu:cycleWindows', () => {
-    const all = getAllWindows().filter((e) => !e.win.isDestroyed());
-    if (all.length === 0) return;
-
-    const focusedId = BrowserWindow.getFocusedWindow()?.webContents.id ?? -1;
-    const currentIndex = all.findIndex((e) => e.id === focusedId);
-    const nextIndex = (currentIndex + 1) % all.length;
-    const next = all[nextIndex];
-    if (next) focusWindow(next.id);
-  });
-
-  // Return the keyboard shortcuts documentation map.
-  ipcMain.handle('shortcuts:getMap', () => {
-    return getShortcutsMap();
-  });
-
-  // Quick actions that need main-process side effects
-  ipcMain.handle('menu:quickJump', () => {
-    // The menu already sent the IPC to the focused renderer.
-    return true;
-  });
-
-  ipcMain.handle('menu:quickCreate', () => {
-    return true;
-  });
-
-  // ── IPC: Existing handlers ──
-
-  // Renderer asks the main process to open a new window for a tab route.
-  // These are *relay* children — they share the primary window's agent
-  // connection (WS tunnelled through the primary).
-  ipcMain.handle('window:open', (_event, route: string) => {
-    if (typeof route !== 'string' || !route) {
-      throw new Error('window:open requires a non-empty route string');
-    }
-    const win = createWindow({ route, markChild: true });
-    rebuildMenu();
-    return win.webContents.id;
-  });
-
-  // Renderer asks the main process to open a *standalone* agent window: a
-  // full app window bound to a specific account that opens its OWN
-  // connection (its own loopback + WS), independent of the primary. This is
-  // what powers "open another agent in a new window" from the switcher.
-  ipcMain.handle('window:openAgent', (_event, accountId: string) => {
-    if (typeof accountId !== 'string' || !accountId) {
-      throw new Error('window:openAgent requires a non-empty accountId string');
-    }
-    const win = createWindow({ connectAccountId: accountId });
-    rebuildMenu();
-    return win.webContents.id;
-  });
-
-  // Renderer asks the main process to close all sub-windows.
-  ipcMain.handle('window:closeAllChildren', () => {
-    closeAllChildWindows();
-    rebuildMenu();
-  });
-
-  // Multi-window WS relay — the primary window's WS is shared with its
-  // *relay* children only. Standalone agent windows carry their own
-  // connection and are never part of this fan-out (their ids are not in
-  // ``relayChildIds``), so agent A's frames can't leak into an agent-B
-  // window.
-  ipcMain.on('ws:relay-out', (event, payload: string) => {
-    if (!relayChildIds.has(event.sender.id)) return;
-    const primary = primaryWindowId
-      ? BrowserWindow.fromId(primaryWindowId)
-      : null;
-    if (primary && !primary.isDestroyed()) {
-      primary.webContents.send('ws:relay-from-child', payload);
-    }
-  });
-
-  ipcMain.on('ws:relay-broadcast', (event, payload: string) => {
-    if (event.sender.id !== primaryWindowId) return;
-    for (const id of relayChildIds) {
-      const win = BrowserWindow.fromId(id);
-      if (win && !win.isDestroyed()) {
-        win.webContents.send('ws:relay-to-child', payload);
-      }
-    }
-  });
-
-  // Decode an invite ticket for the join form so it can auto-fill
-  // the bound handle (and show the user what they're joining). On
-  // any decode error, return null so the renderer falls back to
-  // manual entry — the loopback step will surface a clearer error
-  // if the ticket really is malformed.
-  ipcMain.handle('network:decode-ticket', (_event, ticket: unknown) => {
-    if (typeof ticket !== 'string' || ticket.length < 8) return null;
-    try {
-      const t = decodeTicket(ticket);
-      return {
-        role: t.role,
-        bindTo: t.bindTo,
-        networkName: t.networkName,
-      };
-    } catch {
-      return null;
-    }
-  });
 
   // In production, start a local HTTP server for the web build
   // (Expo Router needs proper URL routing that file:// can't do)
