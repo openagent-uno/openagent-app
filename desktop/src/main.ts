@@ -292,6 +292,7 @@ function createWindow(opts: CreateWindowOptions = {}): BrowserWindow {
       nodeIntegration: false,
     },
   });
+  const webContentsId = win.webContents.id;
 
   const baseUrl = isDev ? 'http://localhost:8081' : `http://127.0.0.1:${staticPort}`;
   // Build the URL through the URL API so query params compose safely even
@@ -306,7 +307,7 @@ function createWindow(opts: CreateWindowOptions = {}): BrowserWindow {
     return { action: 'deny' };
   });
 
-  if (markChild) relayChildIds.add(win.webContents.id);
+  if (markChild) relayChildIds.add(webContentsId);
 
   // ── Register with the central window manager ──
   const windowType = connectAccountId
@@ -323,9 +324,9 @@ function createWindow(opts: CreateWindowOptions = {}): BrowserWindow {
 
   win.on('closed', () => {
     childWindows.delete(win);
-    relayChildIds.delete(win.webContents.id);
+    relayChildIds.delete(webContentsId);
     // Also unregister from the central registry.
-    unregisterWindow(win.webContents.id);
+    unregisterWindow(webContentsId);
 
     // Rebuild the menu so the Window list updates.
     rebuildMenu();
@@ -337,7 +338,7 @@ function createWindow(opts: CreateWindowOptions = {}): BrowserWindow {
     const terminalId = terminalIdFromRoute(route);
     if (terminalId && primaryWindowId) {
       const primary = BrowserWindow.fromId(primaryWindowId);
-      if (primary && !primary.isDestroyed() && primary.webContents.id !== win.webContents.id) {
+      if (primary && !primary.isDestroyed() && primary.webContents.id !== webContentsId) {
         primary.webContents.send(
           'ws:relay-from-child',
           JSON.stringify({ type: 'terminal_close', terminal_id: terminalId }),
@@ -358,7 +359,7 @@ function createWindow(opts: CreateWindowOptions = {}): BrowserWindow {
   }
 
   if (!primaryWindowId) {
-    primaryWindowId = win.webContents.id;
+    primaryWindowId = webContentsId;
   }
 
   return win;
