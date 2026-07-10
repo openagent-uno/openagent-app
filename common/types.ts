@@ -135,7 +135,7 @@ export type ServerMessage =
   // Frames reuse the normal stream wire types (text_final/status/delta/etc.)
   // so clients can rebuild the not-yet-persisted tail without inventing a
   // parallel transcript shape.
-  | { type: 'live_state'; session_id: string; active: boolean; frames: any[]; updated_at?: number }
+  | { type: 'live_state'; session_id: string; active: boolean; frames: any[]; started_at?: number; updated_at?: number }
   | { type: 'status'; text: string; session_id: string }
   // ── Reasoning indicator (transient, session-scoped) ──
   // ``active=true`` while the agent is thinking with no visible output yet;

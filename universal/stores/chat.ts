@@ -155,6 +155,60 @@ function sameLiveStart(a: ChatMessage | undefined, b: ChatMessage | undefined): 
     && (a.author?.handle ?? '') === (b.author?.handle ?? '');
 }
 
+function liveStartFromFrames(frames: ServerMessage[]): {
+  text: string;
+  author?: ChatMessage['author'];
+} | null {
+  for (const frame of frames) {
+    if (!frame || typeof frame !== 'object') continue;
+    if (frame.type !== 'text_final' && frame.type !== 'seed') continue;
+    const text = typeof frame.text === 'string' ? frame.text.trim() : '';
+    if (!text) continue;
+    return {
+      text,
+      author: frame.type === 'seed' ? frame.author : undefined,
+    };
+  }
+  return null;
+}
+
+function liveSnapshotAlreadyCompletedLocally(
+  session: ChatSession,
+  frames: ServerMessage[],
+): boolean {
+  const start = liveStartFromFrames(frames);
+  if (!start) return false;
+  for (let i = session.messages.length - 1; i >= 0; i--) {
+    const msg = session.messages[i];
+    if (
+      msg.role !== 'user'
+      || msg.text.trim() !== start.text
+      || (msg.author?.kind ?? '') !== (start.author?.kind ?? '')
+      || (msg.author?.handle ?? '') !== (start.author?.handle ?? '')
+    ) {
+      continue;
+    }
+    const suffix = session.messages.slice(i + 1);
+    return suffix.some((m) =>
+      m.role === 'assistant' && !m.streaming && m.text.trim().length > 0,
+    );
+  }
+  return false;
+}
+
+function clearLiveFlags(session: ChatSession, contextReport?: SessionContext): ChatSession {
+  return {
+    ...session,
+    messages: session.messages.map((m) =>
+      m.role === 'assistant' && m.streaming ? { ...m, streaming: false } : m,
+    ),
+    isProcessing: false,
+    isReasoning: false,
+    statusText: undefined,
+    contextUsage: contextReport || session.contextUsage,
+  };
+}
+
 function appendOrPatchTool(messages: ChatMessage[], toolInfo: ToolInfo): ChatMessage[] {
   const phase = toolPhase(toolInfo);
   const msgs = [...messages];
@@ -711,8 +765,10 @@ export const useChat = create<ChatState>((set, get) => ({
         frame?.type === 'context_report' && !!frame.report,
       );
     const contextReport = contextFrame?.report;
+    let shouldReconcile = false;
     set((s) => {
       const known = s.sessions.some((ses) => ses.id === sessionId);
+      if (!known && !active) return {};
       const baseSessions = known
         ? s.sessions
         : capHiddenStubs([
@@ -728,6 +784,10 @@ export const useChat = create<ChatState>((set, get) => ({
       return {
         sessions: baseSessions.map((ses) => {
           if (ses.id !== sessionId) return ses;
+          if (!active || liveSnapshotAlreadyCompletedLocally(ses, frames)) {
+            shouldReconcile = true;
+            return clearLiveFlags(ses, contextReport);
+          }
           const liveMessages = live.messages;
           let messages = ses.messages;
           if (liveMessages.length > 0) {
@@ -754,6 +814,10 @@ export const useChat = create<ChatState>((set, get) => ({
         }),
       };
     });
+    if (shouldReconcile) {
+      get().reconcileSession(sessionId);
+      get().refreshContext(sessionId);
+    }
   },
 
   handleServerMessage: (msg) => set((s) => {
