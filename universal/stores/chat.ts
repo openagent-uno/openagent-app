@@ -508,17 +508,25 @@ export const useChat = create<ChatState>((set, get) => ({
     if (!entries || entries.length === 0) return;
     const existing = get().sessions;
     const existingIds = new Set(existing.map((s) => s.id));
+    const existingById = new Map(existing.map((s) => [s.id, s]));
     // Metadata (parent/origin link, title, recency) keyed by id, so an
     // event-driven re-hydrate can refresh links on sessions already in the
     // store — used to attach a child to its parent once the server announces
     // it — WITHOUT clobbering live messages / isProcessing / draftInput.
     const metaById = new Map<string, Partial<ChatSession>>();
+    const liveById = new Map<string, boolean>();
+    const settleIds = new Set<string>();
     const imported: ChatSession[] = [];
     for (const e of entries) {
       const sid = e.session_id;
       if (!sid) continue;
+      if (typeof e._live === 'boolean') liveById.set(sid, e._live);
       const meta = sessionMetaFromEntry(e);
       if (existingIds.has(sid)) {
+        const prev = existingById.get(sid);
+        if (e._live === false && (prev?.isProcessing || prev?.isReasoning)) {
+          settleIds.add(sid);
+        }
         metaById.set(sid, {
           ...meta,
           // Carry the server title so a lazy-created sub-agent stub gets its
@@ -533,7 +541,7 @@ export const useChat = create<ChatState>((set, get) => ({
         id: sid,
         title: e.title || 'New Chat',
         messages: [],
-        isProcessing: false,
+        isProcessing: !!e._live,
         lastActiveAt: e.last_active_at ?? e.created_at ?? undefined,
         ...meta,
       });
@@ -552,13 +560,26 @@ export const useChat = create<ChatState>((set, get) => ({
           const { title: serverTitle, ...rest } = meta;
           const titlePatch = serverTitle && (se.title === 'Sub-agent' || se.title === 'New Chat')
             ? { title: serverTitle } : {};
-          return { ...se, ...rest, ...titlePatch };
+          const serverLive = liveById.get(se.id);
+          const settledPatch = serverLive === false ? {
+            isProcessing: false,
+            isReasoning: false,
+            statusText: undefined,
+            messages: se.messages.map((m) =>
+              m.role === 'assistant' && m.streaming ? { ...m, streaming: false } : m,
+            ),
+          } : {};
+          return { ...se, ...rest, ...titlePatch, ...settledPatch };
         }),
         ...imported,
       ],
       sessionsHydrated: true,
       activeSessionId: autoSelectId,
     }));
+    settleIds.forEach((sid) => {
+      get().reconcileSession(sid);
+      get().refreshContext(sid);
+    });
     // Fetch run history for the auto-selected session so the chat screen
     // shows prior messages immediately — but ONLY when it's a freshly
     // imported, message-less session. On a metadata-only re-hydrate (e.g.

@@ -1022,6 +1022,8 @@ export interface SessionEntry {
   parent_session_id?: string | null;
   origin?: string | null;
   kind?: string | null;
+  /** True while the gateway still has live stream work for this session. */
+  _live?: boolean | null;
 }
 
 export interface SessionListResponse {
