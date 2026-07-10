@@ -196,6 +196,14 @@ function liveSnapshotAlreadyCompletedLocally(
   return false;
 }
 
+function liveSnapshotHasReplayContent(frames: ServerMessage[]): boolean {
+  return frames.some((frame) => {
+    if (!frame || typeof frame !== 'object') return false;
+    if (frame.type === 'context_report' || frame.type === 'reasoning') return false;
+    return !!frame.type;
+  });
+}
+
 function clearLiveFlags(session: ChatSession, contextReport?: SessionContext): ChatSession {
   return {
     ...session,
@@ -795,7 +803,11 @@ export const useChat = create<ChatState>((set, get) => ({
       return {
         sessions: baseSessions.map((ses) => {
           if (ses.id !== sessionId) return ses;
-          if (!active || liveSnapshotAlreadyCompletedLocally(ses, frames)) {
+          if (
+            !active
+            || !liveSnapshotHasReplayContent(frames)
+            || liveSnapshotAlreadyCompletedLocally(ses, frames)
+          ) {
             shouldReconcile = true;
             return clearLiveFlags(ses, contextReport);
           }
