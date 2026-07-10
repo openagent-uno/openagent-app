@@ -209,6 +209,17 @@ function clearLiveFlags(session: ChatSession, contextReport?: SessionContext): C
   };
 }
 
+function hasOpenLocalTurn(session: ChatSession): boolean {
+  if (session.isProcessing) return true;
+  if (session.messages.some((m) => m.role === 'assistant' && m.streaming)) return true;
+  for (let i = session.messages.length - 1; i >= 0; i--) {
+    const msg = session.messages[i];
+    if (msg.role === 'assistant' && msg.text.trim()) return false;
+    if (msg.role === 'user') return true;
+  }
+  return false;
+}
+
 function appendOrPatchTool(messages: ChatMessage[], toolInfo: ToolInfo): ChatMessage[] {
   const phase = toolPhase(toolInfo);
   const msgs = [...messages];
@@ -923,7 +934,11 @@ export const useChat = create<ChatState>((set, get) => ({
       // frame updates it.
       return {
         sessions: s.sessions.map((ses) =>
-          ses.id === msg.session_id ? { ...ses, isReasoning: msg.active } : ses,
+          ses.id !== msg.session_id
+            ? ses
+            : msg.active && !hasOpenLocalTurn(ses)
+              ? clearLiveFlags(ses)
+              : { ...ses, isReasoning: msg.active },
         ),
       };
     }
