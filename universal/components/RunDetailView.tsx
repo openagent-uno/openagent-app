@@ -16,7 +16,7 @@
 
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter } from 'expo-router';
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -34,10 +34,12 @@ import {
 import { runRoutePath, type SessionContext } from '../../common/types';
 import { openDetached } from '../services/windows';
 import { useChat } from '../stores/chat';
+import { useConnection } from '../stores/connection';
 import { useAutoScroll } from '../hooks/useAutoScroll';
 import Markdown from './Markdown';
 import MessageList from './MessageList';
 import ContextPanel from './ContextPanel';
+import MessageComposer from './MessageComposer';
 import type {
   BlockType,
   ChatMessage,
@@ -62,6 +64,14 @@ import type {
 const EMPTY_RETRY_MAX = 4;      // ~6s of retries for a just-finished flush race
 const LIVE_POLL_MAX = 150;      // ~5min ceiling so a stuck run can't poll forever
 const POLL_MS = 2000;
+
+function sameChatStart(a: ChatMessage | undefined, b: ChatMessage | undefined): boolean {
+  if (!a || !b) return false;
+  return a.role === b.role
+    && a.text === b.text
+    && (a.author?.kind ?? '') === (b.author?.kind ?? '')
+    && (a.author?.handle ?? '') === (b.author?.handle ?? '');
+}
 
 export function SessionTranscript({ sessionId, live }: {
   sessionId: string;
@@ -131,7 +141,14 @@ export function SessionTranscript({ sessionId, live }: {
   // Prefer the live streamed copy whenever it has content; otherwise fall back
   // to the polled DB transcript. A live run with no deltas yet shows the
   // streaming indicator rather than a stale "no transcript".
-  const display = hasLive ? liveMessages : messages;
+  const liveAlreadyIncludesHistory = hasLive
+    && !!messages?.length
+    && sameChatStart(liveMessages?.[0], messages[0]);
+  const display = hasLive
+    ? (messages?.length && !liveAlreadyIncludesHistory
+      ? [...messages, ...(liveMessages ?? [])]
+      : liveMessages)
+    : messages;
   // The run-status poll (``live``) drives the streaming indicator — a detached
   // child's broadcast stub never flips the store's ``isProcessing``, and
   // keeping that false is what lets ``reconcileSession`` snap to the canonical
@@ -243,6 +260,10 @@ function nodeMeta(type: string): { icon: IconName; label: string } {
   return NODE_META[type as BlockType] ?? { icon: 'box', label: type };
 }
 
+function eventSessionId(delivery: EventDelivery | null): string | undefined {
+  return delivery ? `event:${delivery.event_id}:${delivery.id}` : undefined;
+}
+
 // Only nodes whose input/output is genuinely worth reading are expandable;
 // everything else (triggers, waits, flow control, set-variable) collapses to
 // a single clean summary row. A node that errored is always expandable so the
@@ -342,7 +363,11 @@ export function RunDetailView({
     task: 'tasks',
     event: 'events',
   };
-  const openParent = () => openDetached(router, `${PARENT_SECTION[kind]}/${parentId}`);
+  const openParent = () => {
+    const id = kind === 'event' ? (delivery?.event_id || parentId) : parentId;
+    if (!id) return;
+    openDetached(router, `${PARENT_SECTION[kind]}/${id}`);
+  };
 
   // Re-poll the run summary while the firing is still in flight, so the header
   // status pill settles, the duration finalises, and — for workflows — steps
@@ -435,6 +460,11 @@ export function RunDetailView({
     scrollToBottom,
   } = useAutoScroll({ trackDeps: scrollTrackDeps });
 
+  const fallbackEventSessionId = eventSessionId(delivery);
+  const hasLiveEventSession = useChat((s) =>
+    !!fallbackEventSessionId && s.sessions.some((x) => x.id === fallbackEventSessionId),
+  );
+
   if (loading) {
     return (
       <View style={styles.statusPane}>
@@ -461,7 +491,10 @@ export function RunDetailView({
     event: { icon: 'zap', label: 'Event' },
   };
   // The session that owns this run — drives the floating context panel.
-  const ownerSessionId = taskRun?.session_id ?? delivery?.session_id;
+  const ownerSessionId =
+    taskRun?.session_id
+    ?? delivery?.session_id
+    ?? (hasLiveEventSession ? fallbackEventSessionId : undefined);
   const ownerLive = (taskRun ?? delivery)
     ? run.status === 'running' || run.status === 'received'
     : false;
@@ -471,7 +504,7 @@ export function RunDetailView({
       <ScrollView
         ref={scrollRef}
         style={styles.scroll}
-        contentContainerStyle={styles.column}
+        contentContainerStyle={styles.messagesContent}
         onScroll={onScroll}
         onContentSizeChange={onContentSizeChange}
         scrollEventThrottle={100}
@@ -480,32 +513,34 @@ export function RunDetailView({
         // @ts-ignore — RN Web prop, no-op on native
         persistentScrollbar
       >
-        <RunHeader
-          name={name}
-          kindIcon={KIND_META[kind].icon}
-          kindLabel={KIND_META[kind].label}
-          status={run.status}
-          trigger={triggerText}
-          startedIso={(run as TaskRun).started_at_iso}
-          startedAt={run.started_at}
-          finishedAt={run.finished_at ?? null}
-          onPress={openParent}
-        />
-        {wfRun ? (
-          <WorkflowBody run={wfRun} />
-        ) : taskRun ? (
-          <TaskBody run={taskRun} />
-        ) : delivery ? (
-          <DeliveryBody delivery={delivery} onOpenRun={(rid, k) =>
-            router.push(`/runs/${encodeURIComponent(rid)}?kind=${k}` as any)} />
-        ) : null}
+        <View style={styles.messagesInner}>
+          <RunHeader
+            name={name}
+            kindIcon={KIND_META[kind].icon}
+            kindLabel={KIND_META[kind].label}
+            status={run.status}
+            trigger={triggerText}
+            startedIso={(run as TaskRun).started_at_iso}
+            startedAt={run.started_at}
+            finishedAt={run.finished_at ?? null}
+            onPress={openParent}
+          />
+          {wfRun ? (
+            <WorkflowBody run={wfRun} />
+          ) : taskRun ? (
+            <TaskBody run={taskRun} />
+          ) : delivery ? (
+            <DeliveryBody delivery={delivery} sessionId={ownerSessionId} onOpenRun={(rid, k) =>
+              router.push(`/runs/${encodeURIComponent(rid)}?kind=${k}` as any)} />
+          ) : null}
+        </View>
       </ScrollView>
       {/* Jump-to-bottom pill: shown when the user has scrolled away from the
           bottom. Same position and style as the chat screen's pill so it
           reads as a consistent affordance across all screens. */}
       {!isPinned && (
         <TouchableOpacity
-          style={styles.jumpToBottom}
+          style={[styles.jumpToBottom, ownerSessionId && styles.jumpToBottomWithComposer]}
           onPress={() => scrollToBottom(true)}
           accessibilityLabel="Jump to bottom"
           // @ts-ignore
@@ -520,7 +555,44 @@ export function RunDetailView({
       {ownerSessionId ? (
         <RunContextPanel sessionId={ownerSessionId} live={ownerLive} />
       ) : null}
+      {ownerSessionId ? (
+        <RunSessionComposer sessionId={ownerSessionId} live={ownerLive} />
+      ) : null}
     </View>
+  );
+}
+
+function RunSessionComposer({ sessionId, live }: { sessionId: string; live?: boolean }) {
+  const ws = useConnection((s) => s.ws);
+  const session = useChat((s) => s.sessions.find((x) => x.id === sessionId));
+  const addUserMessage = useChat((s) => s.addUserMessage);
+  const [input, setInput] = useState('');
+
+  const handleSend = useCallback(() => {
+    const text = input.trim();
+    if (!text || !ws) return;
+    addUserMessage(sessionId, text);
+    ws.sendMessage(text, sessionId, {
+      llmPin: session?.llmPin,
+      systemPrompt: session?.systemPrompt,
+    });
+    setInput('');
+  }, [addUserMessage, input, session?.llmPin, session?.systemPrompt, sessionId, ws]);
+
+  const handleStop = useCallback(() => {
+    if (!ws) return;
+    ws.sendInterrupt(sessionId, 'manual');
+  }, [sessionId, ws]);
+
+  return (
+    <MessageComposer
+      input={input}
+      onInputChange={setInput}
+      onSend={handleSend}
+      processing={!!live || !!session?.isProcessing}
+      onStop={handleStop}
+      placeholder="Message this run..."
+    />
   );
 }
 
@@ -597,9 +669,11 @@ function MetaItem({ icon, text }: { icon: IconName; text: string }) {
 // scheduled run for the other two action kinds.
 function DeliveryBody({
   delivery,
+  sessionId,
   onOpenRun,
 }: {
   delivery: EventDelivery;
+  sessionId?: string | null;
   onOpenRun: (runId: string, kind: 'workflow' | 'task') => void;
 }) {
   const live = delivery.status === 'running' || delivery.status === 'received';
@@ -629,8 +703,8 @@ function DeliveryBody({
         />
       ) : null}
 
-      {delivery.session_id ? (
-        <SessionTranscript sessionId={delivery.session_id} live={live} />
+      {sessionId ? (
+        <SessionTranscript sessionId={sessionId} live={live} />
       ) : !delivery.error && !delivery.workflow_run_id && !delivery.task_run_id ? (
         <EmptyNote text="This delivery produced no output." />
       ) : null}
@@ -1041,7 +1115,7 @@ function formatDuration(
   if (finishedAt != null && startedAt) {
     return (finishedAt - startedAt).toFixed(2) + 's';
   }
-  return status === 'running' ? '…' : '—';
+  return status === 'running' || status === 'received' ? '…' : '—';
 }
 
 function formatWhen(iso: string): string {
@@ -1102,14 +1176,13 @@ const styles = StyleSheet.create({
     shadowRadius: 6,
     elevation: 3,
   },
-  // Editorial single column, matching the Chat transcript's reading width.
-  column: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
-    paddingBottom: 40,
+  jumpToBottomWithComposer: { bottom: 88 },
+  messagesContent: { paddingVertical: 12, paddingBottom: 12 },
+  messagesInner: {
     maxWidth: 760,
     width: '100%',
     alignSelf: 'center',
+    paddingHorizontal: 20,
   },
   statusPane: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 30 },
   errorText: { fontSize: 12, color: colors.error, textAlign: 'center' },

@@ -27,6 +27,7 @@ import {
 import { colors, font, radius } from '../theme';
 import { getScheduledTaskRuns } from '../services/api';
 import { openDetached } from '../services/windows';
+import { useEvents } from '../stores/events';
 import { runRoutePath } from '../../common/types';
 import type { TaskRun, TaskRunStatus } from '../../common/types';
 
@@ -51,20 +52,25 @@ export function TaskRunHistoryContent({
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setError(null);
-    (async () => {
+    let first = true;
+    const load = async () => {
+      if (first) setLoading(true);
+      setError(null);
       try {
         const fetched = await getScheduledTaskRuns(taskId, { limit: 20 });
         if (!cancelled) setRuns(fetched);
       } catch (e: any) {
         if (!cancelled) setError(e?.message ?? String(e));
       } finally {
+        first = false;
         if (!cancelled) setLoading(false);
       }
-    })();
+    };
+    void load();
+    const off = useEvents.getState().subscribe('scheduled_task', () => void load());
     return () => {
       cancelled = true;
+      off();
     };
   }, [taskId]);
 

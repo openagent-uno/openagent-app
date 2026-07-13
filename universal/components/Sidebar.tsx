@@ -498,8 +498,8 @@ function runItem(
 
 function runStatusColor(status: string): string {
   if (status === 'success') return colors.success;
-  if (status === 'failed') return colors.error;
-  if (status === 'running') return colors.warning;
+  if (status === 'failed' || status === 'rejected') return colors.error;
+  if (status === 'running' || status === 'received') return colors.warning;
   return colors.textMuted;
 }
 

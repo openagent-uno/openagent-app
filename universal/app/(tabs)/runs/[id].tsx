@@ -80,7 +80,7 @@ export default function RunDetailScreen() {
     });
   }, [navigation, kind, contextPanelVisible, toggleContextPanel]);
 
-  const ready = connConfig && id && parentId;
+  const ready = connConfig && id && (kind === 'event' || parentId);
 
   return (
     <View style={[styles.screen, { paddingTop: headerInset }]}>
@@ -91,7 +91,7 @@ export default function RunDetailScreen() {
       {ready ? (
         <RunDetailView
           kind={kind === 'workflow' ? 'workflow' : kind === 'event' ? 'event' : 'task'}
-          parentId={parentId}
+          parentId={parentId || ''}
           runId={id}
           name={name}
         />

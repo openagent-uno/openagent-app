@@ -338,10 +338,10 @@ export function subAgentParentId(id: string): string | undefined {
 
 // Child-session origins that never appear as standalone sidebar / history
 // rows: a delegated sub-agent (reachable from its parent's transcript card),
-// a scheduled firing or workflow node (reachable from its run's execution
-// screen). Mirrors the server's ``HIDDEN_CHILD_ORIGINS`` so both ends hide the
-// same set. ``chat`` is the only origin that lists normally.
-const HIDDEN_CHILD_ORIGINS = new Set(['delegation', 'scheduler', 'workflow']);
+// a scheduled firing, workflow node, or event-prompt delivery (reachable from
+// its run/execution screen). Mirrors the server's ``HIDDEN_CHILD_ORIGINS`` so
+// both ends hide the same set. ``chat`` is the only origin that lists normally.
+const HIDDEN_CHILD_ORIGINS = new Set(['delegation', 'scheduler', 'workflow', 'event']);
 
 /** Whether a session should be hidden from the flat sidebar / history list
  *  (a spawned child — by loaded origin metadata or sub-agent id shape). */
@@ -350,15 +350,17 @@ export function isHiddenChildSession(s: { id: string; origin?: string }): boolea
 }
 
 // ── Run-launch tool cards ────────────────────────────────────────────
-// When a chat turn runs a scheduled task or a workflow (the agent calls the
-// scheduler / workflow-manager MCP's run-now tool), the resulting tool message
+// When a chat turn runs a scheduled task, workflow, or event (the agent calls
+// the scheduler / workflow-manager / events-manager MCP), the resulting tool message
 // renders as a navigable card into that run's execution screen — the run
 // analogue of a DelegationCard. The MCP exposes these tools namespaced
-// (``scheduler_run_scheduled_task_now`` / ``workflow_manager_run_workflow``),
-// so we match by suffix to stay robust to the server-name prefix.
-const RUN_LAUNCH_SUFFIXES: { suffix: string; kind: 'task' | 'workflow' }[] = [
+// (``scheduler_run_scheduled_task_now`` / ``workflow_manager_run_workflow`` /
+// ``events_manager_trigger_event``), so we match by suffix to stay robust to
+// the server-name prefix.
+const RUN_LAUNCH_SUFFIXES: { suffix: string; kind: 'task' | 'workflow' | 'event' }[] = [
   { suffix: 'run_scheduled_task_now', kind: 'task' },
   { suffix: 'run_workflow', kind: 'workflow' },
+  { suffix: 'trigger_event', kind: 'event' },
 ];
 
 export interface RunLaunchTarget {
@@ -499,10 +501,12 @@ export function delegationLabel(t?: ToolInfo): string {
   return effectiveTool(t)?.tool_name === 'run_dream_mode' ? 'dream mode' : 'sub-agent';
 }
 
-/** The run a scheduler / workflow CHILD SESSION id points at, parsed from its
- *  shape (``scheduler:{task}:{run}`` / ``workflow:{wf}:{run}:{node}``). The
- *  ``run`` segment equals the task_run / workflow_run id the run screen keys on,
- *  and ``{task}``/``{wf}`` is the parent. Lets a run-launch card deep-link WHILE
+/** The run a scheduler / workflow / event CHILD SESSION id points at, parsed
+ *  from its shape (``scheduler:{task}:{run}`` /
+ *  ``workflow:{wf}:{run}:{node}`` / ``event:{event}:{delivery}``). The
+ *  run segment equals the task_run / workflow_run / delivery id the run screen
+ *  keys on, and ``{task}``/``{wf}``/``{event}`` is the parent. Lets a
+ *  run-launch card deep-link WHILE
  *  the run is still in flight (before its blocking result returns) — either via
  *  the id the server re-streams onto the chip, or via the live child session the
  *  client already sees streaming. Returns undefined for any other id shape
@@ -511,7 +515,10 @@ export function runTargetForChildSession(sid?: string): RunLaunchTarget | undefi
   if (!sid) return undefined;
   const parts = sid.split(':');
   const kind: RunLaunchTarget['kind'] | undefined =
-    parts[0] === 'scheduler' ? 'task' : parts[0] === 'workflow' ? 'workflow' : undefined;
+    parts[0] === 'scheduler' ? 'task'
+      : parts[0] === 'workflow' ? 'workflow'
+        : parts[0] === 'event' ? 'event'
+          : undefined;
   if (!kind || parts.length < 3 || !parts[1] || !parts[2]) return undefined;
   return { kind, parentId: parts[1], runId: parts[2], status: 'running' };
 }
@@ -554,8 +561,13 @@ export function runLaunchTarget(t?: ToolInfo): RunLaunchTarget | undefined {
   // ``scheduler:{task}:{run}`` / ``workflow:{wf}:{run}:{node}`` — which the
   // server re-streams onto the in-flight chip, so the card is clickable
   // mid-run (matching the DelegationCard affordance).
-  const fromSid = runTargetForChildSession(eff.child_session_id);
-  const runId = res?.id || res?.run_id || fromSid?.runId || undefined;
+  const fromSid = runTargetForChildSession(
+    eff.child_session_id || (res?.session_id as string) || undefined,
+  );
+  const runId =
+    match.kind === 'event'
+      ? (res?.delivery_id || res?.id || fromSid?.runId || undefined)
+      : (res?.id || res?.run_id || fromSid?.runId || undefined);
   // Prefer a resolved parent ID (the tool result, or the linked child session
   // id) over the raw ``id_or_name`` argument: a workflow run-now is usually
   // invoked by NAME, but the run screen routes its parent by id — so falling
@@ -563,7 +575,9 @@ export function runLaunchTarget(t?: ToolInfo): RunLaunchTarget | undefined {
   const parentId =
     (match.kind === 'task'
       ? res?.task_id || fromSid?.parentId || args.task_id
-      : res?.workflow_id || fromSid?.parentId || args.id_or_name)
+      : match.kind === 'workflow'
+        ? res?.workflow_id || fromSid?.parentId || args.id_or_name
+        : res?.event_id || fromSid?.parentId || args.id_or_slug)
     || undefined;
   return {
     kind: match.kind,
@@ -859,8 +873,9 @@ export interface ChatSession {
    *  drives the "← parent" breadcrumb and lets the sidebar tag it. */
   parentSessionId?: string;
   /** What spawned this session: 'chat' (a normal conversation) | 'delegation'
-   *  | 'scheduler' | 'workflow'. Renders as an origin chip in the sidebar. */
-  origin?: 'chat' | 'delegation' | 'scheduler' | 'workflow';
+   *  | 'scheduler' | 'workflow' | 'event'. Renders as an origin chip in the
+   *  sidebar / breadcrumb where relevant. */
+  origin?: 'chat' | 'delegation' | 'scheduler' | 'workflow' | 'event';
   /** Fine-grained origin label (the delegated model id, the task id, etc.). */
   originLabel?: string;
   /** Server-reported last-activity epoch (seconds). Preserved through
@@ -1454,8 +1469,8 @@ export interface TaskRun {
 // An Event is an inbound trigger: a name, a webhook ``type`` preset, a
 // user-friendly input schema, and a per-event secret, bound to one of three
 // actions — run a workflow, fire a scheduled task, or start a chat prompt
-// (a durable child session that surfaces in the sidebar history like any
-// other run). Reachable from outside via POST /hooks/{slug} and from inside
+// (a durable child session surfaced from the event delivery's run screen).
+// Reachable from outside via POST /hooks/{slug} and from inside
 // the mesh via POST /api/events/{id}/trigger. The secret is returned in clear
 // exactly once (on create / rotate); reads carry only ``secret_hint``.
 
@@ -1488,6 +1503,12 @@ export interface AgentEvent {
   /** For action_kind='prompt' — may reference {{payload.field}}. */
   prompt_template?: string | null;
   model?: string | null;
+  /** When true, prompt-event deliveries whose payload carries the same value
+   *  at ``session_binding_path`` reuse the same internal OpenAgent event-run
+   *  session instead of creating one per delivery. */
+  session_binding_enabled?: boolean;
+  /** Dot-path into the delivery payload, e.g. ``id`` or ``ticket.id``. */
+  session_binding_path?: string | null;
   rate_limit_per_min: number;
   max_payload_bytes: number;
   last_triggered_at?: number | null;
@@ -1511,6 +1532,8 @@ export interface CreateEventInput {
   description?: string | null;
   input_schema?: EventInputField[];
   model?: string | null;
+  session_binding_enabled?: boolean;
+  session_binding_path?: string | null;
   enabled?: boolean;
 }
 
@@ -1519,6 +1542,7 @@ export type UpdateEventInput = Partial<
     AgentEvent,
     | 'name' | 'description' | 'type' | 'enabled' | 'action_kind'
     | 'action_ref' | 'prompt_template' | 'model' | 'input_schema'
+    | 'session_binding_enabled' | 'session_binding_path'
   >
 >;
 

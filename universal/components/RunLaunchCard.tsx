@@ -18,6 +18,7 @@ import { colors, radius } from '../theme';
 
 const DOT_COLOR: Record<string, string> = {
   running: colors.accent,
+  received: colors.warning,
   success: colors.success,
   failed: colors.error,
   cancelled: colors.textMuted,

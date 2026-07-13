@@ -30,6 +30,7 @@ import type {
 } from '../../../../common/types';
 import { goBack } from '../../../services/windows';
 import { HeaderAction, useHeaderInset } from '../../../components/screenHeader';
+import ThemedSwitch from '../../../components/ThemedSwitch';
 
 const ACTION_KINDS: { key: EventActionKind; label: string; icon: keyof typeof Feather.glyphMap }[] = [
   { key: 'prompt', label: 'Chat prompt', icon: 'message-circle' },
@@ -52,12 +53,16 @@ interface Form {
   action_ref: string | null;
   prompt_template: string;
   model: string | null;
+  session_binding_enabled: boolean;
+  session_binding_path: string;
   input_schema: EventInputField[];
 }
 
 const EMPTY: Form = {
   name: '', type: 'generic', action_kind: 'prompt',
-  action_ref: null, prompt_template: '', model: null, input_schema: [],
+  action_ref: null, prompt_template: '', model: null,
+  session_binding_enabled: false, session_binding_path: 'id',
+  input_schema: [],
 };
 
 export default function EventEditScreen() {
@@ -111,6 +116,8 @@ export default function EventEditScreen() {
             action_ref: ev.action_ref ?? null,
             prompt_template: ev.prompt_template ?? '',
             model: ev.model ?? null,
+            session_binding_enabled: Boolean(ev.session_binding_enabled),
+            session_binding_path: ev.session_binding_path ?? 'id',
             input_schema: ev.input_schema ?? [],
           });
         }
@@ -147,6 +154,9 @@ export default function EventEditScreen() {
     if (form.action_kind === 'prompt' && !form.prompt_template.trim()) {
       setLocalError('A prompt is required for the chat-prompt action.'); return;
     }
+    if (form.session_binding_enabled && !form.session_binding_path.trim()) {
+      setLocalError('Payload binding needs a payload path.'); return;
+    }
     setSaving(true);
     const payload = {
       name,
@@ -155,6 +165,8 @@ export default function EventEditScreen() {
       action_ref: form.action_kind === 'prompt' ? null : form.action_ref,
       prompt_template: form.action_kind === 'prompt' ? form.prompt_template : null,
       model: form.model,
+      session_binding_enabled: form.session_binding_enabled,
+      session_binding_path: form.session_binding_path.trim() || null,
       input_schema: form.input_schema.filter((f) => f.name.trim()),
     };
     if (isNew) {
@@ -297,7 +309,7 @@ export default function EventEditScreen() {
             )}
             <Text style={styles.hint}>
               The delivered payload is available as {'{{payload.…}}'}. It runs as
-              a new session, visible in the sidebar history like any other run.
+              an event run session inside the delivery screen.
             </Text>
           </>
         ) : (
@@ -321,6 +333,43 @@ export default function EventEditScreen() {
             <Text style={styles.hint}>
               The delivered payload is passed as inputs (reachable in blocks /
               the task prompt).
+            </Text>
+          </>
+        )}
+
+        {/* Event run session binding */}
+        <Text style={styles.label}>Event run session</Text>
+        <View style={styles.toggleRow}>
+          <View style={styles.toggleCopy}>
+            <Text style={styles.toggleTitle}>Bind by payload field</Text>
+            <Text style={styles.toggleSubtitle}>
+              Reuse one internal event run session for deliveries with the same
+              payload value. Off creates a fresh run session every time.
+            </Text>
+          </View>
+          <ThemedSwitch
+            value={form.session_binding_enabled}
+            onValueChange={(value) => setForm({
+              ...form,
+              session_binding_enabled: value,
+              session_binding_path: value && !form.session_binding_path.trim()
+                ? 'id'
+                : form.session_binding_path,
+            })}
+          />
+        </View>
+        {form.session_binding_enabled && (
+          <>
+            <TextInput
+              style={[styles.input, { marginTop: 8 }]}
+              value={form.session_binding_path}
+              onChangeText={(v) => setForm({ ...form, session_binding_path: v })}
+              placeholder="payload path, e.g. id or ticket.id"
+              placeholderTextColor={colors.textMuted}
+            />
+            <Text style={styles.hint}>
+              The value at this dot-path is only a lookup key; OpenAgent still
+              uses its own internal session id for the run.
             </Text>
           </>
         )}
@@ -556,6 +605,15 @@ const styles = StyleSheet.create({
   fieldRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
   fieldInput: { flex: 1 },
   removeField: { padding: 6 },
+  toggleRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    gap: 12, paddingHorizontal: 11, paddingVertical: 10,
+    backgroundColor: colors.inputBg, borderRadius: radius.md,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  toggleCopy: { flex: 1, gap: 3 },
+  toggleTitle: { color: colors.text, fontSize: 12, fontWeight: '600' },
+  toggleSubtitle: { color: colors.textMuted, fontSize: 11, lineHeight: 15 },
 
   panel: {
     marginTop: 20, padding: 14, borderRadius: radius.lg,

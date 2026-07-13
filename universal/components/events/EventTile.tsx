@@ -18,7 +18,7 @@ import ThemedSwitch from '../ThemedSwitch';
 const ACTION_LABEL: Record<AgentEvent['action_kind'], string> = {
   workflow: 'runs a workflow',
   scheduled_task: 'fires a scheduled task',
-  prompt: 'starts a chat session',
+  prompt: 'opens an event run session',
 };
 const ACTION_ICON: Record<AgentEvent['action_kind'], keyof typeof Feather.glyphMap> = {
   workflow: 'git-branch',
@@ -94,6 +94,14 @@ export default function EventTile({
               {event.action_kind === 'scheduled_task' ? 'task' : event.action_kind}
             </Text>
           </View>
+          {event.session_binding_enabled ? (
+            <View style={styles.badge}>
+              <Feather name="hash" size={10} color={colors.primary} />
+              <Text style={styles.badgeText} numberOfLines={1}>
+                {event.session_binding_path || 'bound'}
+              </Text>
+            </View>
+          ) : null}
         </View>
 
         <Text style={styles.meta} numberOfLines={1}>

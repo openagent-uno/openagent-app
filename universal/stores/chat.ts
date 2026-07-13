@@ -44,6 +44,7 @@ function childStubFor(id: string): Partial<ChatSession> {
   }
   if (id.startsWith('scheduler:')) return { title: 'Scheduled run', origin: 'scheduler' };
   if (id.startsWith('workflow:')) return { title: 'Workflow run', origin: 'workflow' };
+  if (id.startsWith('event:')) return { title: 'Event delivery', origin: 'event' };
   return { title: 'New Chat' };
 }
 
@@ -693,26 +694,41 @@ export const useChat = create<ChatState>((set, get) => ({
       ? (text.slice(0, 40) || attachments?.[0]?.filename || 'New Chat')
       : undefined;
 
-    set((s) => ({
-      sessions: s.sessions.map((se) =>
-        se.id !== sessionId ? se : {
-          ...se,
-          isProcessing: true,
-          statusText: 'Thinking...',
-          // Stamp recency (epoch seconds) so the sidebar floats this
-          // conversation to the top of its unified feed immediately.
-          lastActiveAt: Math.floor(Date.now() / 1000),
-          messages: [...se.messages, {
-            id: genId(),
-            role: 'user' as const,
-            text,
-            timestamp: Date.now(),
-            attachments: attachments && attachments.length ? attachments : undefined,
-          }],
-          title: newTitle ?? se.title,
-        },
-      ),
-    }));
+    set((s) => {
+      const known = s.sessions.some((se) => se.id === sessionId);
+      const sessions = known
+        ? s.sessions
+        : capHiddenStubs([
+            ...s.sessions,
+            {
+              id: sessionId,
+              messages: [],
+              isProcessing: false,
+              ...childStubFor(sessionId),
+            } as ChatSession,
+          ], s.activeSessionId);
+
+      return {
+        sessions: sessions.map((se) =>
+          se.id !== sessionId ? se : {
+            ...se,
+            isProcessing: true,
+            statusText: 'Thinking...',
+            // Stamp recency (epoch seconds) so the sidebar floats this
+            // conversation to the top of its unified feed immediately.
+            lastActiveAt: Math.floor(Date.now() / 1000),
+            messages: [...se.messages, {
+              id: genId(),
+              role: 'user' as const,
+              text,
+              timestamp: Date.now(),
+              attachments: attachments && attachments.length ? attachments : undefined,
+            }],
+            title: newTitle ?? se.title,
+          },
+        ),
+      };
+    });
 
     // Persist the title to the server so it shows up on reconnect.
     if (newTitle) {
