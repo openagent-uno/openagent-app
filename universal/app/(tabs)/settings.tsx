@@ -33,7 +33,6 @@ type CategoryId =
   | 'voice'
   | 'channels'
   | 'dream'
-  | 'auto_update'
   | 'controls'
   | 'connection'
   | 'models'
@@ -55,8 +54,7 @@ const CATEGORIES: Category[] = [
   { id: 'voice', label: 'Voice', icon: 'mic', description: 'VAD sensitivity for the Voice tab' },
   { id: 'channels', label: 'Channels', icon: 'message-square', description: 'Gateway, Telegram, Discord, WhatsApp' },
   { id: 'dream', label: 'Dream Mode', icon: 'moon', description: 'Nightly vault + log maintenance' },
-  { id: 'auto_update', label: 'Auto-Update', icon: 'refresh-cw', description: 'Release check cadence' },
-  { id: 'controls', label: 'Controls', icon: 'sliders', description: 'Update and restart' },
+  { id: 'controls', label: 'Controls', icon: 'sliders', description: 'Auto-update, update and restart' },
   { id: 'connection', label: 'Connection', icon: 'link', description: 'Network and identity' },
 ];
 
@@ -418,37 +416,6 @@ export default function SettingsScreen() {
     );
   };
 
-  const renderAutoUpdate = () => (
-    <>
-      <Text style={styles.sectionTitle}>Auto-Update</Text>
-      <Card>
-        <View style={styles.toggleRow}>
-          <Text style={styles.toggleLabel}>Enabled</Text>
-          <ThemedSwitch value={autoUpdateEnabled} onValueChange={setAutoUpdateEnabled} />
-        </View>
-        <Text style={styles.label}>Mode</Text>
-        <TabStrip
-          tabs={[
-            { id: 'auto', label: 'Auto' },
-            { id: 'notify', label: 'Notify' },
-            { id: 'manual', label: 'Manual' },
-          ]}
-          active={autoUpdateMode}
-          onChange={(v) => setAutoUpdateMode(v)}
-          fullWidth
-          size="sm"
-        />
-        <Text style={[styles.label, { marginTop: 12 }]}>Check Interval (cron)</Text>
-        <TextInput style={styles.input} value={autoUpdateInterval} onChangeText={setAutoUpdateInterval} placeholder="17 */6 * * *" placeholderTextColor={colors.textMuted} />
-        <SaveBtn
-          label="Save Auto-Update"
-          saved={saved === 'auto_update'}
-          onPress={() => saveSection('auto_update', { enabled: autoUpdateEnabled, mode: autoUpdateMode, check_interval: autoUpdateInterval }, 'auto_update')}
-        />
-      </Card>
-    </>
-  );
-
   const renderAppearance = () => (
     <>
       <Text style={styles.sectionTitle}>Appearance</Text>
@@ -476,6 +443,32 @@ export default function SettingsScreen() {
     <>
       <Text style={styles.sectionTitle}>Controls</Text>
       <Card>
+        <View style={styles.toggleRow}>
+          <Text style={styles.toggleLabel}>Auto-Update</Text>
+          <ThemedSwitch value={autoUpdateEnabled} onValueChange={setAutoUpdateEnabled} />
+        </View>
+        <Text style={styles.label}>Mode</Text>
+        <TabStrip
+          tabs={[
+            { id: 'auto', label: 'Auto' },
+            { id: 'notify', label: 'Notify' },
+            { id: 'manual', label: 'Manual' },
+          ]}
+          active={autoUpdateMode}
+          onChange={(v) => setAutoUpdateMode(v)}
+          fullWidth
+          size="sm"
+        />
+        <Text style={[styles.label, { marginTop: 12 }]}>Check Interval (cron)</Text>
+        <TextInput style={styles.input} value={autoUpdateInterval} onChangeText={setAutoUpdateInterval} placeholder="17 */6 * * *" placeholderTextColor={colors.textMuted} />
+        <SaveBtn
+          label="Save Auto-Update"
+          saved={saved === 'auto_update'}
+          onPress={() => saveSection('auto_update', { enabled: autoUpdateEnabled, mode: autoUpdateMode, check_interval: autoUpdateInterval }, 'auto_update')}
+        />
+      </Card>
+
+      <Card style={{ marginTop: 14 }}>
         <Button
           variant="primary"
           label="Check for Updates"
@@ -563,7 +556,6 @@ export default function SettingsScreen() {
       case 'voice': return renderVoice();
       case 'channels': return renderChannels();
       case 'dream': return renderDream();
-      case 'auto_update': return renderAutoUpdate();
       case 'controls': return renderControls();
       case 'connection': return renderConnection();
       // 'models' / 'costs' render the embedded ModelScreen outside this
