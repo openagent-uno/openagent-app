@@ -28,6 +28,8 @@ import {
 export interface ActivityRun {
   /** Run id. */
   id: string;
+  /** Produced chat session id, when the run owns/reuses one. */
+  sessionId?: string | null;
   /** Parent workflow / task id (for routing to its run screen). */
   parentId: string;
   /** Parent display name (what the row shows). */
@@ -155,6 +157,7 @@ export const useActivity = create<ActivityState>((set, get) => ({
           const dels = await getEventDeliveries(e.id, RUNS_PER_PARENT);
           return dels.map<ActivityRun>((d) => ({
             id: d.id,
+            sessionId: d.session_id ?? null,
             parentId: e.id,
             parentName: e.name,
             status: d.status,

@@ -371,9 +371,12 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
       for (const r of taskRuns) items.push(runItem(r, 't', 'clock', 'tasks', router, activeRunId, onNavigate));
     }
     if (filters.event) {
-      // Event deliveries are the events' "runs"; each opens its delivery detail
-      // (which embeds the produced session / links the workflow-task run).
-      for (const r of eventRuns) items.push(runItem(r, 'e', 'zap', 'events', router, activeRunId, onNavigate));
+      // Bound prompt events can produce multiple deliveries for the same
+      // session. Recent should show that live run once, while the event's
+      // dedicated history keeps every inbound delivery.
+      for (const r of compactBoundEventRuns(eventRuns)) {
+        items.push(runItem(r, 'e', 'zap', 'events', router, activeRunId, onNavigate));
+      }
     }
     items.sort((a, b) => b.ts - a.ts);
     return items.slice(0, FEED_MAX);
@@ -459,6 +462,20 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
 }
 
 // ── helpers ──
+
+function compactBoundEventRuns(runs: ActivityRun[]): ActivityRun[] {
+  const byKey = new Map<string, ActivityRun>();
+  for (const run of runs) {
+    const key = run.sessionId
+      ? `session:${run.parentId}:${run.sessionId}`
+      : `delivery:${run.id}`;
+    const prev = byKey.get(key);
+    if (!prev || toMs(run.startedAt) > toMs(prev.startedAt)) {
+      byKey.set(key, run);
+    }
+  }
+  return [...byKey.values()];
+}
 
 function runItem(
   r: ActivityRun,
