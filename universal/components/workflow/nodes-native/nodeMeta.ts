@@ -57,6 +57,15 @@ export const NODE_META: Record<BlockType, NativeNodeMeta> = {
     targetHandles: [],
     preview: (c) => truncate(c.description || 'AI-invoked via run_workflow()'),
   },
+  'trigger-event': {
+    type: 'trigger-event',
+    icon: 'zap',
+    label: 'Event trigger',
+    category: 'triggers',
+    sourceHandles: ['out'],
+    targetHandles: [],
+    preview: (c) => truncate((c.event as string) || 'Fired by a webhook event'),
+  },
   'ai-prompt': {
     type: 'ai-prompt',
     icon: 'message-square',

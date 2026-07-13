@@ -26,6 +26,7 @@ const DOT_COLOR: Record<string, string> = {
 const KIND_META: Record<RunLaunchTarget['kind'], { icon: keyof typeof Feather.glyphMap; label: string }> = {
   task: { icon: 'clock', label: 'scheduled task' },
   workflow: { icon: 'git-branch', label: 'workflow' },
+  event: { icon: 'zap', label: 'event' },
 };
 
 const RunLaunchCard = memo(function RunLaunchCard({

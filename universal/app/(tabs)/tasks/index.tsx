@@ -21,12 +21,10 @@
 
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter, useNavigation, useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useState } from 'react';
-import {
-  View, Text, ScrollView, StyleSheet,
-  type LayoutChangeEvent,
-} from 'react-native';
+import { useCallback, useEffect, useLayoutEffect } from 'react';
+import { View, Text, StyleSheet } from 'react-native';
 import { colors, radius } from '../../../theme';
+import { TileGridScreen, CONTENT_MAX_WIDTH } from '../../../components/TileGrid';
 import { useConnection } from '../../../stores/connection';
 import { useEvents } from '../../../stores/events';
 import { useTasks } from '../../../stores/tasks';
@@ -38,18 +36,6 @@ import { HeaderAction, useHeaderInset } from '../../../components/screenHeader';
 import TaskTile from '../../../components/tasks/TaskTile';
 import { Skeleton } from '../../../components/Skeleton';
 import type { ScheduledTask } from '../../../../common/types';
-
-const CONTENT_MAX_WIDTH = 1120;
-const TILE_MIN_WIDTH = 300;
-const TILE_MAX_COLS = 4;
-const GRID_GAP = 14;
-
-/** Column count from the container's measured width (see mcps/index.tsx). */
-function columnsForWidth(width: number, gap: number): number {
-  if (width <= 0) return 1;
-  const n = Math.floor((width + gap) / (TILE_MIN_WIDTH + gap));
-  return Math.max(1, Math.min(TILE_MAX_COLS, n));
-}
 
 export default function TasksScreen() {
   const router = useRouter();
@@ -98,18 +84,6 @@ export default function TasksScreen() {
     });
   }, [loadTasks]);
 
-  // Container-measured width drives the column count.
-  const [containerWidth, setContainerWidth] = useState(0);
-  const onContainerLayout = useCallback((e: LayoutChangeEvent) => {
-    const w = e.nativeEvent.layout.width;
-    if (Math.abs(w - containerWidth) > 1) setContainerWidth(w);
-  }, [containerWidth]);
-  // ``bodyInner`` carries 24px horizontal padding on each side.
-  const cols = useMemo(
-    () => columnsForWidth(Math.max(0, containerWidth - 48), GRID_GAP),
-    [containerWidth],
-  );
-
   const handleRemove = async (id: string) => {
     const t = tasks.find((x) => x.id === id);
     if (!t) return;
@@ -145,33 +119,22 @@ export default function TasksScreen() {
           action={{ label: 'New task', icon: 'plus', onPress: handleAdd }}
         />
       ) : (
-        <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
-          <View style={[styles.bodyInner, { paddingTop: headerInset + 20 }]} onLayout={onContainerLayout}>
-            {!loaded ? (
-              <Grid cols={cols}>
-                {Array.from({ length: Math.max(cols * 2, 4) }).map((_, i) => (
-                  <TaskTileSkeleton key={i} />
-                ))}
-              </Grid>
-            ) : (
-              <Grid cols={cols}>
-                {tasks.map((task) => (
-                  <TaskTile
-                    key={task.id}
-                    task={task}
-                    onToggle={(v) => { void toggleTask(task.id, v); }}
-                    onEdit={() => handleEdit(task)}
-                    onHistory={() => openDetached(router, `tasks/runs/${task.id}`)}
-                    onRemove={() => { void handleRemove(task.id); }}
-                    onRun={() => runTask(task.id)}
-                    onStop={() => stopTask(task.id)}
-                  />
-                ))}
-              </Grid>
-            )}
-            <View style={{ height: 40 }} />
-          </View>
-        </ScrollView>
+        <TileGridScreen headerInset={headerInset}>
+          {!loaded
+            ? Array.from({ length: 8 }).map((_, i) => <TaskTileSkeleton key={i} />)
+            : tasks.map((task) => (
+                <TaskTile
+                  key={task.id}
+                  task={task}
+                  onToggle={(v) => { void toggleTask(task.id, v); }}
+                  onEdit={() => handleEdit(task)}
+                  onHistory={() => openDetached(router, `tasks/runs/${task.id}`)}
+                  onRemove={() => { void handleRemove(task.id); }}
+                  onRun={() => runTask(task.id)}
+                  onStop={() => stopTask(task.id)}
+                />
+              ))}
+        </TileGridScreen>
       )}
     </View>
   );
@@ -199,31 +162,6 @@ function TaskTileSkeleton() {
   );
 }
 
-// Row-chunked grid: each row is an independent flexbox of N equal cells, the
-// short last row padded with spacers so columns stay aligned (see mcps Grid).
-function Grid({ cols, children }: { cols: number; children: React.ReactNode }) {
-  const nodes = Array.isArray(children) ? children : [children];
-  const rows: React.ReactNode[][] = [];
-  for (let i = 0; i < nodes.length; i += cols) {
-    rows.push(nodes.slice(i, i + cols));
-  }
-  return (
-    <View style={{ gap: GRID_GAP }}>
-      {rows.map((row, ri) => (
-        <View key={ri} style={[gridStyles.row, { gap: GRID_GAP }]}>
-          {row.map((child, ci) => (
-            <View key={ci} style={gridStyles.cell}>{child}</View>
-          ))}
-          {row.length < cols &&
-            Array.from({ length: cols - row.length }).map((_, pi) => (
-              <View key={`pad-${pi}`} style={gridStyles.cell} />
-            ))}
-        </View>
-      ))}
-    </View>
-  );
-}
-
 const styles = StyleSheet.create({
   root: { flex: 1 },
 
@@ -242,20 +180,6 @@ const styles = StyleSheet.create({
     borderRadius: radius.md,
   },
   errorText: { color: colors.error, fontSize: 12, flex: 1 },
-
-  scroll: { flex: 1 },
-  bodyInner: {
-    maxWidth: CONTENT_MAX_WIDTH,
-    width: '100%',
-    alignSelf: 'center',
-    paddingHorizontal: 24,
-    paddingTop: 20,
-  },
-});
-
-const gridStyles = StyleSheet.create({
-  row: { flexDirection: 'row', alignItems: 'stretch' },
-  cell: { flex: 1, minWidth: 0 },
 });
 
 const skeletonStyles = StyleSheet.create({

@@ -125,7 +125,7 @@ export type ClientMessage =
   | { type: 'terminal_signal'; terminal_id: string; signal: 'INT' | 'TERM' | 'HUP' | 'QUIT' | 'KILL' }
   | { type: 'terminal_close'; terminal_id: string };
 
-export type ResourceKind = 'mcp' | 'scheduled_task' | 'workflow' | 'vault' | 'config' | 'session';
+export type ResourceKind = 'mcp' | 'scheduled_task' | 'workflow' | 'vault' | 'config' | 'session' | 'event';
 export type ResourceAction = 'created' | 'updated' | 'deleted' | 'changed';
 
 export type ServerMessage =
@@ -362,7 +362,7 @@ const RUN_LAUNCH_SUFFIXES: { suffix: string; kind: 'task' | 'workflow' }[] = [
 ];
 
 export interface RunLaunchTarget {
-  kind: 'task' | 'workflow';
+  kind: 'task' | 'workflow' | 'event';
   /** The firing / workflow-run id to open (absent until the tool returns). */
   runId?: string;
   /** Owning task / workflow id, for the run screen's "open parent" link. */
@@ -1449,6 +1449,110 @@ export interface TaskRun {
   session_id?: string | null;
 }
 
+// ── Events (webhook channel) ──
+//
+// An Event is an inbound trigger: a name, a webhook ``type`` preset, a
+// user-friendly input schema, and a per-event secret, bound to one of three
+// actions — run a workflow, fire a scheduled task, or start a chat prompt
+// (a durable child session that surfaces in the sidebar history like any
+// other run). Reachable from outside via POST /hooks/{slug} and from inside
+// the mesh via POST /api/events/{id}/trigger. The secret is returned in clear
+// exactly once (on create / rotate); reads carry only ``secret_hint``.
+
+export type EventActionKind = 'workflow' | 'scheduled_task' | 'prompt';
+export type EventType = 'generic' | 'generic-hmac' | 'github' | 'stripe' | 'slack';
+
+/** One field descriptor in an event's user-friendly input schema. */
+export interface EventInputField {
+  name: string;
+  type?: string;          // 'string' | 'number' | 'boolean' | 'object' | …
+  required?: boolean;
+  description?: string;
+  path?: string;          // dot-path into the payload, e.g. "pusher.name"
+}
+
+export interface AgentEvent {
+  id: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  type: EventType;
+  enabled: boolean;
+  /** Last 4 chars of the secret, for a ``whsec_…abcd`` display. The secret
+   *  itself is only ever returned inline on create / rotate. */
+  secret_hint?: string | null;
+  input_schema: EventInputField[];
+  action_kind: EventActionKind;
+  /** workflow id or scheduled-task id; null for action_kind='prompt'. */
+  action_ref?: string | null;
+  /** For action_kind='prompt' — may reference {{payload.field}}. */
+  prompt_template?: string | null;
+  model?: string | null;
+  rate_limit_per_min: number;
+  max_payload_bytes: number;
+  last_triggered_at?: number | null;
+  created_at: number;
+  updated_at: number;
+  /** The relative hook path (``/hooks/{slug}``). Always present. */
+  webhook_path: string;
+  /** The absolute hook URL when ``channels.webhook.public_url`` is set;
+   *  null when the listener isn't publicly configured yet. */
+  webhook_url?: string | null;
+  /** Returned ONCE, inline, on create + rotate-secret. Never on a read. */
+  secret?: string;
+}
+
+export interface CreateEventInput {
+  name: string;
+  action_kind: EventActionKind;
+  action_ref?: string | null;
+  prompt_template?: string | null;
+  type?: EventType;
+  description?: string | null;
+  input_schema?: EventInputField[];
+  model?: string | null;
+  enabled?: boolean;
+}
+
+export type UpdateEventInput = Partial<
+  Pick<
+    AgentEvent,
+    | 'name' | 'description' | 'type' | 'enabled' | 'action_kind'
+    | 'action_ref' | 'prompt_template' | 'model' | 'input_schema'
+  >
+>;
+
+export type EventDeliveryStatus =
+  | 'received' | 'running' | 'success' | 'failed' | 'rejected';
+
+/** One row in an event's delivery history — the analogue of a workflow run /
+ *  task run. Surfaced in the sidebar Recent feed under the 'event' filter. */
+export interface EventDelivery {
+  id: string;
+  event_id: string;
+  source: string;             // 'webhook' | 'peer' | 'manual' | 'agent'
+  external_id?: string | null;
+  status: EventDeliveryStatus;
+  payload_json: string;
+  started_at: number;
+  finished_at?: number | null;
+  output?: string | null;
+  error?: string | null;
+  /** Exactly one is set, linking the produced unit of work. */
+  session_id?: string | null;
+  workflow_run_id?: string | null;
+  task_run_id?: string | null;
+}
+
+/** A webhook ``type`` preset, from GET /api/event-types. */
+export interface EventTypeSpec {
+  key: EventType;
+  label: string;
+  description: string;
+  signed: boolean;
+  docs?: string | null;
+}
+
 // ── Workflows (n8n-style multi-block pipelines) ──
 
 // A workflow is a DAG of blocks (nodes) connected by edges. The
@@ -1469,6 +1573,7 @@ export type BlockType =
   | 'trigger-manual'
   | 'trigger-schedule'
   | 'trigger-ai'
+  | 'trigger-event'
   | 'mcp-tool'
   | 'ai-prompt'
   | 'if'

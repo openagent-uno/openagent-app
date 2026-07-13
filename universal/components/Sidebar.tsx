@@ -68,6 +68,7 @@ const NAV: NavItem[] = [
   { href: '/mcps', match: 'mcps', label: 'Connectors', icon: 'grid' },
   { href: '/tasks', match: 'tasks', label: 'Scheduled', icon: 'clock' },
   { href: '/workflows', match: 'workflows', label: 'Workflows', icon: 'git-branch' },
+  { href: '/events', match: 'events', label: 'Events', icon: 'zap' },
 ];
 
 // Fixed nav-row geometry so the gliding rail can resolve a row's Y.
@@ -75,11 +76,12 @@ const ROW_H = 38;
 const ROW_GAP = 2;
 const FEED_MAX = 60;
 
-type FilterKey = 'chat' | 'workflow' | 'task';
+type FilterKey = 'chat' | 'workflow' | 'task' | 'event';
 const FILTERS: { key: FilterKey; label: string; icon: IconName }[] = [
   { key: 'chat', label: 'Sessions', icon: 'message-circle' },
   { key: 'workflow', label: 'Workflows', icon: 'share-2' },
   { key: 'task', label: 'Scheduled', icon: 'clock' },
+  { key: 'event', label: 'Events', icon: 'zap' },
 ];
 
 interface FeedItem {
@@ -111,7 +113,7 @@ export default function Sidebar({
   const isMac = typeof window !== 'undefined' && (window as any).desktop?.platform === 'darwin';
 
   const activeSeg = useMemo(() => {
-    const known = ['memory', 'mcps', 'tasks', 'workflows', 'settings', 'system', 'chat'];
+    const known = ['memory', 'mcps', 'tasks', 'workflows', 'events', 'settings', 'system', 'chat'];
     for (let i = segments.length - 1; i >= 0; i--) {
       if (known.includes(segments[i])) return segments[i];
     }
@@ -318,6 +320,7 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
 
   const workflowRuns = useActivity((s) => s.workflowRuns);
   const taskRuns = useActivity((s) => s.taskRuns);
+  const eventRuns = useActivity((s) => s.eventRuns);
   const filters = useActivity((s) => s.filters);
   const setFilter = useActivity((s) => s.setFilter);
   const loadActivity = useActivity((s) => s.loadActivity);
@@ -327,11 +330,14 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
     void loadActivity();
     const off1 = useEvents.getState().subscribe('workflow', () => void loadActivity());
     const off2 = useEvents.getState().subscribe('scheduled_task', () => void loadActivity());
-    return () => { off1(); off2(); };
+    // Every event delivery (received → running → success/failed) broadcasts an
+    // 'event' resource event, so a webhook trigger refreshes the feed live.
+    const off3 = useEvents.getState().subscribe('event', () => void loadActivity());
+    return () => { off1(); off2(); off3(); };
   }, [isConnected, loadActivity]);
 
   const onChat = activeSeg === 'chat' && !onRunsRoute;
-  const allOn = filters.chat && filters.workflow && filters.task;
+  const allOn = filters.chat && filters.workflow && filters.task && filters.event;
 
   const feed = useMemo<FeedItem[]>(() => {
     const items: FeedItem[] = [];
@@ -364,10 +370,15 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
     if (filters.task) {
       for (const r of taskRuns) items.push(runItem(r, 't', 'clock', 'tasks', router, activeRunId, onNavigate));
     }
+    if (filters.event) {
+      // Event deliveries are the events' "runs"; each opens its delivery detail
+      // (which embeds the produced session / links the workflow-task run).
+      for (const r of eventRuns) items.push(runItem(r, 'e', 'zap', 'events', router, activeRunId, onNavigate));
+    }
     items.sort((a, b) => b.ts - a.ts);
     return items.slice(0, FEED_MAX);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions, workflowRuns, taskRuns, filters, onChat, activeSessionId, activeRunId]);
+  }, [sessions, workflowRuns, taskRuns, eventRuns, filters, onChat, activeSessionId, activeRunId]);
 
   return (
     <View style={styles.recent}>
@@ -453,21 +464,24 @@ function runItem(
   r: ActivityRun,
   prefix: string,
   icon: IconName,
-  kind: 'workflows' | 'tasks',
+  kind: 'workflows' | 'tasks' | 'events',
   router: ReturnType<typeof useRouter>,
   activeRunId: string | null,
   onNavigate?: () => void,
 ): FeedItem {
   // A Recent row points at one specific firing, so open that single run
-  // (``/runs/{id}``) — not the parent's whole history (``/{kind}/runs/{parentId}``).
-  // This route lives at the drawer root, so it neither selects the
-  // Scheduled / Workflows tab nor pushes a back-button onto their stacks.
-  const runKind = kind === 'workflows' ? 'workflow' : 'task';
+  // (``/runs/{id}``) — not the parent's whole history. This route lives at
+  // the drawer root, so it neither selects the Scheduled / Workflows / Events
+  // tab nor pushes a back-button onto their stacks. An event delivery is a
+  // run like any other: same screen, same header, same transcript.
+  const runKind =
+    kind === 'workflows' ? 'workflow' : kind === 'events' ? 'event' : 'task';
   const params = new URLSearchParams({
     kind: runKind,
     parentId: r.parentId,
     name: r.parentName,
   });
+  const target = `/runs/${encodeURIComponent(r.id)}?${params.toString()}`;
   return {
     key: `${prefix}-${r.id}`,
     icon,
@@ -476,7 +490,7 @@ function runItem(
     active: activeRunId === r.id,
     dotColor: runStatusColor(r.status),
     onPress: () => {
-      router.push(`/runs/${encodeURIComponent(r.id)}?${params.toString()}` as any);
+      router.push(target as any);
       onNavigate?.();
     },
   };

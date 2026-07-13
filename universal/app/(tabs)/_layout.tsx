@@ -87,6 +87,7 @@ export default function AppDrawerLayout() {
       <Drawer.Screen name="mcps" options={{ headerShown: false }} />
       <Drawer.Screen name="workflows" options={{ headerShown: false }} />
       <Drawer.Screen name="tasks" options={{ headerShown: false }} />
+      <Drawer.Screen name="events" options={{ headerShown: false }} />
       {/* Hidden / legacy routes — reachable by link, never listed. */}
       {/* Single-run detail (from the sidebar's Recent feed) — a drawer-root
           stack so opening a run never highlights a workspace tab. */}

@@ -61,7 +61,7 @@ const CATEGORIES: Category[] = [
 // The "gateway" channel tab is gone — gateway transport is now Iroh
 // + handle@network credentials. Gateway state is read-only and shown
 // inside the Connection screen.
-type ChannelTab = 'telegram' | 'discord' | 'whatsapp';
+type ChannelTab = 'telegram' | 'discord' | 'whatsapp' | 'webhook';
 
 interface ChannelTabSpec {
   id: ChannelTab;
@@ -73,6 +73,7 @@ const CHANNEL_TABS: ChannelTabSpec[] = [
   { id: 'telegram', label: 'Telegram', icon: 'send' },
   { id: 'discord', label: 'Discord', icon: 'message-square' },
   { id: 'whatsapp', label: 'WhatsApp', icon: 'phone' },
+  { id: 'webhook', label: 'Webhook', icon: 'link' },
 ];
 
 export default function SettingsScreen() {
@@ -113,6 +114,11 @@ export default function SettingsScreen() {
   const [waToken, setWaToken] = useState('');
   const [waUsers, setWaUsers] = useState('');
   const [waModel, setWaModel] = useState('');
+  // Webhook channel (a dedicated inbound HTTP listener, not a bridge).
+  const [whEnabled, setWhEnabled] = useState(false);
+  const [whHost, setWhHost] = useState('0.0.0.0');
+  const [whPort, setWhPort] = useState('8899');
+  const [whPublicUrl, setWhPublicUrl] = useState('');
 
   const [saved, setSaved] = useState<string | null>(null);
 
@@ -150,6 +156,11 @@ export default function SettingsScreen() {
     setWaToken(wa.green_api_token || '');
     setWaUsers((wa.allowed_users || []).join(', '));
     setWaModel(wa.model || '');
+    const wh = ch.webhook || {};
+    setWhEnabled(!!wh.enabled);
+    setWhHost(wh.host || '0.0.0.0');
+    setWhPort(String(wh.port ?? 8899));
+    setWhPublicUrl(wh.public_url || '');
   }, [agentConfig]);
 
   const saveSection = async (section: string, data: any, label: string) => {
@@ -206,6 +217,18 @@ export default function SettingsScreen() {
       delete channels.whatsapp;
     }
     await saveSection('channels', channels, 'whatsapp');
+  };
+
+  const saveWebhook = async () => {
+    const channels: any = { ...(agentConfig?.channels || {}) };
+    const port = parseInt(whPort, 10);
+    channels.webhook = {
+      enabled: whEnabled,
+      host: whHost.trim() || '0.0.0.0',
+      port: Number.isFinite(port) ? port : 8899,
+      ...(whPublicUrl.trim() ? { public_url: whPublicUrl.trim() } : {}),
+    };
+    await saveSection('channels', channels, 'webhook');
   };
 
   const handleDisconnect = () => { disconnect(); router.replace('/'); };
@@ -303,6 +326,43 @@ export default function SettingsScreen() {
     </Card>
   );
 
+  const renderWebhookPanel = () => {
+    const base = whPublicUrl.trim().replace(/\/$/, '') || `http://<host>:${whPort || '8899'}`;
+    return (
+      <Card>
+        <Text style={styles.channelHint}>
+          The webhook channel exposes an inbound HTTP endpoint an external
+          service (or a peer agent) can call to trigger an event — a workflow, a
+          scheduled task, or a chat session. It runs on its own port, serving
+          only <Text style={{ fontFamily: font.mono }}>/hooks/*</Text>; the
+          gateway API is never reachable there.
+        </Text>
+
+        <View style={styles.toggleRow}>
+          <Text style={styles.toggleLabel}>Enabled</Text>
+          <ThemedSwitch value={whEnabled} onValueChange={setWhEnabled} />
+        </View>
+
+        <Text style={[styles.label, { marginTop: 8 }]}>Bind host</Text>
+        <TextInput style={styles.input} value={whHost} onChangeText={setWhHost} placeholder="0.0.0.0" placeholderTextColor={colors.textMuted} />
+        <Text style={[styles.label, { marginTop: 8 }]}>Port</Text>
+        <TextInput style={styles.input} value={whPort} onChangeText={setWhPort} placeholder="8899" placeholderTextColor={colors.textMuted} keyboardType="number-pad" />
+        <Text style={[styles.label, { marginTop: 8 }]}>Public URL (optional)</Text>
+        <TextInput style={styles.input} value={whPublicUrl} onChangeText={setWhPublicUrl} placeholder="https://hooks.example.com" placeholderTextColor={colors.textMuted} autoCapitalize="none" />
+
+        <Text style={styles.channelHint}>
+          Each event's endpoint is <Text style={{ fontFamily: font.mono }}>{base}/hooks/&lt;slug&gt;</Text>.
+          Expose the port with a reverse proxy or a tunnel and set the Public URL
+          so events show a complete, copy-pasteable address. Every event carries
+          its own secret — configure events under Events.
+        </Text>
+
+        <SaveBtn label="Save Webhook" saved={saved === 'webhook'} onPress={saveWebhook} />
+        <Text style={styles.restartHint}>Restart required after changes</Text>
+      </Card>
+    );
+  };
+
   const renderChannels = () => (
     <>
       <Text style={styles.sectionTitle}>Channels</Text>
@@ -318,6 +378,7 @@ export default function SettingsScreen() {
       {activeChannelTab === 'telegram' && renderTelegramPanel()}
       {activeChannelTab === 'discord' && renderDiscordPanel()}
       {activeChannelTab === 'whatsapp' && renderWhatsappPanel()}
+      {activeChannelTab === 'webhook' && renderWebhookPanel()}
     </>
   );
 

@@ -15,6 +15,7 @@ import type {
   VaultCommitDetail, VaultRestoreResult, VaultResetResult,
   ChatMessage, Attachment, ToolInfo, MessageAuthor, CompactionInfo,
   SessionContext,
+  AgentEvent, CreateEventInput, UpdateEventInput, EventDelivery, EventTypeSpec,
 } from '../../common/types';
 
 let baseUrl = '';
@@ -383,6 +384,70 @@ export async function getScheduledTaskRuns(
     `/api/scheduled-tasks/${encodeURIComponent(id)}/runs${qs ? `?${qs}` : ''}`,
   );
   return data.runs;
+}
+
+// ── Events API (webhook channel) ──
+
+export async function getEvents(enabledOnly: boolean = false): Promise<AgentEvent[]> {
+  const q = enabledOnly ? '?enabled_only=true' : '';
+  const data = await get<{ events: AgentEvent[] }>(`/api/events${q}`);
+  return data.events;
+}
+
+export async function getEvent(id: string): Promise<AgentEvent> {
+  return get<AgentEvent>(`/api/events/${encodeURIComponent(id)}`);
+}
+
+// Returns the event WITH its clear ``secret`` — shown once. Save it.
+export async function createEvent(input: CreateEventInput): Promise<AgentEvent> {
+  return post<AgentEvent>('/api/events', input);
+}
+
+export async function updateEvent(id: string, input: UpdateEventInput): Promise<AgentEvent> {
+  return patch<AgentEvent>(`/api/events/${encodeURIComponent(id)}`, input);
+}
+
+export async function deleteEvent(id: string): Promise<void> {
+  await del(`/api/events/${encodeURIComponent(id)}`);
+}
+
+// Generates a new secret and returns it inline (once), invalidating the old.
+export async function rotateEventSecret(id: string): Promise<AgentEvent> {
+  return post<AgentEvent>(`/api/events/${encodeURIComponent(id)}/rotate-secret`, {});
+}
+
+// Fire an event now from inside the app (the "Test" button) with a sample
+// payload. Produces a delivery + the bound action's run, same as a real hook.
+export async function triggerEvent(
+  id: string,
+  payload: Record<string, unknown> = {},
+  opts: { wait?: boolean; timeoutS?: number } = {},
+): Promise<EventDelivery | { delivery_id: string; status: string }> {
+  return post(`/api/events/${encodeURIComponent(id)}/trigger`, {
+    payload,
+    wait: opts.wait ?? false,
+    timeout_s: opts.timeoutS,
+  });
+}
+
+// Per-event delivery history (newest first) — the events analogue of
+// getWorkflowRuns / getScheduledTaskRuns. Powers the Recent feed's 'event'
+// source and the event's history screen.
+export async function getEventDeliveries(id: string, limit?: number): Promise<EventDelivery[]> {
+  const q = limit ? `?limit=${limit}` : '';
+  const data = await get<{ deliveries: EventDelivery[] }>(
+    `/api/events/${encodeURIComponent(id)}/deliveries${q}`,
+  );
+  return data.deliveries;
+}
+
+export async function getEventDelivery(deliveryId: string): Promise<EventDelivery> {
+  return get<EventDelivery>(`/api/event-deliveries/${encodeURIComponent(deliveryId)}`);
+}
+
+export async function getEventTypes(): Promise<EventTypeSpec[]> {
+  const data = await get<{ types: EventTypeSpec[] }>('/api/event-types');
+  return data.types;
 }
 
 // ── Workflows API ──

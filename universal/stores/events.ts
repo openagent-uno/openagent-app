@@ -47,6 +47,10 @@ const RESOURCES: ResourceKind[] = [
   // node) is spawned, so the sidebar refetches and the new session appears
   // and streams live.
   'session',
+  // Webhook Events: fires on event create/update/delete AND on every delivery
+  // (received → running → success/failed), so the Events screen and the
+  // sidebar Recent feed update live when an event is triggered.
+  'event',
 ];
 
 const DEBOUNCE_MS = 150;

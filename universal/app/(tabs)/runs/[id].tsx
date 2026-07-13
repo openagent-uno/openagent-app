@@ -45,7 +45,10 @@ export default function RunDetailScreen() {
   useLayoutEffect(() => {
     // Screen-name title by run kind (homogeneous; not the parent's name).
     navigation.setOptions({
-      title: kind === 'workflow' ? 'Workflow run' : 'Scheduled run',
+      title:
+        kind === 'workflow' ? 'Workflow run'
+          : kind === 'event' ? 'Event delivery'
+            : 'Scheduled run',
       // A scheduled firing renders its session's context panel (RunDetailView
       // → TaskBody); expose the same show/hide toggle as the chat header so it
       // can be dismissed here too. Workflow runs surface the panel only once a
@@ -87,7 +90,7 @@ export default function RunDetailScreen() {
           the content fetches on mount. */}
       {ready ? (
         <RunDetailView
-          kind={kind === 'workflow' ? 'workflow' : 'task'}
+          kind={kind === 'workflow' ? 'workflow' : kind === 'event' ? 'event' : 'task'}
           parentId={parentId}
           runId={id}
           name={name}

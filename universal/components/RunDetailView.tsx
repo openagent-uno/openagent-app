@@ -28,7 +28,8 @@ import {
 } from 'react-native';
 import { colors, font, radius } from '../theme';
 import {
-  getWorkflowRun, getScheduledTaskRuns, fetchSessionRuns, runMsgToChat, getSessionContext,
+  getWorkflowRun, getScheduledTaskRuns, getEventDelivery,
+  fetchSessionRuns, runMsgToChat, getSessionContext,
 } from '../services/api';
 import { runRoutePath, type SessionContext } from '../../common/types';
 import { openDetached } from '../services/windows';
@@ -40,6 +41,7 @@ import ContextPanel from './ContextPanel';
 import type {
   BlockType,
   ChatMessage,
+  EventDelivery,
   TaskRun,
   WorkflowRun,
   WorkflowTraceEntry,
@@ -61,7 +63,7 @@ const EMPTY_RETRY_MAX = 4;      // ~6s of retries for a just-finished flush race
 const LIVE_POLL_MAX = 150;      // ~5min ceiling so a stuck run can't poll forever
 const POLL_MS = 2000;
 
-function SessionTranscript({ sessionId, live }: {
+export function SessionTranscript({ sessionId, live }: {
   sessionId: string;
   /** The owning run is still in flight — keep polling so the transcript grows. */
   live?: boolean;
@@ -204,12 +206,14 @@ function RunContextPanel({ sessionId, live }: { sessionId?: string; live?: boole
 }
 
 type IconName = keyof typeof Feather.glyphMap;
-type RunKind = 'workflow' | 'task';
+type RunKind = 'workflow' | 'task' | 'event';
 
 const STATUS_COLOR: Record<string, string> = {
   running: colors.warning,
+  received: colors.warning,
   success: colors.success,
   failed: colors.error,
+  rejected: colors.error,
   cancelled: colors.textMuted,
   skipped: colors.textMuted,
 };
@@ -223,6 +227,7 @@ const NODE_META: Record<BlockType, { icon: IconName; label: string }> = {
   'trigger-manual': { icon: 'play', label: 'Manual start' },
   'trigger-schedule': { icon: 'clock', label: 'Scheduled start' },
   'trigger-ai': { icon: 'zap', label: 'AI start' },
+  'trigger-event': { icon: 'zap', label: 'Event start' },
   'mcp-tool': { icon: 'tool', label: 'Tool call' },
   'ai-prompt': { icon: 'cpu', label: 'AI node' },
   'if': { icon: 'git-merge', label: 'Condition' },
@@ -325,14 +330,19 @@ export function RunDetailView({
 }) {
   const [wfRun, setWfRun] = useState<WorkflowRun | null>(null);
   const [taskRun, setTaskRun] = useState<TaskRun | null>(null);
+  const [delivery, setDelivery] = useState<EventDelivery | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
-  // Open the owning workflow / scheduled task — same destination (and
+  // Open the owning workflow / scheduled task / event — same destination (and
   // detached-window behaviour) as tapping its tile in the list screens.
-  const openParent = () =>
-    openDetached(router, `${kind === 'workflow' ? 'workflows' : 'tasks'}/${parentId}`);
+  const PARENT_SECTION: Record<RunKind, string> = {
+    workflow: 'workflows',
+    task: 'tasks',
+    event: 'events',
+  };
+  const openParent = () => openDetached(router, `${PARENT_SECTION[kind]}/${parentId}`);
 
   // Re-poll the run summary while the firing is still in flight, so the header
   // status pill settles, the duration finalises, and — for workflows — steps
@@ -348,6 +358,7 @@ export function RunDetailView({
     setError(null);
     setWfRun(null);
     setTaskRun(null);
+    setDelivery(null);
     const load = async () => {
       try {
         let status: string | undefined;
@@ -357,6 +368,16 @@ export function RunDetailView({
           setWfRun(run);
           gotData = !!run;
           status = run?.status;
+        } else if (kind === 'event') {
+          // An event delivery IS the run: one inbound trigger, its payload,
+          // and the unit of work it produced (a child session for a chat
+          // prompt; a workflow / task run otherwise).
+          const d = await getEventDelivery(runId);
+          if (cancelled) return;
+          setDelivery(d);
+          gotData = !!d;
+          if (!d) { setError('This delivery could not be found.'); return; }
+          status = d.status;
         } else {
           // No single-firing endpoint for tasks — pull the recent window
           // and narrow to the requested run.
@@ -370,7 +391,10 @@ export function RunDetailView({
         }
         setError(null);
         polls += 1;
-        if (status === 'running' && polls < LIVE_POLL_MAX && !cancelled) {
+        // ``received`` is the event-delivery analogue of ``running``: the
+        // dispatch hasn't started the bound action yet, so keep polling.
+        const live = status === 'running' || status === 'received';
+        if (live && polls < LIVE_POLL_MAX && !cancelled) {
           timer = setTimeout(load, POLL_MS);
         }
       } catch (e: any) {
@@ -400,6 +424,8 @@ export function RunDetailView({
     wfRun?.trace.map((e) => e.status).join(','),
     taskRun?.status,
     taskRun?.session_id,
+    delivery?.status,
+    delivery?.session_id,
   ];
   const {
     scrollRef,
@@ -424,8 +450,21 @@ export function RunDetailView({
     );
   }
 
-  const run = wfRun ?? taskRun;
+  const run = wfRun ?? taskRun ?? delivery;
   if (!run) return null;
+  // An event delivery carries ``source`` (webhook / peer / manual / agent)
+  // where a run carries ``trigger`` — same slot in the header.
+  const triggerText = delivery ? delivery.source : (run as WorkflowRun | TaskRun).trigger;
+  const KIND_META: Record<RunKind, { icon: IconName; label: string }> = {
+    workflow: { icon: 'git-branch', label: 'Workflow' },
+    task: { icon: 'clock', label: 'Scheduled task' },
+    event: { icon: 'zap', label: 'Event' },
+  };
+  // The session that owns this run — drives the floating context panel.
+  const ownerSessionId = taskRun?.session_id ?? delivery?.session_id;
+  const ownerLive = (taskRun ?? delivery)
+    ? run.status === 'running' || run.status === 'received'
+    : false;
 
   return (
     <View style={styles.root}>
@@ -443,16 +482,23 @@ export function RunDetailView({
       >
         <RunHeader
           name={name}
-          kindIcon={kind === 'workflow' ? 'git-branch' : 'clock'}
-          kindLabel={kind === 'workflow' ? 'Workflow' : 'Scheduled task'}
+          kindIcon={KIND_META[kind].icon}
+          kindLabel={KIND_META[kind].label}
           status={run.status}
-          trigger={run.trigger}
-          startedIso={run.started_at_iso}
+          trigger={triggerText}
+          startedIso={(run as TaskRun).started_at_iso}
           startedAt={run.started_at}
-          finishedAt={run.finished_at}
+          finishedAt={run.finished_at ?? null}
           onPress={openParent}
         />
-        {wfRun ? <WorkflowBody run={wfRun} /> : taskRun ? <TaskBody run={taskRun} /> : null}
+        {wfRun ? (
+          <WorkflowBody run={wfRun} />
+        ) : taskRun ? (
+          <TaskBody run={taskRun} />
+        ) : delivery ? (
+          <DeliveryBody delivery={delivery} onOpenRun={(rid, k) =>
+            router.push(`/runs/${encodeURIComponent(rid)}?kind=${k}` as any)} />
+        ) : null}
       </ScrollView>
       {/* Jump-to-bottom pill: shown when the user has scrolled away from the
           bottom. Same position and style as the chat screen's pill so it
@@ -471,8 +517,8 @@ export function RunDetailView({
       {/* Floating context panel, top-right — same placement as the chat screen.
           A scheduled firing has one owning session; workflow runs surface it per
           AI node instead (open the node to see that session's panel). */}
-      {taskRun?.session_id ? (
-        <RunContextPanel sessionId={taskRun.session_id} live={taskRun.status === 'running'} />
+      {ownerSessionId ? (
+        <RunContextPanel sessionId={ownerSessionId} live={ownerLive} />
       ) : null}
     </View>
   );
@@ -543,6 +589,76 @@ function MetaItem({ icon, text }: { icon: IconName; text: string }) {
 }
 
 // ── Task firing body ─────────────────────────────────────────────────
+
+// ── Event delivery body ──────────────────────────────────────────────
+// The event analogue of ``TaskBody``: the delivered payload, then the unit
+// of work it produced — a full child-session transcript for a chat-prompt
+// event (same surface as a scheduled firing), or a link into the workflow /
+// scheduled run for the other two action kinds.
+function DeliveryBody({
+  delivery,
+  onOpenRun,
+}: {
+  delivery: EventDelivery;
+  onOpenRun: (runId: string, kind: 'workflow' | 'task') => void;
+}) {
+  const live = delivery.status === 'running' || delivery.status === 'received';
+  let payload = delivery.payload_json;
+  try {
+    payload = JSON.stringify(JSON.parse(delivery.payload_json), null, 2);
+  } catch {
+    /* keep the raw string */
+  }
+
+  return (
+    <>
+      <AssistantBlock label="Payload" text={'```json\n' + (payload || '{}') + '\n```'} />
+
+      {delivery.workflow_run_id ? (
+        <RunLink
+          icon="git-branch"
+          label="Open the workflow run this event started"
+          onPress={() => onOpenRun(delivery.workflow_run_id!, 'workflow')}
+        />
+      ) : null}
+      {delivery.task_run_id ? (
+        <RunLink
+          icon="clock"
+          label="Open the scheduled run this event started"
+          onPress={() => onOpenRun(delivery.task_run_id!, 'task')}
+        />
+      ) : null}
+
+      {delivery.session_id ? (
+        <SessionTranscript sessionId={delivery.session_id} live={live} />
+      ) : !delivery.error && !delivery.workflow_run_id && !delivery.task_run_id ? (
+        <EmptyNote text="This delivery produced no output." />
+      ) : null}
+
+      {delivery.error ? <ErrorBlock text={delivery.error} /> : null}
+    </>
+  );
+}
+
+function RunLink({
+  icon, label, onPress,
+}: { icon: IconName; label: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      style={styles.runLink}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      // @ts-ignore web hover
+      {...(Platform.OS === 'web' ? { className: 'oa-row-hover' } : {})}
+    >
+      <Feather name={icon} size={14} color={colors.primary} />
+      <Text style={styles.runLinkText}>{label}</Text>
+      <View style={{ flex: 1 }} />
+      <Feather name="chevron-right" size={16} color={colors.textMuted} />
+    </TouchableOpacity>
+  );
+}
 
 function TaskBody({ run }: { run: TaskRun }) {
   // A durable firing renders as its full child-session transcript (same
@@ -953,6 +1069,18 @@ function safeJson(v: unknown): string {
 }
 
 const styles = StyleSheet.create({
+  runLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 11,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+  runLinkText: { color: colors.text, fontSize: 13, fontWeight: '500' },
   root: { flex: 1 },
   scroll: { flex: 1 },
   jumpToBottom: {
