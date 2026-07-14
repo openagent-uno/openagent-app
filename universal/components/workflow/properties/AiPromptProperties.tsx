@@ -3,7 +3,7 @@
  * system + model_override + session_policy. The model picker shows
  * the live catalog from the models store so hardcoding a specific
  * model per block is trivial — leave blank to fall back to the
- * SmartRouter's pick.
+ * router's pick.
  */
 
 import { useEffect, useState } from 'react';
@@ -98,8 +98,8 @@ export default function AiPromptProperties({ node, onChange }: Props) {
           />
         )}
         <div style={styles.hint}>
-          Bypass the SmartRouter and hardcode a specific model for this
-          block. Leave blank to use the classifier's pick.
+          Pin a specific model for this block. Leave blank to let the
+          router pick.
         </div>
       </div>
 

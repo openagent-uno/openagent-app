@@ -92,8 +92,8 @@ export interface MessageComposerProps {
    *  to hide the picker entirely. */
   modelOptions?: { id: string; label: string; provider?: string }[];
   /** Currently-active model id (matches ``modelOptions[i].id``).
-   *  ``undefined`` renders the picker as "Auto" — let the SmartRouter
-   *  pick a model per turn. */
+   *  ``undefined`` renders the picker as "Auto" — no pin, so the
+   *  router leads the turn. */
   activeModelId?: string;
   onSelectModel?: (id: string | undefined) => void;
   recording?: boolean;                 // omit → no mic button
@@ -462,8 +462,8 @@ export default function MessageComposer({
                         color={!activeModelId ? colors.primary : colors.textMuted}
                       />
                       <View style={styles.modelRowText}>
-                        <Text style={styles.modelRowTitle}>Auto</Text>
-                        <Text style={styles.modelRowSub}>Best model picked automatically</Text>
+                        <Text style={styles.modelRowTitle}>Auto (router)</Text>
+                        <Text style={styles.modelRowSub}>Let the router pick</Text>
                       </View>
                     </TouchableOpacity>
                     {modelOptions.map((m) => (

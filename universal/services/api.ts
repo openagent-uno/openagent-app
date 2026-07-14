@@ -1025,7 +1025,7 @@ export async function createDbModel(entry: {
   enabled?: boolean;
   is_classifier?: boolean;
   metadata?: Record<string, unknown>;
-  // ``llm`` (default) goes to the SmartRouter; ``tts`` / ``stt`` rows
+  // ``llm`` (default) goes to the router; ``tts`` / ``stt`` rows
   // are picked by the audio resolvers and dispatched via LiteLLM.
   kind?: 'llm' | 'tts' | 'stt';
 }): Promise<ModelEntry> {
@@ -1033,10 +1033,12 @@ export async function createDbModel(entry: {
   return normalizeModel(data.model);
 }
 
-// Opt this model into the SmartRouter classifier pool. Multiple rows
-// may carry the flag at once — the router picks the first flagged
-// entry in catalog order each turn. Narrow PUT that only touches this
-// row; other flags stay intact.
+// Make this model the default router — the entry model that leads a
+// turn when the session has no pin. Multiple rows may carry the flag at
+// once; only the first enabled one in catalog order leads, the rest are
+// ordered fallbacks. Narrow PUT that only touches this row; other flags
+// stay intact. Named for the ``is_classifier`` wire field it writes, not
+// for any classifier call — there isn't one.
 export async function setClassifierModel(modelId: number): Promise<ModelEntry> {
   return updateDbModel(modelId, { is_classifier: true });
 }

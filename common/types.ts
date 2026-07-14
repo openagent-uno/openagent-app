@@ -894,7 +894,7 @@ export interface ChatSession {
   /** Optional LLM pin (e.g. "claude-opus-4-7"). When set, gets sent
    *  with the next ``session_open`` — composer picker mutates this
    *  + closes any open WS session so the next message lands on the
-   *  newly-pinned model. ``undefined`` = let the SmartRouter pick. */
+   *  newly-pinned model. ``undefined`` = let the router pick. */
   llmPin?: string;
   /** Optional system prompt for this session. Currently surfaced as
    *  the first user-tagged frame after session open, since the
@@ -1201,15 +1201,15 @@ export interface MCPEntry {
 //   framework     = inherited from the provider row ("api-based").
 //                   Same reason: denormalised for the UI.
 //   model         = bare vendor id (gpt-4o-mini, claude-sonnet-4-6, …).
-//   runtime_id    = derived string used in session pins and classifier
-//                   output; computed server-side from
+//   runtime_id    = derived string used in session pins and entry-model
+//                   resolution; computed server-side from
 //                   (provider_name, model, framework).
 export interface ModelEntry {
   id: number;
   provider_id: number;
   provider_name: string;
   framework: ModelFramework;
-  // Capability discriminator. ``llm`` rows go through the SmartRouter;
+  // Capability discriminator. ``llm`` rows go through the router;
   // ``tts`` / ``stt`` rows are picked by the audio resolvers and
   // dispatched via LiteLLM.
   kind: ProviderKind;
@@ -1220,11 +1220,15 @@ export interface ModelEntry {
   output_cost_per_million?: number | null;
   tier_hint?: string | null;
   enabled: boolean;
-  // When true, this row is eligible to act as the SmartRouter's turn-1
-  // classifier. Multiple rows may carry the flag — the router picks
-  // the first flagged entry in catalog order each turn, so the flag
-  // opts a model into the "classifier pool" rather than claiming
-  // exclusive ownership.
+  // The user's persistent "default router" hint: when true, this row is
+  // the entry model that leads the turn — it answers directly or
+  // delegates to the other enabled models. No classifier call is
+  // involved; entry resolution is a lookup (per-session pin → first row
+  // flagged here in catalog order → first enabled). Multiple rows may
+  // carry the flag, but only the first enabled one leads; the rest are
+  // ordered fallbacks for when it's disabled. The field name is a
+  // leftover from the retired classifier router and is fixed by the
+  // wire contract — it does not mean a classifier runs.
   is_classifier?: boolean;
   provider_enabled?: boolean;
   metadata: Record<string, unknown>;

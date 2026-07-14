@@ -258,10 +258,12 @@ export default function ModelScreen({ view = 'manage', embedded = false }: { vie
     }
   };
 
-  // Flip the is_classifier flag on this row only. Multiple rows may
-  // carry the flag simultaneously — they form a "classifier pool" and
-  // the router picks the first flagged entry per turn. Toggling here
-  // is a narrow PUT that never touches other rows.
+  // Flip the is_classifier flag on this row only — i.e. mark it the
+  // default router (the entry model that leads a turn when the session
+  // has no pin). Multiple rows may carry the flag simultaneously; only
+  // the first enabled one in catalog order actually leads, the rest are
+  // ordered fallbacks for when it's disabled. Toggling here is a narrow
+  // PUT that never touches other rows.
   const toggleClassifier = async (m: ModelEntry) => {
     try {
       if (m.is_classifier) await unsetClassifierModel(m.id);
@@ -444,8 +446,8 @@ export default function ModelScreen({ view = 'manage', embedded = false }: { vie
       <>
         <Text style={styles.sectionTitle}>Models</Text>
         <Text style={styles.hint}>
-          Each row is a (provider_row, model) pair. The smart router classifies each message and dispatches
-          it to the matching provider's API.
+          Each row is a (provider_row, model) pair. Every turn starts at the router — it answers
+          directly, or delegates to the other enabled models based on their tier hints.
         </Text>
 
         {/* Empty-state hint: no providers → no models possible. The
@@ -491,7 +493,7 @@ export default function ModelScreen({ view = 'manage', embedded = false }: { vie
                             {m.is_classifier && (
                               <>
                                 <Text style={styles.rowSep}>  ·  </Text>
-                                <Text style={styles.routerTag}>router pool</Text>
+                                <Text style={styles.routerTag}>default router</Text>
                               </>
                             )}
                           </Text>
@@ -538,7 +540,7 @@ export default function ModelScreen({ view = 'manage', embedded = false }: { vie
                             style={styles.classifierBtn}
                             onPress={() => toggleClassifier(m)}
                             accessibilityLabel={
-                              m.is_classifier ? 'Unset router classifier' : 'Set as router classifier'
+                              m.is_classifier ? 'Clear default router' : 'Set as default router'
                             }
                           >
                             <Feather

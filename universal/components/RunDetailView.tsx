@@ -940,7 +940,7 @@ function StepCard({ entry }: { entry: WorkflowTraceEntry }) {
 // instead of expanding in place, tapping it deep-links into that node's full
 // conversation. Its summary line shows the model it ran on: the pinned
 // ``model_override`` immediately, upgraded to the model the child session
-// actually used (SmartRouter may have chosen it) once that session's context
+// actually used (the router may have chosen it) once that session's context
 // report resolves.
 function AiNodeCard({
   entry, onOpen,
