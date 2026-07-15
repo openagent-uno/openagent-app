@@ -1551,7 +1551,13 @@ export type UpdateEventInput = Partial<
 >;
 
 export type EventDeliveryStatus =
-  | 'received' | 'running' | 'success' | 'failed' | 'rejected';
+  // 'cancelled': the delivery was interrupted, not failed — most often a
+  // barge-in, where a newer delivery for the same bound session superseded
+  // the one in flight (vision §2 calls interrupt/barge-in first-class). The
+  // server stopped writing these as 'failed' with an empty error in v0.17.x;
+  // keep it distinct here so the Recent feed does not count an interrupt as a
+  // fault (see the failed+rejected filter in EventDeliveryHistoryContent).
+  | 'received' | 'running' | 'success' | 'failed' | 'rejected' | 'cancelled';
 
 /** One row in an event's delivery history — the analogue of a workflow run /
  *  task run. Surfaced in the sidebar Recent feed under the 'event' filter. */

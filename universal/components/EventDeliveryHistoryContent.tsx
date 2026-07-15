@@ -38,6 +38,9 @@ const STATUS_COLOR: Record<EventDeliveryStatus, string> = {
   success: '#15885E',
   failed: '#C94A43',
   rejected: '#C94A43',
+  // Muted, deliberately NOT the red of failed/rejected: a cancelled delivery
+  // (usually a barge-in) is a normal outcome, not a fault.
+  cancelled: '#8A8A8A',
 };
 
 export function EventDeliveryHistoryContent({
