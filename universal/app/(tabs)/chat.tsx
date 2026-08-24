@@ -31,14 +31,26 @@ import CommandPalette, { type PaletteEntry } from '../../components/CommandPalet
 import BrandLogo from '../../components/BrandLogo';
 import { useHeaderInset, HeaderBack, HeaderMenu, HeaderRight } from '../../components/screenHeader';
 import PopupMenu from '../../components/PopupMenu';
+import Notice from '../../components/Notice';
 import { NO_DRAG } from '../../components/DragRegion';
 import { goBack } from '../../services/windows';
 import { useNavHistory } from '../../stores/navHistory';
 import { useAutoScroll } from '../../hooks/useAutoScroll';
 import { Skeleton, SkeletonLines } from '../../components/Skeleton';
 import { useConfirm } from '../../components/ConfirmDialog';
-import { uploadFile, guessMimeType, listDbModels } from '../../services/api';
-import type { ModelEntry } from '../../../common/types';
+import {
+  uploadFile, guessMimeType, listDbModels,
+  getSessionModelPin, pinSessionModel, unpinSessionModel,
+  getGatewayCommands, listServingAccounts,
+} from '../../services/api';
+import type { ModelEntry, GatewayCommandSpec, ProviderAccounts } from '../../../common/types';
+import AgentSwitcher from '../../components/AgentSwitcher';
+import { formatDuration } from '../../components/AccountsPanel';
+
+// Commands that act on the agent, not on one conversation: they must be
+// sent without a session_id (see WSClient.sendCommand). Everything else is
+// scoped to the chat tab it was typed in.
+const AGENT_WIDE_COMMANDS = new Set(['help', 'usage', 'update', 'restart', 'status', 'queue']);
 
 const SUGGESTED_PROMPTS: { label: string; prompt: string; icon: string }[] = [
   { label: 'Explain a concept', prompt: 'Explain ', icon: 'book-open' },
@@ -127,21 +139,69 @@ export default function ChatScreen() {
   const [dragActive, setDragActive] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [llmModels, setLlmModels] = useState<ModelEntry[]>([]);
-  // Lazy-load the LLM catalogue once the WS is up — the picker shows
-  // models opted into ``enabled`` so disabled rows don't pollute it.
+  // Set when the server refuses a model pin, so the composer can say why
+  // the chip snapped back instead of leaving the rejection invisible.
+  const [modelPinError, setModelPinError] = useState<string | null>(null);
+  // The gateway's command registry. `null` until it loads (or if it fails),
+  // in which case the composer falls back to the local handlers alone.
+  const [gatewayCommands, setGatewayCommands] = useState<GatewayCommandSpec[] | null>(null);
+  // Which subscription account serves each provider, and how much of its
+  // window is left. Shown beside each model so "which model can I still
+  // use" is answerable without leaving the composer.
+  const [accounts, setAccounts] = useState<ProviderAccounts[] | null>(null);
+  useEffect(() => {
+    if (!ws) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const rows = await listServingAccounts();
+        if (!cancelled) setAccounts(rows);
+      } catch (e) {
+        // An older gateway has no /api/accounts. The picker simply shows no
+        // hints — it must never lose the model list over this.
+        console.debug('[chat] serving accounts unavailable:', e);
+      }
+    };
+    void load();
+    // Quota windows tick down in hours; a limit lifts on a timer.
+    const t = setInterval(() => { void load(); }, 60_000);
+    return () => { cancelled = true; clearInterval(t); };
+  }, [ws]);
   useEffect(() => {
     if (!ws) return;
     let cancelled = false;
     (async () => {
       try {
-        const rows = await listDbModels({ enabledOnly: true, kind: 'llm' });
-        if (!cancelled) setLlmModels(rows);
+        const specs = await getGatewayCommands();
+        if (!cancelled) setGatewayCommands(specs);
       } catch (e) {
-        console.error('[chat] failed to load LLM catalogue:', e);
+        // An older gateway has no /api/commands. Not an error worth showing:
+        // the local list still drives the menu.
+        console.debug('[chat] gateway command registry unavailable:', e);
       }
     })();
     return () => { cancelled = true; };
   }, [ws]);
+  // Lazy-load the LLM catalogue once the WS is up — the picker shows
+  // models opted into ``enabled`` so disabled rows don't pollute it.
+  //
+  // Re-read it on focus as well. Loading once on connect meant a model added
+  // or enabled in Settings was invisible in the picker until the whole app
+  // was restarted, which reads as "the model didn't save".
+  const loadLlmModels = useCallback(async () => {
+    try {
+      setLlmModels(await listDbModels({ enabledOnly: true, kind: 'llm' }));
+    } catch (e) {
+      console.error('[chat] failed to load LLM catalogue:', e);
+    }
+  }, []);
+  useEffect(() => {
+    if (!ws) return;
+    void loadLlmModels();
+  }, [ws, loadLlmModels]);
+  useFocusEffect(useCallback(() => {
+    if (ws) void loadLlmModels();
+  }, [ws, loadLlmModels]));
   const isDesktop = typeof window !== 'undefined' && !!window.desktop?.isDesktop;
   const [recording, setRecording] = useState(false);
   const voiceLanguage = useVoiceConfig((s) => s.config.language);
@@ -661,11 +721,58 @@ export default function ChatScreen() {
   // session so the next sendMessage re-opens it with the new pin —
   // without this, the cached ``openedSessions`` entry on the WS keeps
   // the previous llmPin in force.
+  //
+  // The pin is also written through to ``/api/sessions/{id}/model``. It
+  // belongs to the session, not to this device: a conversation resumed
+  // from the CLI, another client, or a channel has to answer with the
+  // model chosen here. Local state moves first so the chip responds
+  // instantly, and rolls back if the server refuses (unregistered or
+  // disabled model) so the chip never claims a model that is not in use.
   const handleSelectModel = useCallback((modelId: string | undefined) => {
+    // With no session yet this used to return silently: the user picked a
+    // model, the menu closed, the chip stayed on "Auto" and nothing said
+    // why. Picking a model IS an intent to start a conversation, so create
+    // the session and pin it — the same gesture the user thought they made.
+    const sessionId = activeSessionId ?? createSession();
+    if (!sessionId) return;
+    const previous = sessions.find((s) => s.id === sessionId)?.llmPin;
+    setLlmPin(sessionId, modelId);
+    setModelPinError(null);
+    if (ws) ws.sendSessionClose(sessionId);
+    (async () => {
+      try {
+        if (modelId) await pinSessionModel(sessionId, modelId);
+        else await unpinSessionModel(sessionId);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error('[chat] failed to persist model pin:', msg);
+        setLlmPin(sessionId, previous);
+        setModelPinError(msg);
+        if (ws) ws.sendSessionClose(sessionId);
+      }
+    })();
+  }, [ws, activeSessionId, sessions, setLlmPin, createSession]);
+
+  // Reconcile the chip with the server's pin whenever a session becomes
+  // active: it may have been pinned from another client, or by a `/model`
+  // command in a channel, and the chip must show what will actually run.
+  useEffect(() => {
     if (!activeSessionId) return;
-    setLlmPin(activeSessionId, modelId);
-    if (ws) ws.sendSessionClose(activeSessionId);
-  }, [ws, activeSessionId, setLlmPin]);
+    const sessionId = activeSessionId;
+    let cancelled = false;
+    (async () => {
+      try {
+        const pin = await getSessionModelPin(sessionId);
+        if (cancelled) return;
+        setLlmPin(sessionId, pin.runtime_id ?? undefined);
+      } catch (e) {
+        // A session the server has never seen 404s here — that is not an
+        // error, it just has no pin yet. Leave local state alone.
+        console.debug('[chat] no server-side model pin for', sessionId, e);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [activeSessionId, setLlmPin]);
 
   // Serialize a session's transcript to a Markdown document and
   // trigger a browser download. Skips tool rows (they're noisy and
@@ -1087,10 +1194,16 @@ export default function ChatScreen() {
   const screenSupported = videoSupported
     && typeof navigator.mediaDevices?.getDisplayMedia === 'function';
 
-  // Slash-command catalogue offered by the composer. ``action`` fires
-  // a local handler; commands without ``action`` insert their template
-  // into the input so the user can finish typing arguments.
-  const slashCommands: SlashCommand[] = [
+  // Local handlers for the commands this client services itself. These are
+  // NOT the catalogue — the catalogue comes from the gateway's registry
+  // (`/api/commands`), which exists so a rich client does not hardcode the
+  // list and drift from it. A command the server grows appears here on its
+  // own; these entries only say "when it fires, run this locally instead of
+  // sending it down the socket".
+  //
+  // `export` and `system` have no server counterpart: they act purely on
+  // client state, so they are appended to whatever the registry returns.
+  const localCommands: SlashCommand[] = [
     {
       name: 'new',
       description: 'Start a new chat',
@@ -1158,16 +1271,96 @@ export default function ChatScreen() {
     },
   ];
 
+  // The gateway's registry, merged with the local handlers above.
+  // Falls back to the local list alone if the fetch fails, so losing the
+  // gateway degrades the menu instead of emptying it.
+  const slashCommands: SlashCommand[] = useMemo(() => {
+    const localByName = new Map(localCommands.map((c) => [c.name, c]));
+    if (!gatewayCommands) return localCommands;
+    const merged: SlashCommand[] = [];
+    for (const spec of gatewayCommands) {
+      // `menu_visible: false` marks an alias the menu should not repeat
+      // (`reset` duplicates `clear`, `queue` duplicates `status`).
+      if (!spec.menu_visible) continue;
+      const local = localByName.get(spec.name);
+      merged.push({
+        name: spec.name,
+        // The server's description is the canonical wording; a local entry
+        // only overrides it when it describes a different, client-side act.
+        description: local?.description ?? spec.description,
+        // No local handler → send it down the socket. Scope matters: the
+        // agent-wide commands must go WITHOUT a session_id, while the
+        // conversation-scoped ones must carry it so other chat tabs stay
+        // intact. The registry doesn't express scope, so the client decides
+        // — and defaults an unknown new command to session-scoped, which is
+        // the safer wrong answer of the two.
+        action: local?.action ?? (() => {
+          if (AGENT_WIDE_COMMANDS.has(spec.name)) ws?.sendCommand(spec.name);
+          else if (activeSessionId) ws?.sendCommand(spec.name, activeSessionId);
+        }),
+        argSource: (spec.arg_source === 'models' ? 'models' : undefined),
+      });
+      localByName.delete(spec.name);
+    }
+    // Whatever the registry did not claim is client-only — keep it.
+    for (const leftover of localByName.values()) merged.push(leftover);
+    return merged;
+  }, [gatewayCommands, localCommands, activeSessionId, ws]);
+
   // Composer model-picker rows. Memoized on the raw catalogue so a keystroke
   // (which re-renders this screen) doesn't rebuild a fresh array each time and
   // hand the composer a new ``modelOptions`` reference.
+  // Per provider, the headroom of the account that would serve the NEXT
+  // request: the least-used account that is not rate-limited. That is the
+  // number that decides whether a model is usable right now — an average
+  // across accounts would hide one exhausted account behind a fresh one.
+  const providerHints = useMemo(() => {
+    const out = new Map<string, { hint: string; tone: 'ok' | 'warn' | 'bad' | undefined }>();
+    for (const p of accounts ?? []) {
+      if (!p.accounts.length) continue;
+      const usable = p.accounts.filter((a) => !a.limited && !a.dead);
+      if (usable.length === 0) {
+        // Everything is cooling down: say when the earliest one returns.
+        const soonest = p.accounts
+          .map((a) => a.cooldown_remaining_s
+            ?? (a.limited_until_ms ? (a.limited_until_ms - Date.now()) / 1000 : null))
+          .filter((v): v is number => typeof v === 'number' && v > 0)
+          .sort((a, b) => a - b)[0];
+        out.set(p.provider, {
+          hint: soonest ? `limited · ${formatDuration(soonest)}` : 'limited',
+          tone: 'bad',
+        });
+        continue;
+      }
+      const withQuota = usable
+        .map((a) => a.quota?.primary_used_percent)
+        .filter((v): v is number => typeof v === 'number');
+      if (withQuota.length === 0) {
+        // No upstream quota to report — say "available", never a fake 100%.
+        out.set(p.provider, { hint: 'available', tone: 'ok' });
+        continue;
+      }
+      const left = 100 - Math.min(...withQuota);
+      out.set(p.provider, {
+        hint: `${Math.round(left)}% left`,
+        tone: left <= 10 ? 'bad' : left <= 30 ? 'warn' : 'ok',
+      });
+    }
+    return out;
+  }, [accounts]);
+
   const modelOptions = useMemo(
-    () => llmModels.map((m) => ({
-      id: m.runtime_id,
-      label: m.display_name || m.model || m.runtime_id,
-      provider: m.provider_name,
-    })),
-    [llmModels],
+    () => llmModels.map((m) => {
+      const h = providerHints.get(m.provider_name);
+      return {
+        id: m.runtime_id,
+        label: m.display_name || m.model || m.runtime_id,
+        provider: m.provider_name,
+        accountHint: h?.hint,
+        accountTone: h?.tone,
+      };
+    }),
+    [llmModels, providerHints],
   );
 
   const paletteEntries: PaletteEntry[] = useMemo(() => chatSessions.map((s) => {
@@ -1372,6 +1565,12 @@ export default function ChatScreen() {
               </TouchableOpacity>
             )}
 
+            {modelPinError && (
+              <Notice style={styles.pinErrorBar} onDismiss={() => setModelPinError(null)}>
+                {`Could not switch model — ${modelPinError}`}
+              </Notice>
+            )}
+
             <MessageComposer
               inputRef={composerInputRef}
               input={input}
@@ -1387,6 +1586,7 @@ export default function ChatScreen() {
               slashCommands={slashCommands}
               modelOptions={modelOptions}
               activeModelId={activeSession?.llmPin}
+              menuFooter={<AgentSwitcher variant="menu-row" />}
               onSelectModel={handleSelectModel}
               pendingFiles={pendingFiles}
               onRetryFile={(idx) => {
@@ -1637,4 +1837,7 @@ const styles = StyleSheet.create({
   dropSub: {
     fontSize: 12, color: colors.textMuted, textAlign: 'center',
   },
+  // Inline notice for a rejected model pin. Sits directly above the
+  // composer so it reads as an answer to the chip the user just clicked.
+  pinErrorBar: { marginHorizontal: 12, marginBottom: 6 },
 });

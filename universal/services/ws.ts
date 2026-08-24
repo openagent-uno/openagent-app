@@ -317,7 +317,12 @@ export class OpenAgentWS {
   }
 
   sendCommand(
-    name: ClientMessage & { type: 'command' } extends { name: infer N } ? N : never,
+    // The gateway's registry (`/api/commands`) is the authority on which
+    // commands exist, and the composer now builds its menu from it — so a
+    // command the server grows must be sendable without editing a union
+    // here. `string & {}` keeps autocomplete for the names we do know
+    // while accepting any the registry hands us.
+    name: (ClientMessage & { type: 'command' } extends { name: infer N } ? N : never) | (string & {}),
     sessionId?: string,
     arg?: string,
   ): void {
