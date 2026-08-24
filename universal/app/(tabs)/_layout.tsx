@@ -81,10 +81,12 @@ export default function AppDrawerLayout() {
       <Drawer.Screen name="chat" options={leaf('Chat')} />
       <Drawer.Screen name="model" options={leaf('Model')} />
       <Drawer.Screen name="system" options={leaf('System')} />
+      <Drawer.Screen name="logs" options={leaf('Logs')} />
       <Drawer.Screen name="settings" options={leaf('Settings')} />
       {/* Stacks own their own headers (per-screen titles + back). */}
       <Drawer.Screen name="memory" options={{ headerShown: false }} />
       <Drawer.Screen name="mcps" options={{ headerShown: false }} />
+      <Drawer.Screen name="skills" options={{ headerShown: false }} />
       <Drawer.Screen name="workflows" options={{ headerShown: false }} />
       <Drawer.Screen name="tasks" options={{ headerShown: false }} />
       <Drawer.Screen name="events" options={{ headerShown: false }} />

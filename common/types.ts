@@ -1137,6 +1137,17 @@ export interface SessionContextSection {
  *  One contract shared by the app panel, the CLI table, and chat channels.
  *  See server ``src/core/context_report.py``. Numeric fields default to 0
  *  (the server omits zero/None), so treat absent values as 0. */
+/** A session's durable model pin, as the server stores it.
+ *
+ *  ``runtime_id: null`` means the session is unpinned and the router
+ *  resolves the entry model normally. ``side`` is a legacy field the
+ *  gateway still returns as null; it carries no meaning since v0.14. */
+export interface SessionModelPin {
+  session_id: string;
+  runtime_id: string | null;
+  side?: string | null;
+}
+
 export interface SessionContext {
   session_id: string;
   /** Runtime id of the model that owns this session, e.g. "anthropic:claude-opus-4-8". */
@@ -1801,4 +1812,248 @@ export interface WorkflowStats {
   success_rate: number;
   avg_duration_s: number | null;
   last: WorkflowRunSummary[];
+}
+
+// ── Budgets (/api/budgets) ──
+//
+// A budget is a spend cap on a scope, measured over a window. Whether a
+// cap is actually ENFORCED depends on its shape: only `global`/`provider`/
+// `model` scopes over an `hour`/`day`/`month` window can exclude a model
+// from routing. A `task` scope or a `per_run` window is alert-only — the
+// server reports that per rule as `enforced`, and the UI must not imply a
+// hard cap where there is none.
+
+export type BudgetScopeKind = 'global' | 'provider' | 'model' | 'task';
+export type BudgetWindow = 'hour' | 'day' | 'month' | 'per_run';
+export type BudgetMetric = 'cost_usd' | 'tokens';
+
+export interface BudgetRule {
+  id: string;
+  scope_kind: BudgetScopeKind;
+  /** Display form: the scope value, or '*' for a global rule. */
+  scope: string;
+  /** Raw value ('' for global). Send this back on writes. */
+  scope_value: string;
+  metric: BudgetMetric;
+  window: BudgetWindow;
+  amount: number;
+  alert_thresholds: number[] | null;
+  webhook_url: string | null;
+  enabled: boolean;
+  /** 'user' for rules created here, 'yaml' for seeded ones. */
+  source?: string;
+}
+
+/** A rule plus its live meter, from `/api/budgets/usage`. */
+export interface BudgetUsage extends BudgetRule {
+  /** Spend so far in the current window. `null` for `per_run` (no window
+   *  to sum over) or when the aggregation failed — see `error`. */
+  spend: number | null;
+  /** spend / amount, or `null` when spend is unavailable. */
+  ratio: number | null;
+  over: boolean;
+  remaining: number | null;
+  window_start: number | null;
+  window_end: number | null;
+  /** False for `task` scopes and `per_run` windows: the rule alerts but
+   *  cannot stop a turn. */
+  enforced: boolean;
+  /** A `cost_usd` cap on a scope that prices at $0 can never trip. */
+  cost_metric_ineffective?: boolean;
+  warning?: string;
+  error?: string;
+}
+
+export interface CreateBudgetInput {
+  scope_kind: BudgetScopeKind;
+  scope_value?: string;
+  metric: BudgetMetric;
+  window: BudgetWindow;
+  amount: number;
+  alert_thresholds?: number[];
+  webhook_url?: string | null;
+  enabled?: boolean;
+}
+
+export type UpdateBudgetInput = Partial<CreateBudgetInput>;
+
+// ── Event log (/api/logs) ──
+
+/** One line of `events.jsonl`. `ts`, `event` and `level` are always
+ *  present; everything else is per-event payload the writer passed to
+ *  `elog(...)`, so it is deliberately open. */
+export interface LogEntry {
+  ts: number;
+  event: string;
+  level: string;
+  [key: string]: unknown;
+}
+
+// ── Quality report (/api/quality) ──
+//
+// The correctness meter beside the spend meter: where budgets answer "how
+// much did we spend", this answers "were the answers any good". Derived
+// from the event log alone (quality.score, router.cost_recorded,
+// recall.metric), so it is read-only and always renderable — a window with
+// no data returns zeros and nulls, never an error.
+
+export interface QualityReport {
+  window_seconds: number;
+  /** False when the quality monitor is off: the sections are all zero and
+   *  the UI must say "not running" rather than "quality is 0". */
+  enabled?: boolean;
+  quality: {
+    judged: number;
+    avg_score: number | null;
+    verdicts: { good: number; warn: number; bad: number };
+    fabrication_flagged: number;
+  };
+  usage: {
+    turns: number;
+    cost_usd: number;
+    input_tokens: number;
+    output_tokens: number;
+  };
+  recall: {
+    turns: number;
+    used_rate: number | null;
+    hit_rate: number | null;
+    avg_top_score: number | null;
+  };
+}
+
+// ── Slash-command registry (/api/commands) ──
+
+/** One entry of the gateway's introspectable command registry. The server
+ *  exposes this precisely so a rich client does not hardcode the list and
+ *  drift from it — a command added server-side shows up here without an
+ *  app release. */
+export interface GatewayCommandSpec {
+  name: string;
+  description: string;
+  help_text: string;
+  /** False for aliases the menu should not repeat (`reset`, `queue`). */
+  menu_visible: boolean;
+  help_visible: boolean;
+  /** When set, the argument is picked from a list rather than typed —
+   *  `'models'` opens the composer's model picker. */
+  arg_source: string | null;
+}
+
+// ── Skills (/api/skills) ──
+//
+// The agent's file-backed skill library: one folder per skill, a SKILL.md
+// with YAML frontmatter, optional bundled files beside it. Two flags carry
+// real meaning rather than decoration:
+//
+//   `agent_authored` — the agent wrote it via its own tools. That is the
+//   boundary the skill-curator respects: seed and hub skills are off-limits
+//   to consolidation, so it can never merge or retire curated content.
+//
+//   `archived` — retired WITHOUT deleting. The file stays on disk, and the
+//   skill drops out of the index injected into the system prompt.
+
+export interface SkillSummary {
+  name: string;
+  description: string;
+  category: string;
+  path: string;
+  created_by: string | null;
+  status: string | null;
+  agent_authored: boolean;
+  archived: boolean;
+  from_hub: boolean;
+}
+
+export interface SkillDetail {
+  ok: boolean;
+  name: string;
+  description: string;
+  category: string;
+  path: string;
+  /** SKILL.md with the frontmatter stripped — what the agent actually reads. */
+  body: string;
+  /** The raw file, frontmatter included. */
+  content: string;
+  bundled_files: string[];
+}
+
+export interface SkillWriteResult {
+  ok: boolean;
+  action?: string;
+  name: string;
+  path?: string;
+  /** Always false: a write lands on disk, but the skills index inside the
+   *  cached system prompt is a frozen snapshot. The agent picks the change
+   *  up on the next boot/reload, not mid-session — the UI must say so. */
+  index_refreshed?: boolean;
+  error?: string;
+}
+
+export interface CreateSkillInput {
+  name: string;
+  description?: string;
+  category?: string;
+  body: string;
+}
+
+// ── Serving accounts (/api/accounts) ──
+//
+// Which subscription account is actually paying for a provider's traffic,
+// and how much of its window is left. A model row says WHICH model answers;
+// this says WHOSE account it runs on.
+//
+// `quota` is null whenever the upstream does not report one — and that is
+// the common case, not an edge case. A Codex proxy returns a real
+// used-percentage against a real window; a Claude proxy returns only
+// "limited / not limited", because Anthropic never tells it more: it learns
+// an account is spent by receiving a 429. The UI must render that absence as
+// "not reported" and never as 0% used, which is the number an operator would
+// plan around.
+
+export interface AccountQuota {
+  plan?: string;
+  active_limit?: string;
+  primary_used_percent?: number;
+  primary_window_minutes?: number;
+  primary_reset_after_s?: number;
+  secondary_used_percent?: number;
+  secondary_window_minutes?: number;
+  secondary_reset_after_s?: number;
+  credits_balance?: number;
+}
+
+export interface ServingAccount {
+  id: string;
+  name: string;
+  priority?: number;
+  plan?: string;
+  managed?: boolean;
+  /** Rate-limited right now; `limited_until_ms` says until when. */
+  limited?: boolean;
+  limited_until_ms?: number;
+  /** Credential expiry (proxy accounts). */
+  expires_at_ms?: number;
+  has_refresh_token?: boolean;
+  /** Pool accounts only: terminal auth failure, never auto-recovers. */
+  dead?: boolean;
+  status?: string;
+  cooldown_remaining_s?: number | null;
+  request_count?: number;
+  quota: AccountQuota | null;
+  /** 'proxy' = read from a sub-proxy's health; 'pool' = OpenAgent's own
+   *  rotation pool, which tracks health but is never told a quota. */
+  source?: 'proxy' | 'pool';
+}
+
+export interface ProviderAccounts {
+  provider: string;
+  framework?: string;
+  base_url?: string;
+  enabled: boolean;
+  reachable: boolean;
+  accounts: ServingAccount[];
+  metrics: Record<string, number> | null;
+  /** Why there are no accounts: unreachable, not a proxy, no accounts. */
+  error?: string | null;
 }
