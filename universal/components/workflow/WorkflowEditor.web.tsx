@@ -78,6 +78,8 @@ function EditorInner({ workflow, onBack, onWorkflowUpdated }: Props) {
     loadMcpTools,
     updateWorkflow,
     runWorkflow,
+    stopWorkflow,
+    runs,
   } = useWorkflows();
   const router = useRouter();
 
@@ -405,6 +407,13 @@ function EditorInner({ workflow, onBack, onWorkflowUpdated }: Props) {
 
   const isRunning = runningId === workflow.id;
 
+  // Stop the run this editor is watching. Without it the Run button was a
+  // one-way door: a runaway DAG could only be killed by asking the agent
+  // to call its MCP tool.
+  const handleStop = async () => {
+    await stopWorkflow(workflow.id, runs[workflow.id]?.id);
+  };
+
   return (
     <div style={styles.container}>
       <div style={styles.topBar}>
@@ -483,21 +492,20 @@ function EditorInner({ workflow, onBack, onWorkflowUpdated }: Props) {
               {saving ? 'Saving…' : dirty ? 'Save' : 'Saved'}
             </span>
           </button>
-          <button
-            onClick={handleRun}
-            disabled={isRunning}
-            style={
-              {
-                ...styles.runBtn,
-                opacity: isRunning ? 0.55 : 1,
-              } as any
-            }
-          >
-            <Feather name="play" size={12} color={colors.textInverse} />
-            <span style={{ marginLeft: 5 }}>
-              {isRunning ? 'Running…' : 'Run'}
-            </span>
-          </button>
+          {isRunning ? (
+            <button
+              onClick={handleStop}
+              style={{ ...styles.runBtn, backgroundColor: colors.error } as any}
+            >
+              <Feather name="square" size={12} color={colors.textInverse} />
+              <span style={{ marginLeft: 5 }}>Stop</span>
+            </button>
+          ) : (
+            <button onClick={handleRun} style={styles.runBtn as any}>
+              <Feather name="play" size={12} color={colors.textInverse} />
+              <span style={{ marginLeft: 5 }}>Run</span>
+            </button>
+          )}
         </div>
       </div>
 

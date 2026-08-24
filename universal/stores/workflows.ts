@@ -59,6 +59,15 @@ interface WorkflowsState {
     inputs?: Record<string, unknown>,
     opts?: { pollMs?: number; onUpdate?: (run: WorkflowRun) => void },
   ) => Promise<WorkflowRun | null>;
+  // Hard-stop the in-flight run(s). The gateway flags them cancelling and
+  // the scheduler tears the executor down mid-DAG within ~2s; the polling
+  // loop in ``runWorkflow`` then sees a terminal status and settles. Pass
+  // ``runId`` to stop one specific run when several are in flight.
+  //
+  // A no-op (the run finished on its own between render and tap) comes back
+  // with count 0 and is NOT an error — the button is allowed to be a frame
+  // stale without throwing a dialog at the user.
+  stopWorkflow: (id: string, runId?: string) => Promise<boolean>;
   loadStats: (id: string, last?: number) => Promise<WorkflowStats | null>;
   loadBlockTypes: () => Promise<void>;
   loadMcpTools: () => Promise<void>;
@@ -134,6 +143,19 @@ export const useWorkflows = create<WorkflowsState>((set, get) => ({
   },
 
   toggleWorkflow: async (id, enabled) => get().updateWorkflow(id, { enabled }),
+
+  stopWorkflow: async (id, runId) => {
+    try {
+      set({ error: null });
+      // wait=false so the button returns immediately; the run poller
+      // already running in ``runWorkflow`` picks up the cancelled status.
+      await api.stopWorkflow(id, { runId, wait: false });
+      return true;
+    } catch (e: any) {
+      set({ error: e?.message ?? String(e) });
+      return false;
+    }
+  },
 
   runWorkflow: async (id, inputs, opts = {}) => {
     const pollMs = opts.pollMs ?? 500;
