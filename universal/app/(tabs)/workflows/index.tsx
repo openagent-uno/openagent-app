@@ -53,7 +53,7 @@ export default function WorkflowsScreen() {
   const connConfig = useConnection((s) => s.config);
   const {
     workflows, loaded, error, runs, runningId,
-    loadWorkflows, createWorkflow, deleteWorkflow, toggleWorkflow, runWorkflow, clearError,
+    loadWorkflows, createWorkflow, deleteWorkflow, toggleWorkflow, runWorkflow, stopWorkflow, clearError,
   } = useWorkflows();
 
   const [creating, setCreating] = useState(false);
@@ -237,6 +237,7 @@ export default function WorkflowsScreen() {
                   onHistory={() => openDetached(router, `workflows/runs/${wf.id}`)}
                   onRemove={() => { void handleRemove(wf); }}
                   onRun={() => runWorkflow(wf.id)}
+                  onStop={() => stopWorkflow(wf.id, runs[wf.id]?.id)}
                 />
               ))}
         </TileGridScreen>

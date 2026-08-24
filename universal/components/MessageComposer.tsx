@@ -11,9 +11,9 @@
  * native RN falls back to a ``<TextInput multiline>``.
  */
 
-import { useCallback, useEffect, useRef, useState, type Ref } from 'react';
+import { useCallback, useEffect, useRef, useState, type Ref, type ReactNode } from 'react';
 import Feather from '@expo/vector-icons/Feather';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Platform, Image } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Platform, Image } from 'react-native';
 import { colors, font, radius } from '../theme';
 
 export interface SlashCommand {
@@ -90,7 +90,18 @@ export interface MessageComposerProps {
   slashCommands?: SlashCommand[];
   /** LLM rows the composer offers in its model-picker dropdown. Omit
    *  to hide the picker entirely. */
-  modelOptions?: { id: string; label: string; provider?: string }[];
+  modelOptions?: {
+    id: string; label: string; provider?: string;
+    /** Right-aligned note about the account serving this model's provider —
+     *  "40% left", "limited · 12m", "quota not reported". Computed by the
+     *  screen, so the composer stays unaware of where accounts come from. */
+    accountHint?: string;
+    /** Tint for `accountHint`; omitted means muted. */
+    accountTone?: 'ok' | 'warn' | 'bad';
+  }[];
+  /** Rendered at the foot of the model menu — the agent switcher, so
+   *  "which model" and "whose account" are one gesture. */
+  menuFooter?: ReactNode;
   /** Currently-active model id (matches ``modelOptions[i].id``).
    *  ``undefined`` renders the picker as "Auto" — no pin, so the
    *  router leads the turn. */
@@ -132,6 +143,7 @@ export default function MessageComposer({
   onRecallNext,
   slashCommands,
   modelOptions,
+  menuFooter,
   activeModelId,
   onSelectModel,
   recording,
@@ -449,7 +461,10 @@ export default function MessageComposer({
                   />
                 </TouchableOpacity>
                 {modelMenuOpen && (
-                  <View style={styles.modelMenu}>
+                  <ScrollView
+                    style={styles.modelMenu}
+                    contentContainerStyle={styles.modelMenuContent}
+                  >
                     <TouchableOpacity
                       style={[styles.modelRow, !activeModelId && styles.modelRowActive]}
                       // @ts-ignore — web hover transition
@@ -485,9 +500,29 @@ export default function MessageComposer({
                             <Text style={styles.modelRowSub} numberOfLines={1}>{m.provider}</Text>
                           )}
                         </View>
+                        {m.accountHint ? (
+                          <Text
+                            style={[
+                              styles.modelRowHint,
+                              m.accountTone === 'bad' ? { color: colors.error }
+                                : m.accountTone === 'warn' ? { color: colors.warning }
+                                : m.accountTone === 'ok' ? { color: colors.success }
+                                : null,
+                            ]}
+                            numberOfLines={1}
+                          >
+                            {m.accountHint}
+                          </Text>
+                        ) : null}
                       </TouchableOpacity>
                     ))}
-                  </View>
+                    {menuFooter ? (
+                      <>
+                        <View style={styles.modelMenuRule} />
+                        {menuFooter}
+                      </>
+                    ) : null}
+                  </ScrollView>
                 )}
               </View>
             )}
@@ -669,15 +704,22 @@ const styles = StyleSheet.create({
   modelMenu: {
     position: 'absolute',
     bottom: 32, left: 0, minWidth: 220, maxWidth: 320,
-    backgroundColor: colors.surface,
+    // SOLID, not `colors.surface` (~72% opaque): this menu floats over the
+    // transcript, and at that opacity the page behind it read straight
+    // through the model names. A dropdown has to be legible against
+    // whatever happens to be underneath it.
+    backgroundColor: colors.panelBgSolid,
+    // An agent with a dozen models made this list taller than the window
+    // with no way to reach the bottom entries.
+    maxHeight: 320,
     borderRadius: radius.md,
     borderWidth: 1, borderColor: colors.border,
-    paddingVertical: 4,
     shadowColor: colors.shadowColor,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 1, shadowRadius: 12,
     zIndex: 50,
   },
+  modelMenuContent: { paddingVertical: 4 },
   modelRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingHorizontal: 10, paddingVertical: 6,
@@ -713,5 +755,10 @@ const styles = StyleSheet.create({
   kbd: {
     fontSize: 10, color: colors.textSecondary,
     fontFamily: font.mono, fontWeight: '500',
+  },
+  modelRowHint: { fontSize: 10, color: colors.textMuted, marginLeft: 8 },
+  modelMenuRule: {
+    height: 1, backgroundColor: colors.borderLight,
+    marginVertical: 4, marginHorizontal: 8,
   },
 });

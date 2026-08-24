@@ -14,7 +14,11 @@ import type {
   VaultWriteResult, VaultHistory, VaultGateReport,
   VaultCommitDetail, VaultRestoreResult, VaultResetResult,
   ChatMessage, Attachment, ToolInfo, MessageAuthor, CompactionInfo,
-  SessionContext,
+  SessionContext, SessionModelPin,
+  BudgetRule, BudgetUsage, CreateBudgetInput, UpdateBudgetInput,
+  LogEntry, QualityReport, GatewayCommandSpec,
+  SkillSummary, SkillDetail, SkillWriteResult, CreateSkillInput,
+  ProviderAccounts, ServingAccount,
   AgentEvent, CreateEventInput, UpdateEventInput, EventDelivery, EventTypeSpec,
 } from '../../common/types';
 
@@ -30,6 +34,29 @@ export function setBaseUrl(host: string, port: number) {
 // the user should see as an error rather than a permanently-disabled
 // button.
 const REQUEST_TIMEOUT_MS = 30_000;
+
+/** An API failure that still knows its HTTP status.
+ *
+ *  The status is what lets a caller tell "this agent is older than this
+ *  feature" (404/405 — the route does not exist) apart from a real fault.
+ *  A released app talks to gateways of several vintages, and rendering a
+ *  bare "API 405" at someone whose only problem is an un-upgraded server
+ *  is a support ticket we wrote ourselves. */
+export class ApiError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+/** True when the gateway simply has no such route — i.e. the agent predates
+ *  the feature. aiohttp answers an unknown path 404 and a known path with
+ *  the wrong method 405; both mean "this server can't do that yet". */
+export function isUnsupportedByAgent(e: unknown): boolean {
+  return e instanceof ApiError && (e.status === 404 || e.status === 405);
+}
 
 function withTimeout(init: RequestInit, label: string): RequestInit {
   if (typeof AbortController === 'undefined') return init;
@@ -51,7 +78,7 @@ async function get<T>(path: string): Promise<T> {
   const init = withTimeout({}, `GET ${path}`);
   try {
     const res = await fetch(`${baseUrl}${path}`, init);
-    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw new ApiError(res.status, `API ${res.status}: ${await res.text()}`);
     return res.json();
   } finally {
     clearTimer(init);
@@ -66,7 +93,7 @@ async function put<T>(path: string, body: object): Promise<T> {
   }, `PUT ${path}`);
   try {
     const res = await fetch(`${baseUrl}${path}`, init);
-    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw new ApiError(res.status, `API ${res.status}: ${await res.text()}`);
     return res.json();
   } finally {
     clearTimer(init);
@@ -81,7 +108,7 @@ async function post<T>(path: string, body: object = {}): Promise<T> {
   }, `POST ${path}`);
   try {
     const res = await fetch(`${baseUrl}${path}`, init);
-    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw new ApiError(res.status, `API ${res.status}: ${await res.text()}`);
     return res.json();
   } finally {
     clearTimer(init);
@@ -92,7 +119,7 @@ async function del(path: string): Promise<void> {
   const init = withTimeout({ method: 'DELETE' }, `DELETE ${path}`);
   try {
     const res = await fetch(`${baseUrl}${path}`, init);
-    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw new ApiError(res.status, `API ${res.status}: ${await res.text()}`);
   } finally {
     clearTimer(init);
   }
@@ -106,7 +133,7 @@ async function patch<T>(path: string, body: object): Promise<T> {
   }, `PATCH ${path}`);
   try {
     const res = await fetch(`${baseUrl}${path}`, init);
-    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw new ApiError(res.status, `API ${res.status}: ${await res.text()}`);
     return res.json();
   } finally {
     clearTimer(init);
@@ -164,7 +191,7 @@ export async function writeNote(path: string, content: string): Promise<VaultWri
     if (res.status === 422) {
       return (await res.json()) as VaultWriteResult;
     }
-    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw new ApiError(res.status, `API ${res.status}: ${await res.text()}`);
     return res.json();
   } finally {
     clearTimer(init);
@@ -691,7 +718,7 @@ export async function updateConfigSection(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw new ApiError(res.status, `API ${res.status}: ${await res.text()}`);
   return res.json();
 }
 
@@ -699,13 +726,13 @@ export async function updateConfigSection(
 
 export async function triggerUpdate(): Promise<{ updated: boolean; version?: string; old?: string; new?: string }> {
   const res = await fetch(`${baseUrl}/api/update`, { method: 'POST' });
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw new ApiError(res.status, `API ${res.status}: ${await res.text()}`);
   return res.json();
 }
 
 export async function triggerRestart(): Promise<{ ok: boolean }> {
   const res = await fetch(`${baseUrl}/api/restart`, { method: 'POST' });
-  if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+  if (!res.ok) throw new ApiError(res.status, `API ${res.status}: ${await res.text()}`);
   return res.json();
 }
 
@@ -1207,6 +1234,34 @@ export async function updateSessionMetadata(
   return patch(`/api/sessions/${encodeURIComponent(sessionId)}`, body);
 }
 
+// ── Per-session model pin (/api/sessions/{id}/model) ──
+//
+// The pin belongs to the SESSION, not to this device. A conversation
+// resumed from the CLI, another client, or a channel has to answer with
+// the model the user chose here — so the switcher writes through to the
+// server instead of keeping the choice in local state.
+
+/** Read the session's model pin. ``runtime_id: null`` means "no pin —
+ *  the router picks the entry model". */
+export async function getSessionModelPin(sessionId: string): Promise<SessionModelPin> {
+  return get<SessionModelPin>(`/api/sessions/${encodeURIComponent(sessionId)}/model`);
+}
+
+/** Pin the session to ``runtimeId``. The server rejects a model that is
+ *  unregistered (404) or disabled (400); both surface as a thrown Error
+ *  carrying the server's message. */
+export async function pinSessionModel(
+  sessionId: string,
+  runtimeId: string,
+): Promise<{ session_id: string; runtime_id: string; pinned: boolean }> {
+  return put(`/api/sessions/${encodeURIComponent(sessionId)}/model`, { runtime_id: runtimeId });
+}
+
+/** Drop the pin — the session goes back to normal entry-model resolution. */
+export async function unpinSessionModel(sessionId: string): Promise<void> {
+  await del(`/api/sessions/${encodeURIComponent(sessionId)}/model`);
+}
+
 // ── System telemetry ──
 
 export async function getSystemSnapshot(): Promise<SystemSnapshot> {
@@ -1297,7 +1352,7 @@ async function delJson<T>(path: string): Promise<T> {
   const init = withTimeout({ method: 'DELETE' }, `DELETE ${path}`);
   try {
     const res = await fetch(`${baseUrl}${path}`, init);
-    if (!res.ok) throw new Error(`API ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw new ApiError(res.status, `API ${res.status}: ${await res.text()}`);
     return res.json();
   } finally {
     clearTimer(init);
@@ -1326,4 +1381,158 @@ export async function patchNetworkAgent(
 
 export async function deleteNetworkAgent(handle: string): Promise<{ deleted: boolean }> {
   return delJson(`/api/network/agents/${encodeURIComponent(handle)}`);
+}
+
+// ── Budgets (/api/budgets) ──
+//
+// The list view reads `/usage`, not `/api/budgets`: it returns every rule
+// PLUS its live meter, so one call feeds both the rows and the gauges.
+// Writes nudge the live BudgetGuard server-side, so a new cap takes effect
+// on the next turn rather than one TTL later.
+
+/** Every budget rule with its current spend against the limit. */
+export async function listBudgetUsage(enabledOnly = false): Promise<BudgetUsage[]> {
+  const qs = enabledOnly ? '?enabled_only=1' : '';
+  const data = await get<{ usage: BudgetUsage[] }>(`/api/budgets/usage${qs}`);
+  return data.usage;
+}
+
+/** Create a cap. 409 if one already exists for the same
+ *  scope/metric/window — that quadruple is the rule's identity. */
+export async function createBudget(input: CreateBudgetInput): Promise<BudgetRule> {
+  return post<BudgetRule>('/api/budgets', input);
+}
+
+export async function updateBudget(id: string, patchBody: UpdateBudgetInput): Promise<BudgetRule> {
+  return put<BudgetRule>(`/api/budgets/${encodeURIComponent(id)}`, patchBody);
+}
+
+export async function deleteBudget(id: string): Promise<void> {
+  await del(`/api/budgets/${encodeURIComponent(id)}`);
+}
+
+// ── Event log (/api/logs) ──
+//
+// The unified log every part of the agent writes to: turns, model calls,
+// MCP invocations, delegations, task fires, workflow steps, errors. The
+// server reads the file backwards, so a large `lines` is cheap unless an
+// `event` prefix forces it to scan far back.
+
+/** Last `lines` entries, oldest-first, optionally filtered by event prefix
+ *  (`tool.` matches `tool.error`, `tool.call`, …). */
+export async function getLogs(lines = 200, eventPrefix?: string): Promise<LogEntry[]> {
+  const params = new URLSearchParams({ lines: String(lines) });
+  if (eventPrefix) params.set('event', eventPrefix);
+  return get<LogEntry[]>(`/api/logs?${params.toString()}`);
+}
+
+/** Truncate `events.jsonl`. Destructive and not undoable — the agent
+ *  reads this log to diagnose itself, so confirm before calling. */
+export async function clearLogs(): Promise<void> {
+  await del('/api/logs');
+}
+
+// ── Quality report (/api/quality) ──
+
+/** Quality / cost / recall over the last `windowSeconds` (default 24h,
+ *  server-capped at 90 days). One reverse scan of the event log. */
+export async function getQualityReport(windowSeconds?: number): Promise<QualityReport> {
+  const qs = windowSeconds ? `?window=${Math.round(windowSeconds)}` : '';
+  return get<QualityReport>(`/api/quality${qs}`);
+}
+
+// Hard-stop in-flight run(s) of a workflow. The mirror of
+// ``stopScheduledTask`` — the server deliberately gives the two the same
+// status codes and envelope so the app can treat them as one gesture —
+// with ``runId`` added, because a workflow may have several concurrent
+// runs and a run screen stops only the one it is showing.
+//
+// Stopping a run does NOT stop the workflow from firing again: that is
+// ``enabled: false`` or removing its trigger-schedule block. A no-op
+// (the run already finished) returns count 0, not an error.
+export async function stopWorkflow(
+  id: string,
+  opts: { runId?: string; wait?: boolean; timeoutS?: number } = {},
+): Promise<{ workflow_id: string; name: string; stopped: string[]; count: number; runs?: unknown[] }> {
+  return post(`/api/workflows/${encodeURIComponent(id)}/stop`, {
+    run_id: opts.runId,
+    wait: opts.wait ?? false,
+    timeout_s: opts.timeoutS,
+  });
+}
+
+// ── Slash-command registry (/api/commands) ──
+
+/** The gateway's command specs. The chat composer merges these with its
+ *  own local handlers instead of carrying a hardcoded list, so a command
+ *  added server-side appears without an app release. */
+export async function getGatewayCommands(): Promise<GatewayCommandSpec[]> {
+  const data = await get<{ commands: GatewayCommandSpec[] }>('/api/commands');
+  return data.commands;
+}
+
+// Reconcile the vault's derived index with what is on disk. The index is a
+// rebuildable cache over the Markdown — never a second source of truth — so
+// this is always safe: delete it and the next sync reconstructs it, and the
+// agent forgets nothing. ``force`` re-reads every note instead of trusting
+// mtimes, which is what you want after an out-of-band edit (a git pull, a
+// file written straight into the vault folder).
+export async function syncVaultIndex(force = false): Promise<{
+  added: number; updated: number; deleted: number; unchanged: number;
+  total: number; links: number; broken: number; elapsed_ms: number;
+}> {
+  return post(`/api/vault/index/sync?force=${force ? 'true' : 'false'}`);
+}
+
+// ── Skills (/api/skills) ──
+//
+// Until the gateway grew this surface, the skill library was reachable only
+// through the agent's own MCP tools — so reading what the agent had learned
+// meant asking the agent. §10 makes the gateway the only public surface;
+// this is the door.
+
+/** Skill metadata. Archived skills are excluded unless asked for, matching
+ *  what the prompt index does — the default view is what the agent can
+ *  actually reach. */
+export async function listSkills(includeArchived = false): Promise<SkillSummary[]> {
+  const qs = includeArchived ? '?include_archived=1' : '';
+  const data = await get<{ skills: SkillSummary[] }>(`/api/skills${qs}`);
+  return data.skills;
+}
+
+/** One skill's full body plus any files bundled beside it. */
+export async function getSkill(name: string): Promise<SkillDetail> {
+  return get<SkillDetail>(`/api/skills/${encodeURIComponent(name)}`);
+}
+
+export async function createSkill(input: CreateSkillInput): Promise<SkillWriteResult> {
+  return post<SkillWriteResult>('/api/skills', input);
+}
+
+export async function updateSkill(
+  name: string,
+  input: { description?: string; category?: string; body?: string },
+): Promise<SkillWriteResult> {
+  return put<SkillWriteResult>(`/api/skills/${encodeURIComponent(name)}`, input);
+}
+
+/** Retire in place: the file stays on disk and drops out of the prompt
+ *  index. Reversible, unlike `deleteSkill`. */
+export async function archiveSkill(name: string): Promise<SkillWriteResult> {
+  return post<SkillWriteResult>(`/api/skills/${encodeURIComponent(name)}/archive`, {});
+}
+
+/** Remove the folder from disk. Irreversible — offer `archiveSkill` first. */
+export async function deleteSkill(name: string): Promise<void> {
+  await del(`/api/skills/${encodeURIComponent(name)}`);
+}
+
+// ── Serving accounts (/api/accounts) ──
+
+/** The accounts serving each enabled provider, with quota where the
+ *  upstream reports one. Probes run server-side under a short timeout, so a
+ *  dead proxy comes back as `reachable: false` rather than stalling. */
+export async function listServingAccounts(): Promise<ProviderAccounts[]> {
+  const data = await get<{ providers: ProviderAccounts[] }>('/api/accounts');
+  return data.providers;
 }

@@ -20,6 +20,9 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import Button from '../../components/Button';
 import Card from '../../components/Card';
 import MembersPanel from '../../components/MembersPanel';
+import BudgetsPanel from '../../components/BudgetsPanel';
+import QualityPanel from '../../components/QualityPanel';
+import AccountsPanel from '../../components/AccountsPanel';
 import SectionTabs from '../../components/SectionTabs';
 import { useHeaderInset } from '../../components/screenHeader';
 import TabStrip from '../../components/TabStrip';
@@ -36,7 +39,10 @@ type CategoryId =
   | 'controls'
   | 'connection'
   | 'models'
-  | 'costs';
+  | 'costs'
+  | 'budgets'
+  | 'quality'
+  | 'accounts';
 
 interface Category {
   id: CategoryId;
@@ -50,6 +56,9 @@ const CATEGORIES: Category[] = [
   { id: 'appearance', label: 'Appearance', icon: 'sun', description: 'Light or dark theme' },
   { id: 'models', label: 'Models & Providers', icon: 'cpu', description: 'LLMs and provider credentials' },
   { id: 'costs', label: 'Costs', icon: 'bar-chart-2', description: 'Daily spend breakdown' },
+  { id: 'budgets', label: 'Budgets', icon: 'shield', description: 'Spend caps and live meters' },
+  { id: 'quality', label: 'Quality', icon: 'check-circle', description: 'Judge verdicts, cost and recall' },
+  { id: 'accounts', label: 'Accounts', icon: 'key', description: 'Subscriptions serving each provider' },
   { id: 'members', label: 'Members', icon: 'users', description: 'Users, agents, invitations' },
   { id: 'voice', label: 'Voice', icon: 'mic', description: 'VAD sensitivity for the Voice tab' },
   { id: 'channels', label: 'Channels', icon: 'message-square', description: 'Gateway, Telegram, Discord, WhatsApp' },
@@ -624,6 +633,9 @@ export default function SettingsScreen() {
       // never reach this switch.
       case 'models': return null;
       case 'costs': return null;
+      case 'budgets': return null;
+      case 'quality': return null;
+      case 'accounts': return null;
     }
   };
 
@@ -642,6 +654,18 @@ export default function SettingsScreen() {
         // Costs — the Model screen's daily-spend breakdown, promoted to its
         // own top-level Settings pill.
         <ModelScreen view="costs" embedded />
+      ) : activeCategory === 'budgets' ? (
+        // Budgets — spend caps + live meters. Owns its own scroll area,
+        // like the two embedded Model views above it.
+        <BudgetsPanel />
+      ) : activeCategory === 'quality' ? (
+        // Quality — the correctness meter next to the spend meters. Owns
+        // its own scroll area like the panels above it.
+        <QualityPanel />
+      ) : activeCategory === 'accounts' ? (
+        // Accounts — which subscription serves each provider and how much of
+        // its window is left. Owns its own scroll area like the panels above.
+        <AccountsPanel />
       ) : (
         <ScrollView style={styles.container} contentContainerStyle={styles.content}>
           {renderCategory()}

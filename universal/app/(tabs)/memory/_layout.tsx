@@ -35,6 +35,7 @@ export default function MemoryStackLayout() {
       {/* Sub-screens use these screen-name titles (no per-note names). */}
       <Stack.Screen name="[...path]" options={{ title: 'Memory file' }} />
       <Stack.Screen name="history" options={{ title: 'Memory history' }} />
+      <Stack.Screen name="health" options={{ title: 'Memory health' }} />
       <Stack.Screen name="history/[...path]" options={{ title: 'Memory file history' }} />
     </Stack>
   );
