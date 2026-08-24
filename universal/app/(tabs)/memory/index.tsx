@@ -81,6 +81,7 @@ export default function MemoryGraphScreen() {
   };
 
   const openHistory = useCallback(() => router.push('/(tabs)/memory/history'), [router]);
+  const openHealth = useCallback(() => router.push('/(tabs)/memory/health'), [router]);
   const openSearch = useCallback(() => setSearchVisible(true), []);
   const closeSearch = useCallback(() => {
     clearSearch();
@@ -94,6 +95,7 @@ export default function MemoryGraphScreen() {
       title: 'Memory',
       headerRight: () => (
         <HeaderRight>
+          <HeaderIconButton icon="activity" accessibilityLabel="Vault health" onPress={openHealth} />
           <HeaderIconButton icon="clock" accessibilityLabel="History" onPress={openHistory} />
           <HeaderIconButton
             icon="search"
@@ -104,7 +106,7 @@ export default function MemoryGraphScreen() {
         </HeaderRight>
       ),
     });
-  }, [navigation, openHistory, openSearch, searchVisible]);
+  }, [navigation, openHistory, openHealth, openSearch, searchVisible]);
 
   return (
     <View style={styles.mainArea}>
