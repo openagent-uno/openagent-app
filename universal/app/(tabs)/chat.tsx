@@ -1394,10 +1394,13 @@ export default function ChatScreen() {
             </View>
           </View>
         )}
-        {/* Always-visible context-window gauge, pinned top-right. Bound to
-            the active session so it also serves sub-agent / scheduled-firing /
-            workflow-AI-node sessions opened on this same screen. */}
-        {activeSession ? (
+        {/* Context-window gauge, pinned top-right. Bound to the active session
+            so it also serves sub-agent / scheduled-firing / workflow-AI-node
+            sessions opened on this same screen. Honours the header menu's
+            show/hide: the flag was read (to label the menu item) and persisted,
+            but never consulted here, so "Hide context panel" changed the menu
+            wording and nothing else. */}
+        {activeSession && contextPanelVisible ? (
           <ContextPanel context={activeSession.contextUsage} topInset={headerInset} />
         ) : null}
         {activeSession ? (

@@ -681,7 +681,12 @@ const GENERAL_VERBS: { test: RegExp; title: string; icon: string }[] = [
   { test: /(write_file|^write$|str_replace|edit_file|^edit$|apply_patch|create_file)/, title: 'Editing file', icon: 'edit-3' },
   { test: /(list_dir|list_files|^ls$|glob|find_files)/, title: 'Listing files', icon: 'folder' },
   { test: /(grep|ripgrep|search_code|search_files)/, title: 'Searching files', icon: 'search' },
-  { test: /(send_file|send_message|messaging|notify|email)/, title: 'Sending message', icon: 'send' },
+  // Attaching a file is its own act, and the chip is the only place the user
+  // sees it happen: labelling ``send_file_to_user`` "Sending message" read as
+  // if the agent had written to someone, right as it delivered a picture into
+  // the transcript. Keep it ahead of the generic messaging rule below.
+  { test: /send_file/, title: 'Attaching file', icon: 'paperclip' },
+  { test: /(send_message|messaging|notify|email)/, title: 'Sending message', icon: 'send' },
   { test: /(image|media|generate|render|draw)/, title: 'Generating media', icon: 'image' },
 ];
 
