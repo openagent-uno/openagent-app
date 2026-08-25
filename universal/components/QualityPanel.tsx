@@ -14,7 +14,6 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { View, Text, ScrollView, StyleSheet, Pressable } from 'react-native';
-import { Feather } from '@expo/vector-icons';
 import { colors, font, radius } from '../theme';
 import Card from './Card';
 import Button from './Button';

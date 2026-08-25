@@ -37,7 +37,7 @@ export default function GlassPanel({
   padding,
   solid = false,
   style,
-  noHover = false,
+  noHover: _noHover = false,
 }: Props) {
   const pad = padding ?? (compact ? s.sm : s.lg);
 

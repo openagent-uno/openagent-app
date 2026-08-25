@@ -6,7 +6,6 @@
 import Feather from '@expo/vector-icons/Feather';
 import { Platform, View, Pressable, StyleSheet } from 'react-native';
 import { useState, useEffect } from 'react';
-import { colors } from '../theme';
 
 function desktop(): any {
   if (typeof window === 'undefined') return undefined;

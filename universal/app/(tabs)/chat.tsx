@@ -16,7 +16,6 @@ import {
   View, Text, TouchableOpacity, ScrollView, StyleSheet, Platform, Image,
 } from 'react-native';
 
-const logoIcon = require('../../assets/openagent-icon.png');
 import type { Attachment } from '../../../common/types';
 import { isHiddenChildSession, runRoutePath, type RunLaunchTarget, type MemoryTarget } from '../../../common/types';
 import { useConnection } from '../../stores/connection';
@@ -43,6 +42,7 @@ import {
   getSessionModelPin, pinSessionModel, unpinSessionModel, isAgentUnreachable,
   getGatewayCommands, listServingAccounts,
 } from '../../services/api';
+import { modelEffort, modelFamily } from '../../../common/types';
 import type { ModelEntry, GatewayCommandSpec, ProviderAccounts } from '../../../common/types';
 import AgentSwitcher from '../../components/AgentSwitcher';
 import { formatDuration } from '../../components/AccountsPanel';
@@ -58,7 +58,6 @@ const AGENT_WIDE_COMMANDS = new Set(['help', 'usage', 'update', 'restart', 'stat
 // get the old fallback behaviour rather than a broken notification.
 const NOTIFICATION_ICON: string | undefined = (() => {
   try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
     const src = Image.resolveAssetSource(require('../../assets/app-icon.png'));
     return src?.uri;
   } catch {
@@ -828,7 +827,7 @@ export default function ChatScreen() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${ses.title.replace(/[^a-z0-9-_\.\s]/gi, '_')}.md`;
+    a.download = `${ses.title.replace(/[^a-z0-9-_.\s]/gi, '_')}.md`;
     a.style.display = 'none';
     document.body.appendChild(a);
     a.click();
@@ -1381,6 +1380,10 @@ export default function ChatScreen() {
         id: m.runtime_id,
         label: m.display_name || m.model || m.runtime_id,
         provider: m.provider_name,
+        // Which subscription pays, and how hard it thinks — the two
+        // questions the flat list used to ask the reader to untangle.
+        family: modelFamily(m),
+        effort: modelEffort(m),
         accountHint: h?.hint,
         accountTone: h?.tone,
       };

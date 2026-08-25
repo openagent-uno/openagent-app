@@ -110,7 +110,6 @@ export default function AgentSwitcher({ variant }: { variant: Variant }) {
   // Close the sheet once a switch / join lands.
   useEffect(() => {
     if (attempted && isConnected && !isConnecting) close();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attempted, isConnected, isConnecting]);
 
   // Decode pasted tickets for a friendly "joining X as Y" preview and to

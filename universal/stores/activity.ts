@@ -94,7 +94,7 @@ async function mapLimit<T, R>(
 
 let inFlight: Promise<void> | null = null;
 
-export const useActivity = create<ActivityState>((set, get) => ({
+export const useActivity = create<ActivityState>((set, _get) => ({
   workflowRuns: [],
   taskRuns: [],
   eventRuns: [],

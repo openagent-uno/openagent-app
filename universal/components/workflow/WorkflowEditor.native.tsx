@@ -500,7 +500,7 @@ function nextEdgeId(existing: WorkflowEdge[]): string {
 }
 
 function defaultConfigFor(type: BlockType): Record<string, unknown> {
-  const meta = NODE_META[type];
+  const _meta = NODE_META[type];
   switch (type) {
     case 'trigger-schedule':
       return { cron_expression: '' };

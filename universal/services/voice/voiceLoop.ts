@@ -211,7 +211,6 @@ export class VoiceLoop {
         // AudioWorklet attach failed (CSP, permissions, etc.) — fall
         // back to MediaRecorder. Surface as an error log but keep the
         // mic running; voice mode degrades gracefully.
-        // eslint-disable-next-line no-console
         console.warn('[voice] PCM stream attach failed, falling back:', err);
         this.pcm = null;
       }

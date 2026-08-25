@@ -3,7 +3,7 @@
  */
 
 import type {
-  VaultNote, InFileMatch, InFileSearchResult,
+  VaultNote, InFileSearchResult,
   GraphData, AgentConfig, ProviderConfig, ModelsResponse,
   UsageData, ModelCatalogEntry, DailyUsageEntry, ScheduledTask,
   CreateScheduledTaskInput, UpdateScheduledTaskInput, TaskRun, MCPEntry,
@@ -18,8 +18,7 @@ import type {
   BudgetRule, BudgetUsage, CreateBudgetInput, UpdateBudgetInput,
   LogEntry, QualityReport, GatewayCommandSpec,
   SkillSummary, SkillDetail, SkillWriteResult, CreateSkillInput,
-  ProviderAccounts, ServingAccount,
-  AgentEvent, CreateEventInput, UpdateEventInput, EventDelivery, EventTypeSpec,
+  ProviderAccounts, AgentEvent, CreateEventInput, UpdateEventInput, EventDelivery, EventTypeSpec,
 } from '../../common/types';
 
 let baseUrl = '';

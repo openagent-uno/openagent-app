@@ -17,7 +17,7 @@ interface ConfigState {
   setConfig: (config: AgentConfig) => void;
 }
 
-export const useConfig = create<ConfigState>((set, get) => ({
+export const useConfig = create<ConfigState>((set, _get) => ({
   config: null,
   loading: false,
   error: null,

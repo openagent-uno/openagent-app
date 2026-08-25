@@ -27,7 +27,7 @@ import {
 } from '../../../services/api';
 import { goBack } from '../../../services/windows';
 import type { MCPEntry } from '../../../../common/types';
-import { colors, font, radius, tracking } from '../../../theme';
+import { colors, font, tracking } from '../../../theme';
 import Button from '../../../components/Button';
 import { useConfirm } from '../../../components/ConfirmDialog';
 import { HeaderRight, HeaderIconButton, useHeaderInset } from '../../../components/screenHeader';

@@ -1,6 +1,6 @@
 import { Stack, useUnstableGlobalHref } from 'expo-router';
 import { useEffect, useRef } from 'react';
-import { Animated, View, StyleSheet, Platform } from 'react-native';
+import { Animated, StyleSheet } from 'react-native';
 import { ThemeProvider, type Theme } from '@react-navigation/native';
 import { useConnection, directedAccountId, rememberDirectedAccount } from '../stores/connection';
 import { useChat } from '../stores/chat';

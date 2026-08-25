@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { colors, font, tracking } from '../../theme';
+import { colors, font } from '../../theme';
 
 interface Props {
   /** Big or small variant. Default 'lg'. */
