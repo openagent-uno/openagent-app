@@ -8,7 +8,7 @@ set -euo pipefail
 #   ./test.sh               Run all checks
 #   ./test.sh lint          ESLint only
 #   ./test.sh types         TypeScript type check only
-#   ./test.sh unit          Jest unit tests only
+#   ./test.sh unit          Unit tests only (node --test)
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TARGET="${1:-all}"
@@ -41,9 +41,23 @@ run_types() {
 }
 
 run_unit() {
-    echo "🧪 Jest..."
-    cd "$SCRIPT_DIR/universal"
-    npx jest --passWithNoTests || FAILURES=$((FAILURES + 1))
+    # Qui c'era `npx jest --passWithNoTests` lanciato da universal/, dove non
+    # esiste nemmeno un test — e jest non e' una dipendenza del repo. Quindi:
+    # scaricava jest al volo, non trovava niente, e diceva verde. Intanto i sei
+    # test veri (il pool delle connessioni, i certificati, SRP, i ticket) stanno
+    # in desktop/ e NON LI HA MAI ESEGUITI NESSUNO. Un gate che passa sempre e
+    # una suite che non gira mai sono lo stesso guasto visto dai due lati.
+    #
+    # Adesso: il runner incorporato di node, zero dipendenze, sui test che ci
+    # sono davvero. --experimental-strip-types serve a importare i sorgenti
+    # TypeScript condivisi (common/) senza un passo di build.
+    echo "🧪 node --test..."
+    cd "$SCRIPT_DIR/desktop"
+    node --test src/network/__tests__/*.test.mjs || FAILURES=$((FAILURES + 1))
+
+    cd "$SCRIPT_DIR"
+    node --experimental-strip-types --test common/__tests__/*.test.mjs \
+        || FAILURES=$((FAILURES + 1))
     echo ""
 }
 
