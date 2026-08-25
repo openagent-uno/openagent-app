@@ -193,7 +193,14 @@ export default function AgentSwitcher({ variant }: { variant: Variant }) {
     if (ok) void removeAccount(id);
   };
 
-  const statusColor = isConnected ? colors.success : isReconnecting ? colors.warning : colors.textMuted;
+  // Reconnecting wins over connected. The store deliberately keeps
+  // ``isConnected`` latched through a drop so the composer stays usable and
+  // typed messages queue for the reattach — but a green dot next to the
+  // sidebar's "Reconnecting…" reads as a contradiction, and the dot is the
+  // thing people glance at to answer "is it working right now?".
+  const statusColor = isReconnecting
+    ? colors.warning
+    : isConnected ? colors.success : colors.textMuted;
 
   return (
     <>

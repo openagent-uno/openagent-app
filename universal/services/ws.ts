@@ -41,8 +41,22 @@ export class OpenAgentWS {
   private static MAX_PRE_AUTH_RECONNECT = 3;
   /** Post-auth reconnects get more budget than pre-auth (the session was
    *  already live), but not unlimited — a dead loopback must eventually
-   *  surface so the store can restart it rather than looping forever. */
-  private static MAX_POST_AUTH_RECONNECT = 5;
+   *  surface so the store can restart it rather than looping forever.
+   *
+   *  The budget has to outlast the commonest reason a live session drops:
+   *  the agent restarting. An auto-update or a deploy takes it away for a
+   *  minute or more (MCP servers, indices, model catalogue), and giving up
+   *  inside that window would end every routine restart with a password
+   *  prompt — a worse outcome than the stuck spinner this cap exists to
+   *  prevent. Twelve attempts on the backoff below spans ~3 minutes. */
+  private static MAX_POST_AUTH_RECONNECT = 12;
+
+  /** Retry delay for attempt ``n`` (0-based): quick at first, because most
+   *  drops are a blip, then easing off so a long outage isn't hammered. */
+  private static backoffMs(attempt: number): number {
+    const ladder = [3_000, 3_000, 5_000, 8_000, 13_000, 21_000];
+    return ladder[Math.min(attempt, ladder.length - 1)] ?? 30_000;
+  }
   private _transport: any = null; // IpcWebSocket in Electron child windows
 
   constructor(url: string, token?: string) {
@@ -96,7 +110,6 @@ export class OpenAgentWS {
     this.ws.onclose = (event) => {
       console.log(`[WS] closed: code=${event.code} reason=${event.reason}`);
       this.openedSessions.clear();
-      const wasAuthed = this.authed;
       this.authed = false;
 
       // Pre-auth drop on the first connect attempt → surface to the
@@ -123,15 +136,26 @@ export class OpenAgentWS {
       // loopback (iroh transport gone while the proxy port is still
       // bound) would otherwise loop forever: TCP connect to localhost
       // succeeds, auth times out after 15 s, onclose fires again.
+      //
+      // The retry must NOT be conditional on this particular socket having
+      // reached ``auth_ok``. A dead tunnel's signature is precisely the
+      // opposite: the socket opens (the proxy port is still bound), the auth
+      // frame goes nowhere, and the close arrives un-authed. Gating on that
+      // meant the very first drop scheduled no retry AND counted no attempt,
+      // so ``retries_exhausted`` — the state that stops the dead loopback and
+      // asks the user to reconnect — was unreachable. The session stayed on
+      // "Reconnecting…" forever while every REST call failed. ``disconnect()``
+      // is what stops the loop deliberately, via ``shouldReconnect``.
       const postAuthGiveUp = this.reconnectAttempts >= OpenAgentWS.MAX_POST_AUTH_RECONNECT;
       this.notifyClose({
         reason: postAuthGiveUp ? 'retries_exhausted' : 'post_auth',
         code: event.code,
         detail: event.reason || undefined,
       });
-      if (this.shouldReconnect && wasAuthed && !postAuthGiveUp) {
+      if (this.shouldReconnect && !postAuthGiveUp) {
+        const delay = OpenAgentWS.backoffMs(this.reconnectAttempts);
         this.reconnectAttempts += 1;
-        this.reconnectTimer = setTimeout(() => this.connect(), 3000);
+        this.reconnectTimer = setTimeout(() => this.connect(), delay);
       }
     };
 

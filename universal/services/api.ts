@@ -58,6 +58,23 @@ export function isUnsupportedByAgent(e: unknown): boolean {
   return e instanceof ApiError && (e.status === 404 || e.status === 405);
 }
 
+/** True when the request never reached the agent at all: the loopback tunnel
+ *  is down, the sidecar port is stale, the agent is offline.
+ *
+ *  An `ApiError` means the opposite — the agent answered, it just said no —
+ *  so it is never a transport failure. Everything else arrives as a bare
+ *  `TypeError: Failed to fetch` (browser/Electron), `Network request failed`
+ *  (React Native), or our own 30 s abort, which on a loopback call means the
+ *  same thing. Telling the two apart is what lets a screen say "your agent is
+ *  offline" instead of quoting a transport error at someone who cannot act on
+ *  it. */
+export function isAgentUnreachable(e: unknown): boolean {
+  if (e instanceof ApiError) return false;
+  const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
+  return /failed to fetch|network request failed|networkerror|load failed|aborterror|timed out|econnrefused|econnreset/i
+    .test(msg);
+}
+
 function withTimeout(init: RequestInit, label: string): RequestInit {
   if (typeof AbortController === 'undefined') return init;
   const ctrl = new AbortController();

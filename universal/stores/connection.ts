@@ -484,6 +484,12 @@ export const useConnection = create<ConnectionState>((set, get) => ({
  *  UI in "Connecting…" forever. */
 const WS_AUTH_TIMEOUT_MS = 15_000;
 
+/** How long after ``auth_ok`` to wait before deciding that a turn this
+ *  client still shows as running is actually gone. The gateway replays its
+ *  ``live_state`` snapshots immediately after auth, so this only has to
+ *  cover their delivery, not a model's thinking time. */
+const STALE_TURN_GRACE_MS = 8_000;
+
 /** Wire up the WebSocket once we have a sidecar port.
  *
  * ``opts.persistActive`` (default true) controls whether an ``auth_ok``
@@ -536,6 +542,13 @@ function _openWebsocket(
   const isCurrent = () => get().ws === ws;
 
   ws.onMessage((msg) => {
+    // Any frame at all means the agent is talking to us, so a latched
+    // "Reconnecting…" is a lie by then. ``auth_ok`` clears the flag too, but
+    // it is not the only way back: a child window is handed a *synthesized*
+    // auth_ok through the IPC relay, and a reconnect the store did not drive
+    // itself can start delivering frames without one — leaving the banner up
+    // over a working session. Traffic is the ground truth; use it.
+    if (isCurrent() && get().isReconnecting) set({ isReconnecting: false });
     if (msg.type === 'auth_ok') {
       finalize();
       if (!isCurrent()) return;
@@ -591,16 +604,37 @@ function _openWebsocket(
       // Hydrate the chat sidebar with every session the server
       // already knows about for this device.
       const chat = useChat.getState();
-      if (!chat.sessionsHydrated) {
-        fetchSessions()
-          .then((entries) => {
-            chat.hydrateFromServer(entries);
-            chat.markHydrated();
-          })
-          .catch(() => {
-            chat.markHydrated();
-          });
-      }
+      // Re-fetch on EVERY auth_ok, not only the first. A reconnect is
+      // exactly when the client's picture of "what is still running" can be
+      // wrong: the agent may have restarted (auto-update, deploy, crash)
+      // while a turn was in flight, in which case that turn is gone and
+      // nobody will ever send its terminal frame. The gateway replays a
+      // ``live_state`` snapshot for turns it still knows about, but a turn
+      // whose replay died with the process gets no frame at all — and the
+      // session sat on "Reasoning…" forever, with the composer's Stop the
+      // only way out. ``hydrateFromServer`` already settles anything the
+      // server reports as not live; it just was never asked again.
+      const attachedAt = Date.now();
+      fetchSessions()
+        .then((entries) => {
+          chat.hydrateFromServer(entries);
+          chat.markHydrated();
+        })
+        .catch(() => {
+          chat.markHydrated();
+        });
+      // A session the server never persisted (its turn died before the run
+      // was written) is in no listing at all, so hydration cannot settle it.
+      // The gateway's reattach replay is the signal instead: it lands right
+      // after auth_ok, so anything still marked as running and silent past
+      // this grace window is not running anywhere. The window is generous on
+      // purpose — being slow to admit a turn is dead costs a few seconds of
+      // spinner, while being hasty would tell the user their live turn had
+      // been interrupted while its answer is still streaming in.
+      setTimeout(() => {
+        if (!isCurrent() || !get().isConnected) return;
+        useChat.getState().settleStaleTurns(attachedAt);
+      }, STALE_TURN_GRACE_MS);
     } else if (msg.type === 'auth_error') {
       finalize();
       if (!isCurrent()) return;
@@ -625,35 +659,40 @@ function _openWebsocket(
       set({ isReconnecting: true });
       return;
     }
+    // Retries exhausted → the loopback's iroh transport is likely dead while
+    // the proxy port is still bound (common after macOS sleep, a network
+    // change, or an agent that never came back). Handled BEFORE the
+    // ``attemptDone`` guard on purpose: ``finalize()`` runs on the first
+    // ``auth_ok``, so for a session that HAS authenticated — the only kind
+    // that can reach the post-auth budget — that guard used to swallow this
+    // branch entirely. The tunnel was declared dead by the socket, nobody
+    // was told, and the session stayed on "Reconnecting…" with no error and
+    // no way back except relaunching the app.
+    if (info.reason === 'retries_exhausted') {
+      finalize();
+      if (!isCurrent()) return;
+      const acctId = get().activeAccountId;
+      const account = acctId ? get().accounts.find((a) => a.id === acctId) : undefined;
+      if (acctId && account) {
+        // We can't restart the loopback without the password, but we
+        // can at least stop the dead one and surface a clear error
+        // with a reconnect prompt instead of "Reconnecting…" forever.
+        try { await desktop()?.stopLoopback({ accountId: acctId }); } catch { /* ignore */ }
+        set({
+          isConnected: false,
+          isConnecting: false,
+          isReconnecting: false,
+          error: 'Connection lost. The secure tunnel to your agent stopped responding — this can happen after your Mac wakes from sleep, changes networks, or when the agent restarts and does not come back. Enter your password to reconnect.',
+        });
+        ws.disconnect();
+        return;
+      }
+    }
     if (attemptDone) return;
     if (info.reason === 'pre_auth' || info.reason === 'retries_exhausted') {
       finalize();
       if (!isCurrent()) return;
       const detail = info.detail || `WebSocket closed before authentication (code=${info.code})`;
-
-      // Post-auth retries exhausted → the loopback's iroh transport is
-      // likely dead while the proxy port is still bound (common after
-      // macOS sleep or network change). Try restarting the loopback.
-      if (info.reason === 'retries_exhausted') {
-        const acctId = get().activeAccountId;
-        if (acctId) {
-          const account = get().accounts.find((a) => a.id === acctId);
-          if (account) {
-            // We can't restart the loopback without the password, but we
-            // can at least stop the dead one and surface a clear error
-            // with a reconnect prompt instead of "Reconnecting…" forever.
-            try { await desktop()?.stopLoopback({ accountId: acctId }); } catch { /* ignore */ }
-            set({
-              isConnected: false,
-              isConnecting: false,
-              isReconnecting: false,
-              error: 'Connection lost. The secure tunnel to your agent stopped responding — this can happen after your Mac wakes from sleep or changes networks. Enter your password to reconnect.',
-            });
-            ws.disconnect();
-            return;
-          }
-        }
-      }
 
       set({
         isConnected: false,

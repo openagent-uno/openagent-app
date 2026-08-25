@@ -40,7 +40,7 @@ import { Skeleton, SkeletonLines } from '../../components/Skeleton';
 import { useConfirm } from '../../components/ConfirmDialog';
 import {
   uploadFile, guessMimeType, listDbModels,
-  getSessionModelPin, pinSessionModel, unpinSessionModel,
+  getSessionModelPin, pinSessionModel, unpinSessionModel, isAgentUnreachable,
   getGatewayCommands, listServingAccounts,
 } from '../../services/api';
 import type { ModelEntry, GatewayCommandSpec, ProviderAccounts } from '../../../common/types';
@@ -744,7 +744,12 @@ export default function ChatScreen() {
         if (modelId) await pinSessionModel(sessionId, modelId);
         else await unpinSessionModel(sessionId);
       } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
+        // A pin that never reached the agent is not a model problem, and
+        // "Failed to fetch" is not something a user can act on. Name the
+        // actual condition — the connection — so the next move is obvious.
+        const msg = isAgentUnreachable(e)
+          ? 'your agent is offline. Reconnect, then pick the model again.'
+          : e instanceof Error ? e.message : String(e);
         console.error('[chat] failed to persist model pin:', msg);
         setLlmPin(sessionId, previous);
         setModelPinError(msg);
