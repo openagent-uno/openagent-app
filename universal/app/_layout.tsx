@@ -120,6 +120,12 @@ export default function RootLayout() {
       // plain-text (literal asterisks) fallback path permanently.
       if (msg.type === 'turn_complete' && msg.session_id) {
         useChat.getState().finaliseStreaming(msg.session_id);
+        // A turn that ended badly now SAYS so. Before, a failure that produced
+        // no ``error`` frame of its own ended as silently as a success, and
+        // the user was left with a transcript that simply stopped.
+        if (msg.reason && msg.reason !== 'completed') {
+          useChat.getState().noteTurnOutcome(msg.session_id, msg.reason, msg.error);
+        }
         useChat.getState().reconcileSession(msg.session_id);
         // Refresh the context panel from the server after a turn settles.
         // The main session also gets a pushed ``context_report`` below; this

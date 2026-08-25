@@ -202,7 +202,14 @@ export type ServerMessage =
   // without round-tripping through the legacy REST upload. ``source``
   // distinguishes user-typed (no UI update needed; chat already added
   // it) from STT (server-recognised — UI adds it now).
-  | { type: 'turn_complete'; session_id: string }
+  //
+  // ``reason`` says HOW the turn ended — 'completed' | 'error' | 'cancelled' |
+  // 'empty' — with ``error`` carrying the text when it failed. A bare marker
+  // could only say "it's over", so a turn that died and a turn that answered
+  // looked identical and the app had to infer the difference from what did or
+  // did not arrive next. An older gateway omits both fields: absent means
+  // 'completed', which is exactly what the app assumed before.
+  | { type: 'turn_complete'; session_id: string; reason?: 'completed' | 'error' | 'cancelled' | 'empty'; error?: string }
   // ── In-place session compaction (vision §2) ──
   // The agent folds older turns into a recap when the context fills up.
   // ``phase='running'`` fires before the (slow) summariser call so the UI

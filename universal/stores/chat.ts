@@ -495,6 +495,13 @@ interface ChatState {
    *  past that point means the turn is gone — the agent restarted
    *  (auto-update, deploy, crash) and no terminal frame is ever coming. */
   settleStaleTurns: (attachedAt: number) => void;
+  /** Record how a turn ended when it did not simply succeed. The server now
+   *  says so on ``turn_complete`` (reason + error); this puts it where the
+   *  user is looking, instead of letting a failed turn end as quietly as a
+   *  successful one. Only for a turn that produced no visible answer — when
+   *  the assistant did reply, the reply IS the outcome and a banner under it
+   *  would be noise. */
+  noteTurnOutcome: (sessionId: string, reason: string, error?: string) => void;
   /** Remove a session row locally WITHOUT calling the delete API — used when
    *  the server broadcasts that a session was deleted elsewhere (another
    *  device, a prune), so it disappears from this sidebar in realtime. */
@@ -1219,6 +1226,32 @@ export const useChat = create<ChatState>((set, get) => ({
       }),
     }));
   },
+
+  noteTurnOutcome: (sessionId, reason, error) => set((s) => {
+    const ses = s.sessions.find((x) => x.id === sessionId);
+    if (!ses) return {};
+    // Did this turn actually produce something? The last message being an
+    // assistant one with text is the honest test: an errored turn that still
+    // streamed an answer before failing does not need a tombstone.
+    const last = ses.messages[ses.messages.length - 1];
+    if (last && last.role === 'assistant' && (last.text || '').trim()) return {};
+    const text = reason === 'cancelled'
+      ? 'Turn stopped.'
+      : reason === 'empty'
+        ? 'The turn ended without an answer.'
+        : `Turn failed${error ? `: ${error}` : '.'}`;
+    return {
+      sessions: s.sessions.map((x) => (x.id !== sessionId ? x : {
+        ...x,
+        messages: [...x.messages, {
+          id: genId(),
+          role: 'assistant' as const,
+          text,
+          timestamp: Date.now(),
+        }],
+      })),
+    };
+  }),
 
   settleStaleTurns: (attachedAt) => {
     // The question this answers is "is that turn still alive?", and neither
