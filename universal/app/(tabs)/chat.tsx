@@ -52,6 +52,20 @@ import { formatDuration } from '../../components/AccountsPanel';
 // scoped to the chat tab it was typed in.
 const AGENT_WIDE_COMMANDS = new Set(['help', 'usage', 'update', 'restart', 'status', 'queue']);
 
+// Resolved once: the packaged app icon, as a URL the notification layer can
+// load. ``resolveAssetSource`` is the React-Native-Web way to turn a bundled
+// asset into a URI; if anything about that fails we simply omit the icon and
+// get the old fallback behaviour rather than a broken notification.
+const NOTIFICATION_ICON: string | undefined = (() => {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const src = Image.resolveAssetSource(require('../../assets/app-icon.png'));
+    return src?.uri;
+  } catch {
+    return undefined;
+  }
+})();
+
 const SUGGESTED_PROMPTS: { label: string; prompt: string; icon: string }[] = [
   { label: 'Explain a concept', prompt: 'Explain ', icon: 'book-open' },
   { label: 'Write code', prompt: 'Write a function that ', icon: 'code' },
@@ -633,7 +647,13 @@ export default function ChatScreen() {
         const body = last?.role === 'assistant'
           ? (last.text || '').slice(0, 140)
           : 'Reply ready';
-        const notif = new Notification(title, { body, silent: false });
+        // Say WHICH icon. A Web Notification with no ``icon`` falls back to
+        // the page favicon, which on this build was still the previous
+        // artwork — the badge with the rounded frame and margins — so the
+        // banner showed one icon while the Dock showed another. Naming the
+        // app icon here means the notification no longer depends on which
+        // asset happens to be stale.
+        const notif = new Notification(title, { body, icon: NOTIFICATION_ICON, silent: false });
         notif.onclick = () => { window.focus(); notif.close(); };
         setTimeout(() => notif.close(), 8000);
       } catch (e) { /* ignore */ }
