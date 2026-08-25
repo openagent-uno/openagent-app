@@ -11,7 +11,7 @@
  * native RN falls back to a ``<TextInput multiline>``.
  */
 
-import { useCallback, useEffect, useRef, useState, type Ref, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type Ref, type ReactNode, useMemo } from 'react';
 import Feather from '@expo/vector-icons/Feather';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Platform, Image } from 'react-native';
 import { colors, font, radius } from '../theme';
@@ -92,6 +92,12 @@ export interface MessageComposerProps {
    *  to hide the picker entirely. */
   modelOptions?: {
     id: string; label: string; provider?: string;
+    /** Which subscription pays for this row ("Claude", "GPT", "Local").
+     *  The menu groups by it and shows the headroom once per family
+     *  instead of repeating it on every row. */
+    family?: string;
+    /** How hard this row thinks, within its family. */
+    effort?: 'light' | 'standard' | 'high' | 'max';
     /** Right-aligned note about the account serving this model's provider —
      *  "40% left", "limited · 12m", "quota not reported". Computed by the
      *  screen, so the composer stays unaware of where accounts come from. */
@@ -218,6 +224,29 @@ export default function MessageComposer({
     // keep typing the argument.
     onInputChange(`/${cmd.name} `);
   }, [onInputChange, onSelectModel, modelOptions]);
+  // Group the picker by family, ordered by effort inside each. One header
+  // per subscription carries its headroom; the rows carry only what differs.
+  const groupedModels = useMemo(() => {
+    const order = ['light', 'standard', 'high', 'max'];
+    const byFamily = new Map<string, typeof modelOptions>();
+    for (const m of modelOptions ?? []) {
+      const key = m.family || m.provider || 'Models';
+      const list = byFamily.get(key) ?? [];
+      list.push(m);
+      byFamily.set(key, list);
+    }
+    return [...byFamily.entries()].map(([family, rows]) => ({
+      family,
+      // Every row in a family shares one account, so the first row's hint is
+      // the family's hint.
+      hint: rows?.[0]?.accountHint,
+      tone: rows?.[0]?.accountTone,
+      rows: [...(rows ?? [])].sort(
+        (a, b) => order.indexOf(a.effort ?? 'standard') - order.indexOf(b.effort ?? 'standard'),
+      ),
+    }));
+  }, [modelOptions]);
+
   const activeModel = modelOptions?.find((m) => m.id === activeModelId);
   const files = pendingFiles ?? [];
   // Failed and still-uploading entries stay in the list as visible
@@ -481,7 +510,26 @@ export default function MessageComposer({
                         <Text style={styles.modelRowSub}>Let the router pick</Text>
                       </View>
                     </TouchableOpacity>
-                    {modelOptions.map((m) => (
+                    {groupedModels.map(({ family, hint, tone, rows }) => (
+                      <View key={family}>
+                        <View style={styles.modelGroupHead}>
+                          <Text style={styles.modelGroupTitle} numberOfLines={1}>{family}</Text>
+                          {hint ? (
+                            <Text
+                              style={[
+                                styles.modelRowHint,
+                                tone === 'bad' ? { color: colors.error }
+                                  : tone === 'warn' ? { color: colors.warning }
+                                  : tone === 'ok' ? { color: colors.success }
+                                  : null,
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {hint}
+                            </Text>
+                          ) : null}
+                        </View>
+                        {rows.map((m) => (
                       <TouchableOpacity
                         key={m.id}
                         style={[styles.modelRow, m.id === activeModelId && styles.modelRowActive]}
@@ -500,21 +548,15 @@ export default function MessageComposer({
                             <Text style={styles.modelRowSub} numberOfLines={1}>{m.provider}</Text>
                           )}
                         </View>
-                        {m.accountHint ? (
-                          <Text
-                            style={[
-                              styles.modelRowHint,
-                              m.accountTone === 'bad' ? { color: colors.error }
-                                : m.accountTone === 'warn' ? { color: colors.warning }
-                                : m.accountTone === 'ok' ? { color: colors.success }
-                                : null,
-                            ]}
-                            numberOfLines={1}
-                          >
-                            {m.accountHint}
-                          </Text>
+                        {/* The headroom now lives once in the family header —
+                            repeating it on every row said the same number
+                            three times. What varies row to row is effort. */}
+                        {m.effort ? (
+                          <Text style={styles.modelRowEffort} numberOfLines={1}>{m.effort}</Text>
                         ) : null}
                       </TouchableOpacity>
+                        ))}
+                      </View>
                     ))}
                     {menuFooter ? (
                       <>
@@ -755,6 +797,28 @@ const styles = StyleSheet.create({
   kbd: {
     fontSize: 10, color: colors.textSecondary,
     fontFamily: font.mono, fontWeight: '500',
+  },
+  modelGroupHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 10,
+    paddingTop: 8,
+    paddingBottom: 2,
+    gap: 8,
+  },
+  modelGroupTitle: {
+    fontFamily: font.sans,
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.textSecondary,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  modelRowEffort: {
+    fontFamily: font.mono,
+    fontSize: 10.5,
+    color: colors.textMuted,
   },
   modelRowHint: { fontSize: 10, color: colors.textMuted, marginLeft: 8 },
   modelMenuRule: {

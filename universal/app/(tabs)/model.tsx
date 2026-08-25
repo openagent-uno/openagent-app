@@ -135,7 +135,7 @@ export default function ModelScreen({ view = 'manage', embedded = false }: { vie
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Usage
-  const [usage, setUsage] = useState<UsageData | null>(null);
+  const [_usage, setUsage] = useState<UsageData | null>(null);
   const [dailyUsage, setDailyUsage] = useState<DailyUsageEntry[]>([]);
   const [costDays, setCostDays] = useState(7);
 

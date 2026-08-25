@@ -1259,6 +1259,50 @@ export interface ModelEntry {
   updated_at: number;
 }
 
+// ── Family + effort ──────────────────────────────────────────────────
+//
+// The picker used to be one flat list of every runtime id, which asks the
+// reader to hold two unrelated questions at once: WHOSE subscription pays
+// (the scarce thing — each has its own window, and the "% left" hint next to
+// it is why) and HOW HARD the model should think. Grouping by family answers
+// the first once per group; the effort label answers the second per row.
+//
+// Declared in the model's ``metadata`` when the operator has said so
+// (``family`` / ``effort``); inferred from the runtime id otherwise, so a
+// catalogue nobody has annotated still groups correctly.
+export type ModelEffort = 'light' | 'standard' | 'high' | 'max';
+
+const EFFORT_ORDER: ModelEffort[] = ['light', 'standard', 'high', 'max'];
+
+export function modelEffortRank(effort: ModelEffort): number {
+  const i = EFFORT_ORDER.indexOf(effort);
+  return i < 0 ? EFFORT_ORDER.length : i;
+}
+
+/** Which subscription/pool pays for this row. */
+export function modelFamily(m: { runtime_id: string; provider_name?: string; metadata?: Record<string, unknown> }): string {
+  const declared = (m.metadata?.family as string | undefined)?.trim();
+  if (declared) return declared;
+  const id = (m.runtime_id || '').toLowerCase();
+  if (id.includes('claude')) return 'Claude';
+  if (id.includes('gpt') || id.startsWith('codex:')) return 'GPT';
+  if (id.includes('qwen') || id.startsWith('windows-local:')) return 'Local';
+  if (id.includes('deepseek')) return 'DeepSeek';
+  return m.provider_name || 'Other';
+}
+
+/** How hard this row thinks, within its family. */
+export function modelEffort(m: { runtime_id: string; metadata?: Record<string, unknown> }): ModelEffort {
+  const declared = (m.metadata?.effort as string | undefined)?.trim().toLowerCase();
+  if (declared && (EFFORT_ORDER as string[]).includes(declared)) return declared as ModelEffort;
+  const id = (m.runtime_id || '').toLowerCase();
+  // Ordered longest-match first: "sol-high" must not read as "sol".
+  if (id.includes('-high') || id.includes('opus')) return 'high';
+  if (id.includes('haiku') || id.includes('flash') || id.includes('spark') || id.includes('mini')) return 'light';
+  if (id.includes('sonnet') || id.includes('luna') || id.includes('sol')) return 'standard';
+  return 'standard';
+}
+
 export interface AvailableModel {
   id: string;
   display_name: string;
