@@ -17,7 +17,18 @@ FAILURES=0
 run_lint() {
     echo "🔍 ESLint..."
     cd "$SCRIPT_DIR/universal"
-    npx eslint . --ext .ts,.tsx || FAILURES=$((FAILURES + 1))
+    # Questo repo non ha eslint fra le dipendenze e non ha un
+    # eslint.config.*: `npx eslint` scaricava la 10 al volo e usciva in errore
+    # ("couldn't find an eslint.config file"), quindi ./test.sh era ROSSO per
+    # tutti, sempre, per un motivo che non c'entra col codice — e un gate che
+    # fallisce sempre e' un gate che nessuno guarda. Finche' non si sceglie una
+    # configurazione, lo diciamo e andiamo avanti: type-check e test restano.
+    if ls eslint.config.* >/dev/null 2>&1 || [ -f .eslintrc ] || [ -f .eslintrc.json ] || [ -f .eslintrc.js ]; then
+        npx eslint . --ext .ts,.tsx || FAILURES=$((FAILURES + 1))
+    else
+        echo "   saltato: nessuna configurazione eslint nel repo (ne' eslint fra le dipendenze)."
+        echo "   Per attivarlo: aggiungere eslint + typescript-eslint e un eslint.config.mjs."
+    fi
     echo ""
 }
 
