@@ -6,6 +6,7 @@
 import { create } from 'zustand';
 import type {
   ActivityItem,
+  ActivityKind,
   CapabilitiesResponse,
   HistoryChangedEvent,
   RunStatus,
@@ -16,7 +17,16 @@ import type {
   SearchResult,
   SearchScope,
 } from '../../common/unified-history';
-import { SEARCH_SCOPES, SEARCH_TARGET_KINDS } from '../../common/unified-history';
+import { ACTIVITY_KINDS, SEARCH_SCOPES, SEARCH_TARGET_KINDS } from '../../common/unified-history';
+import {
+  MAX_RETAINED_HISTORY_ITEMS,
+  MAX_RETAINED_SEARCH_RESULTS,
+  historyCoversAllKinds,
+  historyKindsKey,
+  historyRequestKey,
+  mergeBoundedHistory,
+  normalizeHistoryKinds,
+} from '../../common/history-feed-policy';
 import {
   canUseUnifiedHistoryCache,
   searchPresentation,
@@ -138,12 +148,14 @@ interface SearchStore {
   capabilityError: string | null;
 
   historyItems: ActivityItem[];
+  historyKinds: ActivityKind[];
   historyCursor: string | null;
   historyHasMore: boolean;
   historyRevision: string | null;
   historyLoading: boolean;
   historyPaginating: boolean;
   historyError: string | null;
+  historyGeneration: number;
 
   open: boolean;
   draft: string;
@@ -166,6 +178,7 @@ interface SearchStore {
   requestGeneration: number;
 
   initialize: (accountId: string, force?: boolean) => Promise<void>;
+  setHistoryKinds: (kinds: ActivityKind[]) => Promise<void>;
   loadHistory: (reset?: boolean) => Promise<void>;
   loadMoreHistory: () => Promise<void>;
   show: () => void;
@@ -191,12 +204,14 @@ const INITIAL = {
   capabilityLoading: false,
   capabilityError: null,
   historyItems: [] as ActivityItem[],
+  historyKinds: [...ACTIVITY_KINDS] as ActivityKind[],
   historyCursor: null,
   historyHasMore: false,
   historyRevision: null,
   historyLoading: false,
   historyPaginating: false,
   historyError: null,
+  historyGeneration: 0,
   open: false,
   draft: '',
   displayedQuery: '',
@@ -235,13 +250,34 @@ export const useSearch = create<SearchStore>((set, get) => ({
       capabilityAbort = null;
       if (capabilityRetryTimer) clearTimeout(capabilityRetryTimer);
       capabilityRetryTimer = null;
-      set({ capabilityLoading: true, capabilityError: null });
+      if (force) {
+        // A reconnect is a new server snapshot even when the account id is
+        // unchanged. Invalidate every old response before refreshing page 1.
+        historyAbort?.abort();
+        historyAbort = null;
+        searchAbort?.abort();
+        searchAbort = null;
+      }
+      set((state) => ({
+        capabilityLoading: true,
+        capabilityError: null,
+        ...(force ? {
+          historyLoading: false,
+          historyPaginating: false,
+          searchLoading: false,
+          searchPaginating: false,
+          historyGeneration: state.historyGeneration + 1,
+          requestGeneration: state.requestGeneration + 1,
+        } : {}),
+      }));
     } else {
       abortAll();
       set({
         ...INITIAL,
         accountId,
         capabilityLoading: true,
+        historyKinds: [...ACTIVITY_KINDS],
+        historyGeneration: current.historyGeneration + 1,
         requestGeneration: current.requestGeneration + 1,
       });
     }
@@ -275,7 +311,7 @@ export const useSearch = create<SearchStore>((set, get) => ({
         return;
       }
       set({ support: 'v2', capabilities, capabilityLoading: false, capabilityError: null });
-      if (!sameAccount || current.support !== 'v2' || !current.historyItems.length) {
+      if (force || !sameAccount || current.support !== 'v2' || !current.historyItems.length) {
         await get().loadHistory(true);
       }
       if (!capabilities.features.global_search
@@ -310,33 +346,70 @@ export const useSearch = create<SearchStore>((set, get) => ({
     }
   },
 
+  setHistoryKinds: async (kinds) => {
+    const normalized = normalizeHistoryKinds(kinds);
+    const state = get();
+    if (historyKindsKey(normalized) === historyKindsKey(state.historyKinds)) return;
+    historyAbort?.abort();
+    historyAbort = null;
+    set({
+      historyKinds: normalized,
+      historyItems: [],
+      historyCursor: null,
+      historyHasMore: false,
+      historyRevision: null,
+      historyLoading: false,
+      historyPaginating: false,
+      historyError: null,
+      historyGeneration: state.historyGeneration + 1,
+      // A filtered sidebar page is not a truthful unfiltered search cache.
+      usingHistoryCache: historyCoversAllKinds(normalized) && state.usingHistoryCache,
+    });
+    if (state.support === 'v2' && normalized.length) {
+      await get().loadHistory(true);
+    }
+  },
+
   loadHistory: async (reset = false) => {
     const state = get();
     if (state.support !== 'v2') return;
+    if (!state.historyKinds.length) {
+      set({
+        historyItems: [], historyCursor: null, historyHasMore: false,
+        historyLoading: false, historyPaginating: false, historyError: null,
+      });
+      return;
+    }
     if (reset ? state.historyLoading : state.historyPaginating) return;
     if (!reset && (!state.historyHasMore || !state.historyCursor)) return;
     historyAbort?.abort();
     const controller = new AbortController();
     historyAbort = controller;
+    const requestKey = historyRequestKey(
+      state.accountId, state.historyKinds, state.historyGeneration,
+    );
     set(reset
       ? { historyLoading: true, historyError: null }
       : { historyPaginating: true, historyError: null });
     try {
       const page = await listUnifiedHistory({
+        kinds: state.historyKinds,
         limit: Math.min(HISTORY_PAGE_SIZE, state.capabilities?.features.history?.max_page_size ?? HISTORY_PAGE_SIZE),
         ...(reset ? {} : { cursor: state.historyCursor ?? undefined }),
       }, controller.signal);
-      if (controller.signal.aborted) return;
+      const latest = get();
+      if (controller.signal.aborted || requestKey !== historyRequestKey(
+        latest.accountId, latest.historyKinds, latest.historyGeneration,
+      )) return;
       set((current) => {
-        const byId = new Map<string, ActivityItem>();
-        for (const item of reset ? [] : current.historyItems) byId.set(item.id, item);
-        for (const item of page.items) byId.set(item.id, item);
+        const historyItems = mergeBoundedHistory(
+          current.historyItems, page.items, reset, MAX_RETAINED_HISTORY_ITEMS,
+        );
+        const atRetentionLimit = historyItems.length >= MAX_RETAINED_HISTORY_ITEMS;
         return {
-          historyItems: [...byId.values()].sort(
-            (a, b) => Date.parse(b.occurred_at) - Date.parse(a.occurred_at),
-          ),
-          historyCursor: page.next_cursor,
-          historyHasMore: page.has_more,
+          historyItems,
+          historyCursor: atRetentionLimit ? null : page.next_cursor,
+          historyHasMore: page.has_more && !atRetentionLimit,
           historyRevision: page.revision,
           historyLoading: false,
           historyPaginating: false,
@@ -345,6 +418,10 @@ export const useSearch = create<SearchStore>((set, get) => ({
       });
     } catch (error) {
       if (controller.signal.aborted || isAbort(error)) return;
+      const latest = get();
+      if (requestKey !== historyRequestKey(
+        latest.accountId, latest.historyKinds, latest.historyGeneration,
+      )) return;
       if (isExplicitlyUnsupported(error)) {
         set({ support: 'legacy', historyLoading: false, historyPaginating: false, historyError: null });
       } else if (!reset && error instanceof ApiError && error.code === 'cursor_stale') {
@@ -423,7 +500,7 @@ export const useSearch = create<SearchStore>((set, get) => ({
     // history page may contain zero matching rows even when later pages do.
     const canUseHistoryCache = canUseUnifiedHistoryCache(
       query, state.scope, state.statuses, state.errorsOnly, state.period,
-    );
+    ) && historyCoversAllKinds(state.historyKinds);
     if (canUseHistoryCache) {
       searchAbort?.abort();
       set({
@@ -516,10 +593,12 @@ export const useSearch = create<SearchStore>((set, get) => ({
       set((current) => {
         const byId = new Map(current.results.map((item) => [item.result_id, item]));
         for (const item of page.items) byId.set(item.result_id, item);
+        const results = [...byId.values()].slice(0, MAX_RETAINED_SEARCH_RESULTS);
+        const atRetentionLimit = results.length >= MAX_RETAINED_SEARCH_RESULTS;
         return {
-          results: [...byId.values()],
-          searchCursor: page.next_cursor,
-          searchHasMore: page.has_more,
+          results,
+          searchCursor: atRetentionLimit ? null : page.next_cursor,
+          searchHasMore: page.has_more && !atRetentionLimit,
           coverage: page.coverage,
           searchPaginating: false,
         };
@@ -544,12 +623,14 @@ export const useSearch = create<SearchStore>((set, get) => ({
   handleHistoryChanged: (event) => {
     if (get().support !== 'v2') return;
     set((state) => {
-      const byId = new Map(state.historyItems.map((item) => [item.id, item]));
-      if (event.action === 'delete') byId.delete(event.activity_id);
-      else byId.set(event.activity_id, event.item);
+      const selected = new Set(state.historyKinds);
+      const existing = state.historyItems.filter((item) => item.id !== event.activity_id);
+      const incoming = event.action === 'upsert' && selected.has(event.item.kind)
+        ? [event.item]
+        : [];
       return {
-        historyItems: [...byId.values()].sort(
-          (a, b) => Date.parse(b.occurred_at) - Date.parse(a.occurred_at),
+        historyItems: mergeBoundedHistory(
+          existing, incoming, false, MAX_RETAINED_HISTORY_ITEMS,
         ),
         historyRevision: event.revision,
       };
@@ -567,7 +648,12 @@ export const useSearch = create<SearchStore>((set, get) => ({
 
   clear: () => {
     abortAll();
-    set((state) => ({ ...INITIAL, requestGeneration: state.requestGeneration + 1 }));
+    set((state) => ({
+      ...INITIAL,
+      historyKinds: [...ACTIVITY_KINDS],
+      historyGeneration: state.historyGeneration + 1,
+      requestGeneration: state.requestGeneration + 1,
+    }));
   },
 }));
 

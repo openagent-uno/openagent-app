@@ -24,13 +24,23 @@ import GlobalSearchOverlay from '../../components/search/GlobalSearchOverlay';
 import { HeaderMenu, themedHeader } from '../../components/screenHeader';
 import { useLayout } from '../../hooks/useLayout';
 import { useConnection } from '../../stores/connection';
+import { useChat } from '../../stores/chat';
 import { globalSearchAvailable, useSearch } from '../../stores/search';
 import { openSearchTarget } from '../../services/searchNavigation';
+import { sessionEntryFromActivity } from '../../services/api';
 import type { EventCause, SearchTarget } from '../../../common/unified-history';
 import { colors } from '../../theme';
 
 const { Navigator } = createDrawerNavigator();
 const Drawer = withLayoutContext(Navigator);
+
+async function initializeAccountSearch(accountId: string, force = false): Promise<void> {
+  await useSearch.getState().initialize(accountId, force);
+  const search = useSearch.getState();
+  if (search.accountId !== accountId) return;
+  if (search.support === 'v2') useChat.getState().setSessionHistoryMode('v2');
+  else if (search.support === 'legacy') useChat.getState().setSessionHistoryMode('legacy');
+}
 
 export default function AppDrawerLayout() {
   const layout = useLayout();
@@ -55,7 +65,7 @@ export default function AppDrawerLayout() {
       useSearch.getState().clear();
       return;
     }
-    void useSearch.getState().initialize(accountId);
+    void initializeAccountSearch(accountId);
   }, [accountId]);
 
   useEffect(() => {
@@ -63,12 +73,25 @@ export default function AppDrawerLayout() {
     return ws.onMessage((message) => {
       if (message.type === 'history_changed') {
         useSearch.getState().handleHistoryChanged(message);
+        if (message.action === 'upsert') {
+          const entry = sessionEntryFromActivity(message.item);
+          const chat = useChat.getState();
+          // The sidebar already owns every summary. Keep only metadata for a
+          // session the user opened (or a live frame already stubbed) so the
+          // chat store cannot turn back into an unbounded session index.
+          if (entry && chat.sessions.some((session) => session.id === entry.session_id)) {
+            chat.hydrateFromServer([entry]);
+          }
+        } else if (message.kind === 'chat' || message.kind === 'delegated_session') {
+          useChat.getState().dropSessionLocal(message.resource_id);
+        }
       } else if (message.type === 'search_index_changed') {
         useSearch.getState().handleSearchIndexChanged(message);
-      } else if (message.type === 'auth_ok' && message.capabilities && accountId) {
+      } else if (message.type === 'auth_ok' && accountId) {
         // REST discovery remains authoritative. A reconnect can change server
-        // generation/version, so re-run it instead of trusting stale state.
-        void useSearch.getState().initialize(accountId, true);
+        // generation/version, so re-run it even when the auth frame omits its
+        // optional inline capabilities (the stable gateway does today).
+        void initializeAccountSearch(accountId, true);
       }
     });
   }, [accountId, ws]);

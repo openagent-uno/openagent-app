@@ -13,7 +13,7 @@
 
 import { memo, useEffect, useState, useMemo, type ReactNode } from 'react';
 import Feather from '@expo/vector-icons/Feather';
-import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { ActivityIndicator, View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import {
   toolPhase,
   runLaunchTarget,
@@ -77,12 +77,17 @@ export interface MessageListProps {
   anchorToolInvocationId?: string;
   /** Native ScrollView owner uses the measured anchor offset to center it. */
   onAnchorLayout?: (y: number) => void;
+  /** Canonical v2 transcript pagination. Local DOM windowing is exhausted
+   * before this asks the server for the preceding page. */
+  hasMoreBefore?: boolean;
+  onLoadEarlier?: () => Promise<void>;
 }
 
 function MessageListBase({
   messages, isProcessing, statusText, isReasoning, maxItems, onRegenerate, onEditUser,
   onOpenChild, onOpenRun, onOpenMemory, currentUserHandle,
   anchorMessageId, anchorToolInvocationId, onAnchorLayout,
+  hasMoreBefore, onLoadEarlier,
 }: MessageListProps) {
   // Windowing: render only the last `shown` messages. With bottom-pinned
   // scroll the tail is what the user sees; a long transcript otherwise
@@ -98,6 +103,23 @@ function MessageListBase({
     [messages, capped, maxItems, shown],
   );
   const hiddenCount = capped ? 0 : Math.max(0, messages.length - visible.length);
+  const [loadingEarlier, setLoadingEarlier] = useState(false);
+  const canLoadEarlier = !capped && (hiddenCount > 0 || (!!hasMoreBefore && !!onLoadEarlier));
+  const loadEarlier = async () => {
+    if (loadingEarlier) return;
+    if (hiddenCount > 0) {
+      setShown((n) => n + TRANSCRIPT_WINDOW);
+      return;
+    }
+    if (!onLoadEarlier || !hasMoreBefore) return;
+    setLoadingEarlier(true);
+    try {
+      await onLoadEarlier();
+      setShown((n) => n + TRANSCRIPT_WINDOW);
+    } finally {
+      setLoadingEarlier(false);
+    }
+  };
   useEffect(() => {
     if (!anchorMessageId || capped) return;
     const index = messages.findIndex((message) => message.id === anchorMessageId);
@@ -208,16 +230,23 @@ function MessageListBase({
   };
   return (
     <>
-      {hiddenCount > 0 && (
+      {canLoadEarlier && (
         <TouchableOpacity
           style={styles.loadEarlier}
-          onPress={() => setShown((n) => n + TRANSCRIPT_WINDOW)}
+          onPress={() => { void loadEarlier(); }}
+          disabled={loadingEarlier}
           accessibilityLabel="Load earlier messages"
           // @ts-ignore — web hover/press affordance
           {...(Platform.OS === 'web' ? { className: 'oa-side-row oa-press' } : {})}
         >
-          <Feather name="chevron-up" size={12} color={colors.textMuted} />
-          <Text style={styles.loadEarlierText}>Load earlier ({hiddenCount})</Text>
+          {loadingEarlier
+            ? <ActivityIndicator size="small" color={colors.textMuted} />
+            : <Feather name="chevron-up" size={12} color={colors.textMuted} />}
+          <Text style={styles.loadEarlierText}>
+            {loadingEarlier
+              ? 'Loading earlier…'
+              : hiddenCount > 0 ? `Load earlier (${hiddenCount})` : 'Load earlier'}
+          </Text>
         </TouchableOpacity>
       )}
       {visible.map(renderMessage)}

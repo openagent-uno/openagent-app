@@ -22,7 +22,8 @@ import { useConnection } from '../../stores/connection';
 import { useChat } from '../../stores/chat';
 import { useUI } from '../../stores/ui';
 import { useEvents } from '../../stores/events';
-import { fetchSessions } from '../../services/api';
+import { useSearch } from '../../stores/search';
+import { fetchChildSessions, fetchSessions } from '../../services/api';
 import MessageComposer, { type PendingFile, type SlashCommand } from '../../components/MessageComposer';
 import MessageList from '../../components/MessageList';
 import ContextPanel from '../../components/ContextPanel';
@@ -115,6 +116,7 @@ export default function ChatScreen() {
   const setSystemPrompt = useChat((s) => s.setSystemPrompt);
   const hydrateFromServer = useChat((s) => s.hydrateFromServer);
   const mergeMessageWindow = useChat((s) => s.mergeMessageWindow);
+  const loadEarlierMessages = useChat((s) => s.loadEarlierMessages);
   // Delete a chat session behind a confirmation dialog (vision §16: sessions
   // are durable — removal is an explicit, confirmed action). The server
   // cascades the delete to every sub-agent session this chat spawned, so the
@@ -244,6 +246,10 @@ export default function ChatScreen() {
   wsRef.current = ws;
   const routerRef = useRef(router);
   routerRef.current = router;
+  const handleLoadEarlier = useCallback(async () => {
+    const sessionId = activeSessionIdRef.current;
+    if (sessionId) await loadEarlierMessages(sessionId);
+  }, [loadEarlierMessages]);
   // Mirrors the live composer text so the session-switch handler can flush the
   // outgoing draft synchronously (the persist write itself is debounced).
   const inputValueRef = useRef('');
@@ -500,13 +506,23 @@ export default function ChatScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigation, isChildSession, parentSession?.id, activeSession?.id, activeSession?.title, contextPanelVisible, toggleContextPanel]);
 
-  // A freshly-spawned child session (delegation / scheduled firing / workflow
-  // node) fires a ``session`` resource_event — refetch so it appears in the
-  // sidebar and its streaming stub gets real metadata. hydrateFromServer
-  // merges metadata onto existing rows without clobbering live transcripts.
+  // A freshly-spawned child session fires a resource_event. V2 normally gets
+  // its exact summary from history_changed; gateways without that realtime
+  // feature fetch only this open parent's children. The unbounded flat list
+  // remains a legacy-only fallback.
   useEffect(() => {
     const off = useEvents.getState().subscribe('session', () => {
-      fetchSessions().then(hydrateFromServer).catch(() => {});
+      const search = useSearch.getState();
+      const chat = useChat.getState();
+      if (chat.sessionHistoryMode === 'v2') {
+        if (search.capabilities?.features.history?.realtime_event === 'history_changed') return;
+        const parentId = chat.activeSessionId;
+        if (parentId) fetchChildSessions(parentId).then(hydrateFromServer).catch(() => {});
+        return;
+      }
+      if (chat.sessionHistoryMode === 'legacy') {
+        fetchSessions().then(hydrateFromServer).catch(() => {});
+      }
     });
     return off;
   }, [hydrateFromServer]);
@@ -1569,6 +1585,8 @@ export default function ChatScreen() {
                   anchorMessageId={typeof routeParams.message === 'string' ? routeParams.message : undefined}
                   anchorToolInvocationId={typeof routeParams.toolInvocation === 'string' ? routeParams.toolInvocation : undefined}
                   onAnchorLayout={(y) => scrollRef.current?.scrollTo({ y: Math.max(0, y - 96), animated: true })}
+                  hasMoreBefore={activeSession.messageWindow?.hasMoreBefore}
+                  onLoadEarlier={handleLoadEarlier}
                 />
               </View>
             </ScrollView>

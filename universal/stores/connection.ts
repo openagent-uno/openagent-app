@@ -16,8 +16,18 @@
 
 import { create } from 'zustand';
 import type { ConnectionConfig, SavedAccount } from '../../common/types';
+import type { CapabilitiesResponse } from '../../common/unified-history';
+import { sessionDiscoveryStrategy } from '../../common/history-feed-policy';
 import { OpenAgentWS } from '../services/ws';
-import { setBaseUrl, fetchSessions } from '../services/api';
+import {
+  setBaseUrl,
+  fetchSessions,
+  getUnifiedCapabilities,
+  isExplicitlyUnsupported,
+  isUnsupportedByAgent,
+  listUnifiedHistory,
+  sessionEntryFromActivity,
+} from '../services/api';
 import * as storage from '../services/storage';
 import { useChat } from './chat';
 
@@ -29,6 +39,69 @@ function genId(): string {
     return crypto.randomUUID();
   }
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+/** Bootstrap only enough session metadata to choose the initial chat. V2
+ * agents return one filtered history row and then load messages on demand;
+ * the unpaginated flat list remains strictly a legacy compatibility path. */
+async function discoverSessionsAfterAuth(
+  inlineCapabilities: CapabilitiesResponse | undefined,
+  stillCurrent: () => boolean,
+): Promise<void> {
+  let capabilities = inlineCapabilities;
+  try {
+    capabilities ??= await getUnifiedCapabilities();
+  } catch (error) {
+    if (!isUnsupportedByAgent(error) && !isExplicitlyUnsupported(error)) {
+      // Do not guess "legacy" on a transient failure: that would turn one
+      // missed capability response into the expensive flat-list request on a
+      // v2 agent. The authenticated shell retries discovery independently.
+      if (stillCurrent()) useChat.getState().markHydrated();
+      return;
+    }
+    // Old agents do not expose capability discovery.
+    capabilities = undefined;
+  }
+  if (!stillCurrent()) return;
+
+  const strategy = sessionDiscoveryStrategy(capabilities?.features.history?.version);
+  if (strategy === 'history_page') {
+    const chat = useChat.getState();
+    chat.setSessionHistoryMode('v2');
+    // Reconnects keep the small set of sessions the user actually opened.
+    // live_state + settleStaleTurns below reconcile their running status.
+    if (chat.sessions.length > 0) {
+      chat.markHydrated();
+      return;
+    }
+    try {
+      const page = await listUnifiedHistory({
+        kinds: ['chat'],
+        include_children: false,
+        limit: 1,
+      });
+      if (!stillCurrent()) return;
+      const entry = page.items.map(sessionEntryFromActivity).find((item) => item != null);
+      const latestChat = useChat.getState();
+      if (entry) latestChat.hydrateFromServer([entry]);
+      else latestChat.markHydrated();
+    } catch {
+      if (stillCurrent()) useChat.getState().markHydrated();
+    }
+    return;
+  }
+
+  const chat = useChat.getState();
+  chat.setSessionHistoryMode('legacy');
+  try {
+    const entries = await fetchSessions();
+    if (stillCurrent()) chat.hydrateFromServer(entries);
+  } catch {
+    // Keep the old offline/error behaviour: the chat shell becomes usable
+    // even if the compatibility listing failed.
+  } finally {
+    if (stillCurrent()) chat.markHydrated();
+  }
 }
 
 /**
@@ -601,28 +674,12 @@ function _openWebsocket(
           sidecarPort: config.sidecarPort,
         }));
       }
-      // Hydrate the chat sidebar with every session the server
-      // already knows about for this device.
-      const chat = useChat.getState();
-      // Re-fetch on EVERY auth_ok, not only the first. A reconnect is
-      // exactly when the client's picture of "what is still running" can be
-      // wrong: the agent may have restarted (auto-update, deploy, crash)
-      // while a turn was in flight, in which case that turn is gone and
-      // nobody will ever send its terminal frame. The gateway replays a
-      // ``live_state`` snapshot for turns it still knows about, but a turn
-      // whose replay died with the process gets no frame at all — and the
-      // session sat on "Reasoning…" forever, with the composer's Stop the
-      // only way out. ``hydrateFromServer`` already settles anything the
-      // server reports as not live; it just was never asked again.
+      // Discover one initial v2 chat summary (or use the legacy list only on
+      // old agents). Reconnect liveness is handled by the authoritative
+      // live_state replay + grace check below, so it never needs a full
+      // session-index download.
       const attachedAt = Date.now();
-      fetchSessions()
-        .then((entries) => {
-          chat.hydrateFromServer(entries);
-          chat.markHydrated();
-        })
-        .catch(() => {
-          chat.markHydrated();
-        });
+      void discoverSessionsAfterAuth(msg.capabilities, isCurrent);
       // A session the server never persisted (its turn died before the run
       // was written) is in no listing at all, so hydration cannot settle it.
       // The gateway's reattach replay is the signal instead: it lands right

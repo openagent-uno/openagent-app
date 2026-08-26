@@ -21,6 +21,7 @@ import type {
   ProviderAccounts, AgentEvent, CreateEventInput, UpdateEventInput, EventDelivery, EventTypeSpec,
 } from '../../common/types';
 import type {
+  ActivityItem,
   ApiErrorPayload,
   CapabilitiesResponse,
   EventDeliveryDetail,
@@ -1193,6 +1194,30 @@ export interface SessionEntry {
 
 export interface SessionListResponse {
   sessions: SessionEntry[];
+}
+
+/** Adapt an authorized v2 activity summary into the small metadata shape the
+ * chat store needs. Message/tool content remains on-demand through the v2
+ * detail endpoints; this never recreates the legacy full-session listing. */
+export function sessionEntryFromActivity(item: ActivityItem): SessionEntry | null {
+  if (item.kind !== 'chat' && item.kind !== 'delegated_session') return null;
+  const sessionId = item.session_id || item.resource_id;
+  if (!sessionId) return null;
+  const occurredAt = Date.parse(item.occurred_at);
+  const updatedAt = Date.parse(item.updated_at);
+  return {
+    session_id: sessionId,
+    client_id: '',
+    title: item.title,
+    model: null,
+    framework: null,
+    created_at: Number.isFinite(occurredAt) ? Math.floor(occurredAt / 1000) : null,
+    last_active_at: Number.isFinite(updatedAt) ? Math.floor(updatedAt / 1000) : null,
+    parent_session_id: item.parent?.kind === 'session' ? item.parent.id : null,
+    origin: item.origin || (item.kind === 'delegated_session' ? 'delegation' : 'chat'),
+    kind: item.kind,
+    _live: item.live,
+  };
 }
 
 // ── Unified operational history/search beta ──

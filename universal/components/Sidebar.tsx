@@ -31,7 +31,7 @@ import {
   Pressable,
   StyleSheet,
   Platform,
-  ScrollView,
+  FlatList,
   ActivityIndicator,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
@@ -42,7 +42,9 @@ import { useActivity, type ActivityRun } from '../stores/activity';
 import { useConnection } from '../stores/connection';
 import { globalSearchAvailable, useSearch } from '../stores/search';
 import { openSearchTarget } from '../services/searchNavigation';
+import { sessionEntryFromActivity } from '../services/api';
 import type { ActivityItem, SearchTarget } from '../../common/unified-history';
+import { historyKindsForFilters } from '../../common/history-feed-policy';
 import { useConfirm } from './ConfirmDialog';
 import PopupMenu from './PopupMenu';
 import { useEvents } from '../stores/events';
@@ -338,6 +340,17 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
   const unifiedPaginating = useSearch((s) => s.historyPaginating);
   const unifiedError = useSearch((s) => s.historyError || s.capabilityError);
   const loadMoreHistory = useSearch((s) => s.loadMoreHistory);
+  const setHistoryKinds = useSearch((s) => s.setHistoryKinds);
+
+  const requestedHistoryKinds = useMemo(() => historyKindsForFilters(filters), [filters]);
+  const requestedHistoryKindsKey = requestedHistoryKinds.join(',');
+  useEffect(() => {
+    if (unifiedSupport !== 'v2') return;
+    void setHistoryKinds(requestedHistoryKinds);
+    // The stable string is the dependency; the array itself is rebuilt when
+    // Zustand replaces the filter object.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedHistoryKindsKey, setHistoryKinds, unifiedSupport]);
 
   useEffect(() => {
     if (!isConnected || unifiedSupport !== 'legacy') return;
@@ -463,67 +476,74 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
         </PopupMenu>
       </View>
 
-      <ScrollView
+      <FlatList
         style={styles.recentScroll}
         contentContainerStyle={styles.recentContent}
+        data={feed}
+        keyExtractor={feedKeyExtractor}
+        renderItem={renderFeedItem}
         showsVerticalScrollIndicator={false}
-        scrollEventThrottle={120}
-        onScroll={({ nativeEvent }) => {
-          if (unifiedSupport !== 'v2') return;
-          const remaining = nativeEvent.contentSize.height
-            - nativeEvent.layoutMeasurement.height
-            - nativeEvent.contentOffset.y;
-          if (remaining < 120) void loadMoreHistory();
+        initialNumToRender={18}
+        maxToRenderPerBatch={18}
+        windowSize={7}
+        removeClippedSubviews={Platform.OS !== 'web'}
+        onEndReachedThreshold={0.35}
+        onEndReached={() => {
+          if (unifiedSupport === 'v2') void loadMoreHistory();
         }}
-      >
-        {unifiedLoading && feed.length === 0 ? (
+        ListEmptyComponent={unifiedLoading ? (
           <ActivityIndicator size="small" color={colors.textMuted} style={styles.recentLoader} />
-        ) : unifiedError && feed.length === 0 ? (
+        ) : unifiedError ? (
           <Text style={styles.recentError}>{unifiedError}</Text>
-        ) : feed.length === 0 ? (
-          <Text style={styles.recentEmpty}>Nothing here yet.</Text>
         ) : (
-          feed.map((it) => (
-            <Pressable
-              key={it.key}
-              onPress={it.onPress}
-              // @ts-ignore web hover + entrance
-              {...(Platform.OS === 'web' ? { className: 'oa-side-row oa-fade-in' } : {})}
-              style={[styles.feedRow, it.active && styles.feedRowActive]}
-              accessibilityRole="button"
-              accessibilityState={{ selected: !!it.active }}
-              accessibilityLabel={it.label}
-            >
-              <Feather name={it.icon} size={13} color={it.active ? colors.accent : colors.textMuted} />
-              <Text style={[styles.feedText, it.active && styles.feedTextActive]} numberOfLines={1}>
-                {it.label}
-              </Text>
-              {it.ts ? <Text style={styles.feedMeta}>{relTime(it.ts)}</Text> : null}
-              {it.dotColor ? <View style={[styles.feedDot, { backgroundColor: it.dotColor }]} /> : null}
-              {it.onDelete ? (
-                <PopupMenu
-                  triggerIcon="more-horizontal"
-                  triggerSize={15}
-                  triggerColor={colors.textMuted}
-                  triggerStyle={styles.feedMenuBtn}
-                  accessibilityLabel={`Options for ${it.label}`}
-                  items={[
-                    { label: 'Delete', icon: 'trash-2', destructive: true, onPress: it.onDelete },
-                  ]}
-                />
-              ) : null}
-            </Pressable>
-          ))
+          <Text style={styles.recentEmpty}>Nothing here yet.</Text>
         )}
-        {unifiedPaginating ? (
+        ListFooterComponent={unifiedPaginating ? (
           <ActivityIndicator size="small" color={colors.textMuted} style={styles.recentLoader} />
         ) : null}
-      </ScrollView>
+      />
     </View>
   );
 }
 
 // ── helpers ──
+
+function feedKeyExtractor(item: FeedItem): string {
+  return item.key;
+}
+
+function renderFeedItem({ item }: { item: FeedItem }) {
+  return (
+    <Pressable
+      onPress={item.onPress}
+      // @ts-ignore web hover + entrance
+      {...(Platform.OS === 'web' ? { className: 'oa-side-row oa-fade-in' } : {})}
+      style={[styles.feedRow, item.active && styles.feedRowActive]}
+      accessibilityRole="button"
+      accessibilityState={{ selected: !!item.active }}
+      accessibilityLabel={item.label}
+    >
+      <Feather name={item.icon} size={13} color={item.active ? colors.accent : colors.textMuted} />
+      <Text style={[styles.feedText, item.active && styles.feedTextActive]} numberOfLines={1}>
+        {item.label}
+      </Text>
+      {item.ts ? <Text style={styles.feedMeta}>{relTime(item.ts)}</Text> : null}
+      {item.dotColor ? <View style={[styles.feedDot, { backgroundColor: item.dotColor }]} /> : null}
+      {item.onDelete ? (
+        <PopupMenu
+          triggerIcon="more-horizontal"
+          triggerSize={15}
+          triggerColor={colors.textMuted}
+          triggerStyle={styles.feedMenuBtn}
+          accessibilityLabel={`Options for ${item.label}`}
+          items={[
+            { label: 'Delete', icon: 'trash-2', destructive: true, onPress: item.onDelete },
+          ]}
+        />
+      ) : null}
+    </Pressable>
+  );
+}
 
 function compactBoundEventRuns(runs: ActivityRun[]): ActivityRun[] {
   const byKey = new Map<string, ActivityRun>();
@@ -623,6 +643,10 @@ function unifiedFeedItem(
     active: sessionId ? onChat && sessionId === activeSessionId : activeRunId === item.resource_id,
     dotColor: item.live ? colors.warning : item.status ? runStatusColor(item.status) : null,
     onPress: () => {
+      if (target.kind === 'chat') {
+        const entry = sessionEntryFromActivity(item);
+        if (entry) useChat.getState().hydrateFromServer([entry]);
+      }
       openSearchTarget(router, target);
       onNavigate?.();
     },
