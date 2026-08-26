@@ -52,7 +52,9 @@ export function emptyStore(): NetworkStore {
 }
 
 export function userDir(): string {
-  const p = path.join(os.homedir(), '.openagent', 'user');
+  const p = process.env.OPENAGENT_USER_DIR
+    ? path.resolve(process.env.OPENAGENT_USER_DIR)
+    : path.join(os.homedir(), '.openagent', 'user');
   fs.mkdirSync(p, { recursive: true, mode: 0o700 });
   return p;
 }

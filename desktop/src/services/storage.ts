@@ -5,19 +5,25 @@
 
 import { ipcMain } from 'electron';
 import Store from 'electron-store';
+import { createStorageCallbacks } from './storage-core';
 
-const store = new Store({ name: 'openagent-desktop' });
+// Construct only after ``app.setPath('userData', ...)`` has had a chance to
+// run.  Eager module-level construction pins electron-store to the default
+// profile before a local E2E or multi-profile launcher can isolate it.
+const callbacks = createStorageCallbacks(
+  () => new Store<Record<string, string>>({ name: 'openagent-desktop' }),
+);
 
 export function registerStorageHandlers(): void {
   ipcMain.handle('storage:get', (_event, key: string) => {
-    return store.get(key, null) as string | null;
+    return callbacks.get(_event, key);
   });
 
   ipcMain.handle('storage:set', (_event, key: string, value: string) => {
-    store.set(key, value);
+    callbacks.set(_event, key, value);
   });
 
   ipcMain.handle('storage:remove', (_event, key: string) => {
-    store.delete(key);
+    callbacks.remove(_event, key);
   });
 }

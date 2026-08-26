@@ -41,6 +41,7 @@ import {
   type StoredNetwork,
 } from './network-store.js';
 import type { IrohEndpoint, IrohNodeAddr } from './iroh-types.js';
+import { nodeDiscoveryMode } from './discovery-config.js';
 
 export interface StartLoopbackArgs {
   password: string;
@@ -75,8 +76,12 @@ interface IrohRuntime {
 
 async function startIrohNode(secret: Uint8Array): Promise<IrohRuntime> {
   const iroh = await import('@number0/iroh');
+  const localOnly = nodeDiscoveryMode() === 'none';
   const node = await iroh.Iroh.memory({
     secretKey: Array.from(secret),
+    nodeDiscovery: localOnly
+      ? iroh.NodeDiscoveryConfig.None
+      : iroh.NodeDiscoveryConfig.Default,
   });
   const endpoint = node.node.endpoint() as unknown as IrohEndpoint;
   // ``net`` is the iroh client surface that owns peer-table writes

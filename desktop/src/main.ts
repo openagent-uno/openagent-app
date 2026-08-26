@@ -16,6 +16,11 @@ import * as http from 'http';
 import { registerStorageHandlers } from './services/storage';
 import { registerLoopbackHandlers, stopAllLoopbacks } from './services/loopback';
 import { decodeTicket } from './network/ticket';
+import {
+  applyLocalE2EProfile,
+  desktopRuntimePolicy,
+  resolveLocalE2EProfile,
+} from './local-e2e-profile';
 
 // ── New desktop-controls modules ──
 import {
@@ -135,11 +140,21 @@ function registerDialogHandlers(): void {
   });
 }
 
-const isDev = !app.isPackaged;
 const packagedSmoke = process.argv.includes('--packaged-smoke');
+const localE2EProfile = resolveLocalE2EProfile(process.argv);
+const localE2E = localE2EProfile != null;
+const runtimePolicy = desktopRuntimePolicy({
+  isPackaged: app.isPackaged,
+  packagedSmoke,
+  localE2E,
+});
 const expectedSmokeVersion = process.argv
   .find((value) => value.startsWith('--expected-version='))
   ?.slice('--expected-version='.length);
+
+if (localE2EProfile) {
+  applyLocalE2EProfile(localE2EProfile, (value) => app.setPath('userData', value));
+}
 
 app.setAboutPanelOptions({
   applicationName: 'OpenAgent',
@@ -151,7 +166,7 @@ if (process.platform === 'win32') {
   app.setAppUserModelId('ai.openagent.desktop');
 }
 
-const gotLock = packagedSmoke || app.requestSingleInstanceLock();
+const gotLock = runtimePolicy.bypassSingleInstanceLock || app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 }
@@ -299,7 +314,9 @@ function createWindow(opts: CreateWindowOptions = {}): BrowserWindow {
   });
   const webContentsId = win.webContents.id;
 
-  const baseUrl = isDev ? 'http://localhost:8081' : `http://127.0.0.1:${staticPort}`;
+  const baseUrl = runtimePolicy.useStaticRenderer
+    ? `http://127.0.0.1:${staticPort}`
+    : 'http://localhost:8081';
   // Build the URL through the URL API so query params compose safely even
   // when the route already carries one (e.g. ``terminal/<id>?cwd=…``).
   const target = new URL(route ? `${baseUrl}/${route}` : baseUrl);
@@ -384,7 +401,7 @@ setCreateWindowFactory(createWindow);
 // ── Auto-updater ──
 
 function setupAutoUpdater(): void {
-  if (isDev) return;
+  if (!runtimePolicy.enableAutoUpdater) return;
   const { autoUpdater } = require('electron-updater');
   const installedVersion = app.getVersion();
   const policy = configureAutoUpdater(autoUpdater, installedVersion);
@@ -654,7 +671,7 @@ app.whenReady().then(async () => {
 
   // In production, start a local HTTP server for the web build
   // (Expo Router needs proper URL routing that file:// can't do)
-  if (!isDev) {
+  if (runtimePolicy.useStaticRenderer) {
     staticPort = await startStaticServer();
   }
 
