@@ -73,7 +73,8 @@ run_unit() {
         FAILURES=$((FAILURES + 1))
         return
     fi
-    node --test src/network/__tests__/*.test.mjs || FAILURES=$((FAILURES + 1))
+    node --test src/network/__tests__/*.test.mjs scripts/__tests__/*.test.mjs \
+        || FAILURES=$((FAILURES + 1))
 
     cd "$SCRIPT_DIR"
     node --experimental-strip-types --test common/__tests__/*.test.mjs \

@@ -16,6 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import * as asar from '@electron/asar';
 import yaml from 'js-yaml';
+import { verifyEmbeddedBlockMap } from './release-artifact-contract.mjs';
 
 const desktopDir = path.resolve(import.meta.dirname, '..');
 const releaseDir = path.join(desktopDir, 'release');
@@ -162,9 +163,7 @@ for (const entry of metadata.files) {
   assert.equal(actualSha512, entry.sha512, `SHA-512 mismatch for ${entry.url}`);
   assert.equal(fs.statSync(artifact).size, Number(entry.size), `Size mismatch for ${entry.url}`);
   if (Number(entry.blockMapSize) > 0) {
-    const blockmap = `${artifact}.blockmap`;
-    assert(fs.existsSync(blockmap), `Missing blockmap for ${entry.url}`);
-    assert.equal(fs.statSync(blockmap).size, Number(entry.blockMapSize), `Blockmap size mismatch for ${entry.url}`);
+    verifyEmbeddedBlockMap(artifact, entry.blockMapSize, entry.url);
   }
 }
 const expectedLegacyPath = runner === 'macos' || runner === 'darwin'

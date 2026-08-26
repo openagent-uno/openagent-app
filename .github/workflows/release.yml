@@ -105,7 +105,7 @@ jobs:
           done
       - name: Build Electron app
         working-directory: desktop
-        run: npx tsc && node ./scripts/bundle-main.js && npx electron-builder ${{ matrix.build_flag }} --publish never -c.publish.channel=${{ contains(github.ref_name, '-beta.') && 'beta' || 'latest' }}
+        run: npx tsc && node ./scripts/bundle-main.js && npx electron-builder ${{ matrix.build_flag }} --publish never --config.publish.channel "${{ contains(github.ref_name, '-beta.') && 'beta' || 'latest' }}"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ runner.os == 'macOS' && secrets.CSC_LINK || '' }}

@@ -7,6 +7,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import yaml from 'js-yaml';
+import { verifyEmbeddedBlockMap } from './release-artifact-contract.mjs';
 
 const desktopDir = path.resolve(import.meta.dirname, '..');
 const artifactRoot = path.resolve(process.argv[2] || path.join(desktopDir, 'release'));
@@ -122,9 +123,7 @@ for (const metadataName of expectedMetadata) {
     assert.equal(sha512, entry.sha512, `${metadataName} SHA-512 mismatch for ${name}`);
     assert.equal(fs.statSync(file).size, Number(entry.size), `${metadataName} size mismatch for ${name}`);
     if (Number(entry.blockMapSize) > 0) {
-      const blockmap = byName.get(`${name}.blockmap`);
-      assert(blockmap, `${metadataName} is missing ${name}.blockmap`);
-      assert.equal(fs.statSync(blockmap).size, Number(entry.blockMapSize), `${metadataName} blockmap size mismatch for ${name}`);
+      verifyEmbeddedBlockMap(file, entry.blockMapSize, `${metadataName}:${name}`);
     }
   }
   const expectedLegacyPath = metadataName.endsWith('-mac.yml')
