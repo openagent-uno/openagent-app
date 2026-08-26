@@ -73,8 +73,8 @@ const NAV: NavItem[] = [
 ];
 
 // Fixed nav-row geometry shared by actions and navigation.
-const ROW_H = 38;
-const ROW_GAP = 2;
+const ROW_H = 32;
+const ROW_GAP = 1;
 const FEED_MAX = 60;
 
 type FilterKey = 'chat' | 'workflow' | 'task' | 'event';
@@ -175,7 +175,7 @@ export default function Sidebar({
           accessibilityRole="button"
           accessibilityLabel="New session"
         >
-          <Feather name="edit-3" size={16} color={colors.accent} />
+          <Feather name="edit-3" size={15} color={colors.accent} />
           <Text style={styles.newRowText}>New session</Text>
         </Pressable>
         {canSearch ? (
@@ -187,7 +187,7 @@ export default function Sidebar({
             accessibilityRole="button"
             accessibilityLabel="Search"
           >
-            <Feather name="search" size={16} color={colors.textSecondary} />
+            <Feather name="search" size={15} color={colors.textSecondary} />
             <Text style={styles.searchRowText}>Search</Text>
             {Platform.OS === 'web' ? <Text style={styles.searchShortcut}>⌘P</Text> : null}
           </Pressable>
@@ -216,7 +216,7 @@ export default function Sidebar({
             >
               <Feather
                 name={item.icon}
-                size={16}
+                size={15}
                 color={isActive ? colors.accent : colors.textSecondary}
               />
               <Text
@@ -246,7 +246,7 @@ export default function Sidebar({
           </View>
         )}
         {/* Two rows, not one. Six things — avatar, agent name, chevron and
-            three 40px buttons — do not fit across a 220px sidebar: the name is
+            three action buttons — do not fit across a 220px sidebar: the name is
             the only flexible item, so it collapsed to 23px and rendered
             "es…" for "esound-agent" (measured). Which agent you are talking to
             is the single most important word down here, and the row below it
@@ -285,7 +285,7 @@ function FooterIcon({
       accessibilityState={{ selected: active }}
       accessibilityLabel={label}
     >
-      <Feather name={icon} size={18} color={active ? colors.accent : colors.textSecondary} />
+      <Feather name={icon} size={17} color={active ? colors.accent : colors.textSecondary} />
     </Pressable>
   );
 }
@@ -692,7 +692,7 @@ const styles = StyleSheet.create({
     // the panel never leaves a gap when the drawer is wider than a fixed
     // width. The divider lives on the content's left edge, not here.
     backgroundColor: colors.sidebar,
-    paddingVertical: spacing.lg,
+    paddingVertical: spacing.md,
     height: '100%',
     width: '100%',
   },
@@ -706,11 +706,11 @@ const styles = StyleSheet.create({
   macControls: { height: 36, position: 'relative', marginBottom: spacing.xs },
 
   // Brand
-  brand: { marginBottom: spacing.lg },
+  brand: { marginBottom: spacing.sm },
   brandFull: { gap: spacing.sm },
 
   // New session row
-  actionGroup: { gap: ROW_GAP, marginBottom: spacing.md },
+  actionGroup: { gap: ROW_GAP, marginBottom: spacing.sm },
   newRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -719,24 +719,24 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.primaryLight,
   },
-  newRowFull: { gap: 11, paddingHorizontal: spacing.md, height: ROW_H },
-  newRowText: { fontFamily: font.sans, fontSize: 14, color: colors.text, fontWeight: '600' },
+  newRowFull: { gap: 10, paddingHorizontal: 10, height: ROW_H },
+  newRowText: { fontFamily: font.sans, fontSize: 13.5, color: colors.text, fontWeight: '600' },
   searchRow: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md },
-  searchRowText: { flex: 1, fontFamily: font.sans, fontSize: 14, color: colors.textSecondary, fontWeight: '500' },
+  searchRowText: { flex: 1, fontFamily: font.sans, fontSize: 13.5, color: colors.textSecondary, fontWeight: '500' },
   searchShortcut: { fontFamily: font.mono, fontSize: 9.5, color: colors.textMuted },
 
   // Nav
   nav: { position: 'relative' },
   row: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md },
-  rowFull: { gap: 11, paddingHorizontal: spacing.md },
+  rowFull: { gap: 10, paddingHorizontal: 10 },
   rowActive: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
-  rowLabel: { fontFamily: font.sans, fontSize: 14, color: colors.textSecondary, fontWeight: '500' },
+  rowLabel: { fontFamily: font.sans, fontSize: 13.5, color: colors.textSecondary, fontWeight: '500' },
   rowLabelActive: { color: colors.text, fontWeight: '600' },
 
   // Recent
-  recent: { flex: 1, minHeight: 0, marginTop: spacing.md, position: 'relative' },
-  recentDivider: { height: 1, backgroundColor: colors.borderLight, marginBottom: spacing.sm },
-  recentHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xs, marginBottom: spacing.xs },
+  recent: { flex: 1, minHeight: 0, marginTop: spacing.sm, position: 'relative' },
+  recentDivider: { height: 1, backgroundColor: colors.borderLight, marginBottom: spacing.xs },
+  recentHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xs, marginBottom: 2 },
   recentHeading: {
     fontFamily: font.sans,
     fontSize: 11,
@@ -760,7 +760,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
     paddingHorizontal: spacing.sm,
-    paddingVertical: 6,
+    paddingVertical: 4,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: 'transparent',
@@ -778,8 +778,8 @@ const styles = StyleSheet.create({
 
   // Footer (icons only)
   footer: { marginTop: 'auto' },
-  footerFull: { paddingTop: spacing.sm },
-  footerRule: { height: 1, backgroundColor: colors.borderLight, marginBottom: spacing.sm },
+  footerFull: { paddingTop: spacing.xs },
+  footerRule: { height: 1, backgroundColor: colors.borderLight, marginBottom: spacing.xs },
   // Reconnecting hint — sits right above the agent row (see [[isReconnecting]]).
   reconnectRow: {
     flexDirection: 'row', alignItems: 'center', gap: 7,
@@ -789,8 +789,8 @@ const styles = StyleSheet.create({
   reconnectText: {
     fontSize: 11, color: colors.textSecondary, fontFamily: font.mono, letterSpacing: 0.3,
   },
-  footerAgentRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.xs },
+  footerAgentRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 2 },
   footerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
-  footerBtn: { width: 40, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, borderWidth: 1, borderColor: 'transparent' },
+  footerBtn: { width: 36, height: 30, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, borderWidth: 1, borderColor: 'transparent' },
   footerBtnActive: { backgroundColor: colors.surface, borderColor: colors.border },
 });

@@ -7,7 +7,6 @@ import {
   Modal,
   Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -358,12 +357,7 @@ export default function GlobalSearchOverlayShared({ platform, onOpenTarget }: Pr
             ) : null}
           </View>
 
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.chipRow}
-            keyboardShouldPersistTaps="handled"
-          >
+          <View style={styles.chipRow}>
             {SCOPES.map((entry) => (
               <Pressable
                 key={entry.key}
@@ -377,14 +371,9 @@ export default function GlobalSearchOverlayShared({ platform, onOpenTarget }: Pr
                 </Text>
               </Pressable>
             ))}
-          </ScrollView>
+          </View>
 
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.filterRow}
-            keyboardShouldPersistTaps="handled"
-          >
+          <View style={styles.filterRow}>
             {state.scope !== 'chats' && STATUS_FILTERS.map((entry) => {
               const selected = !state.errorsOnly
                 && entry.value.join(',') === state.statuses.join(',');
@@ -393,6 +382,8 @@ export default function GlobalSearchOverlayShared({ platform, onOpenTarget }: Pr
                   key={entry.label}
                   onPress={() => state.setStatuses(entry.value)}
                   style={[styles.filterChip, selected && styles.filterChipActive]}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
                 >
                   <Text style={[styles.filterText, selected && styles.filterTextActive]}>{entry.label}</Text>
                 </Pressable>
@@ -402,6 +393,8 @@ export default function GlobalSearchOverlayShared({ platform, onOpenTarget }: Pr
               <Pressable
                 onPress={() => state.setErrorsOnly(!state.errorsOnly)}
                 style={[styles.filterChip, state.errorsOnly && styles.filterChipActive]}
+                accessibilityRole="button"
+                accessibilityState={{ selected: state.errorsOnly }}
               >
                 <Text style={[styles.filterText, state.errorsOnly && styles.filterTextActive]}>Errors only</Text>
               </Pressable>
@@ -411,16 +404,23 @@ export default function GlobalSearchOverlayShared({ platform, onOpenTarget }: Pr
                 key={entry.key}
                 onPress={() => state.setPeriod(entry.key)}
                 style={[styles.filterChip, state.period === entry.key && styles.filterChipActive]}
+                accessibilityRole="button"
+                accessibilityState={{ selected: state.period === entry.key }}
               >
                 <Text style={[styles.filterText, state.period === entry.key && styles.filterTextActive]}>{entry.label}</Text>
               </Pressable>
             ))}
             {(state.statuses.length || state.errorsOnly || state.period !== 'any') ? (
-              <Pressable onPress={state.clearFilters} style={styles.filterChip}>
+              <Pressable
+                onPress={state.clearFilters}
+                style={styles.filterChip}
+                accessibilityRole="button"
+                accessibilityLabel="Clear search filters"
+              >
                 <Text style={styles.filterText}>Clear filters</Text>
               </Pressable>
             ) : null}
-          </ScrollView>
+          </View>
 
           {state.resultsUpdated ? (
             <Pressable style={styles.updatedBanner} onPress={() => { void state.acceptUpdatedResults(); }}>
@@ -565,7 +565,7 @@ const styles = StyleSheet.create({
   },
   panel: {
     width: '92%',
-    maxWidth: 540,
+    maxWidth: 620,
     minHeight: 320,
     backgroundColor: glassSurface.backgroundColor,
     borderRadius: radius.lg,
@@ -586,13 +586,25 @@ const styles = StyleSheet.create({
   },
   input: { flex: 1, minHeight: 44, color: colors.text, fontFamily: font.sans, fontSize: 15, paddingVertical: 0 },
   iconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md },
-  chipRow: { gap: 6, paddingHorizontal: spacing.md, paddingVertical: spacing.sm },
-  chip: { minHeight: 32, justifyContent: 'center', paddingHorizontal: 11, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.borderLight },
+  chipRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 7,
+  },
+  chip: { minHeight: 28, justifyContent: 'center', paddingHorizontal: 9, borderRadius: radius.pill, borderWidth: 1, borderColor: colors.borderLight },
   chipActive: { backgroundColor: colors.surface, borderColor: colors.border },
-  chipText: { color: colors.textMuted, fontFamily: font.sans, fontSize: 12, fontWeight: '500' },
+  chipText: { color: colors.textMuted, fontFamily: font.sans, fontSize: 11.5, fontWeight: '500' },
   chipTextActive: { color: colors.text, fontWeight: '600' },
-  filterRow: { gap: 5, paddingHorizontal: spacing.md, paddingBottom: spacing.sm },
-  filterChip: { minHeight: 28, justifyContent: 'center', paddingHorizontal: 9, borderRadius: radius.md, borderWidth: 1, borderColor: colors.borderLight },
+  filterRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+    paddingHorizontal: spacing.md,
+    paddingBottom: 7,
+  },
+  filterChip: { minHeight: 25, justifyContent: 'center', paddingHorizontal: 8, borderRadius: radius.md, borderWidth: 1, borderColor: colors.borderLight },
   filterChipActive: { backgroundColor: colors.primaryLight, borderColor: colors.border },
   filterText: { color: colors.textMuted, fontFamily: font.sans, fontSize: 10.5 },
   filterTextActive: { color: colors.text, fontWeight: '600' },
