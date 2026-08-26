@@ -172,6 +172,10 @@ export interface CapabilitiesResponse {
   storage: {
     phase: StoragePhase;
     schema_version: number;
+    /** False while canonical history v2 is still bootstrapping. */
+    history_ready: boolean;
+    /** Legacy session or automation changes still awaiting projection. */
+    history_pending: number;
     search_state: SearchState;
     search_ready: boolean;
     index_generation: Revision;
