@@ -17,7 +17,7 @@
  *
  * Effect: a bright crest sweeps across the "Reasoning" wordmark
  * glyph-by-glyph (a shimmer wave) while three trailing dots ride the same
- * crest — brightening, rising and scaling as it passes. Cyan + Geist Mono.
+ * crest — brightening, rising and scaling as it passes. Cyan + monospace.
  */
 
 import { useEffect, useRef, useState } from 'react';

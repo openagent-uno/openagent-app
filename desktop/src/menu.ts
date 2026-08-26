@@ -16,6 +16,7 @@ import {
   getCreateWindowFactory,
   type WindowInfo,
 } from './window-manager';
+import { configureAutoUpdater } from './update-policy';
 
 // ── Helpers ──
 
@@ -354,6 +355,12 @@ export function buildMenu(): Menu {
           sendToPrimary('menu:checkForUpdates');
           try {
             const { autoUpdater } = require('electron-updater');
+            const policy = configureAutoUpdater(autoUpdater, app.getVersion());
+            // This path is explicitly initiated by the user. A beta may
+            // download here, but choosing "Later" must never install it on
+            // quit without launch-crash recovery.
+            autoUpdater.autoDownload = true;
+            autoUpdater.autoInstallOnAppQuit = policy.installOnQuit;
             autoUpdater.checkForUpdatesAndNotify();
           } catch {
             // Not available in dev — silently ignore.

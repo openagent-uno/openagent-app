@@ -11,7 +11,7 @@
  * tail-shows the last few turns); omit for the full transcript.
  */
 
-import { memo, useState, useMemo } from 'react';
+import { memo, useEffect, useState, useMemo, type ReactNode } from 'react';
 import Feather from '@expo/vector-icons/Feather';
 import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import {
@@ -72,11 +72,17 @@ export interface MessageListProps {
   /** The current user's handle/display, used as the fallback "You" label
    *  when a user message carries no explicit author. */
   currentUserHandle?: string;
+  /** Stable v2 anchor selected from operational search. */
+  anchorMessageId?: string;
+  anchorToolInvocationId?: string;
+  /** Native ScrollView owner uses the measured anchor offset to center it. */
+  onAnchorLayout?: (y: number) => void;
 }
 
 function MessageListBase({
   messages, isProcessing, statusText, isReasoning, maxItems, onRegenerate, onEditUser,
   onOpenChild, onOpenRun, onOpenMemory, currentUserHandle,
+  anchorMessageId, anchorToolInvocationId, onAnchorLayout,
 }: MessageListProps) {
   // Windowing: render only the last `shown` messages. With bottom-pinned
   // scroll the tail is what the user sees; a long transcript otherwise
@@ -92,6 +98,22 @@ function MessageListBase({
     [messages, capped, maxItems, shown],
   );
   const hiddenCount = capped ? 0 : Math.max(0, messages.length - visible.length);
+  useEffect(() => {
+    if (!anchorMessageId || capped) return;
+    const index = messages.findIndex((message) => message.id === anchorMessageId);
+    if (index < 0) return;
+    setShown((current) => Math.max(current, messages.length - index));
+  }, [anchorMessageId, capped, messages]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || !anchorMessageId || typeof document === 'undefined') return;
+    const timer = setTimeout(() => {
+      const element = document.getElementById(`message-anchor-${encodeURIComponent(anchorMessageId)}`);
+      element?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      element?.focus({ preventScroll: true });
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [anchorMessageId, visible]);
   // Identify the last assistant message — Regenerate only attaches to
   // it, not to every assistant bubble in the transcript.
   const lastAssistantId = useMemo(() => {
@@ -102,11 +124,27 @@ function MessageListBase({
     return null;
   }, [visible]);
   const renderMessage = (msg: ChatMessage) => {
+    const isAnchor = msg.id === anchorMessageId;
+    const wrap = (node: ReactNode) => (
+      <View
+        key={msg.id}
+        nativeID={`message-anchor-${encodeURIComponent(msg.id)}`}
+        style={isAnchor ? styles.anchorMessage : undefined}
+        onLayout={isAnchor && onAnchorLayout
+          ? (event) => onAnchorLayout(event.nativeEvent.layout.y)
+          : undefined}
+        accessible={isAnchor || undefined}
+        accessibilityLabel={isAnchor ? 'Search result message' : undefined}
+        {...(Platform.OS === 'web' ? ({ tabIndex: -1 } as any) : {})}
+      >
+        {node}
+      </View>
+    );
     if (msg.role === 'compaction') {
       // In-place compaction (vision §2) renders as a tool-style card:
       // a live "Compacting…" spinner that resolves to "Compacted
       // conversation", with the run/token stats in the expanded body.
-      return <CompactionCard key={msg.id} info={msg.compactionInfo} />;
+      return wrap(<CompactionCard info={msg.compactionInfo} />);
     }
     if (msg.role === 'tool') {
       // A delegation renders as a card (deep-links into the sub-agent's
@@ -116,31 +154,33 @@ function MessageListBase({
       // the raw delegate-tool prompt or the sub-agent's own work inline.
       if (isDelegationTool(msg.toolInfo)) {
         const eff = effectiveTool(msg.toolInfo)!;
-        return (
+        return wrap(
           <DelegationCard
-            key={msg.id}
             childSessionId={eff.child_session_id}
             title={delegationTitle(msg.toolInfo)}
             model={eff.child_model}
             label={delegationLabel(msg.toolInfo)}
             phase={toolPhase(msg.toolInfo!)}
             onOpen={onOpenChild}
-          />
+          />,
         );
       }
       // A run-now of a scheduled task / workflow renders as a card that
       // deep-links into that run's execution screen (not an inline tool chip).
       const runTarget = runLaunchTarget(msg.toolInfo);
       if (runTarget) {
-        return <RunLaunchCard key={msg.id} target={runTarget} onOpen={onOpenRun} />;
+        return wrap(<RunLaunchCard target={runTarget} onOpen={onOpenRun} />);
       }
-      return (
+      return wrap(
         <ToolCard
-          key={msg.id}
           toolInfo={msg.toolInfo}
           fallbackText={msg.text}
           onOpenMemory={onOpenMemory}
-        />
+          forceExpanded={!!anchorToolInvocationId && (
+            msg.toolInvocationId === anchorToolInvocationId
+            || msg.toolInfo?.tool_invocation_id === anchorToolInvocationId
+          )}
+        />,
       );
     }
     if (msg.role === 'user') {
@@ -148,22 +188,22 @@ function MessageListBase({
       // node prompt the agent gave itself) renders as a Mission block,
       // not a "You" bubble.
       if (msg.author?.kind === 'agent') {
-        return <SelfPromptBlock key={msg.id} text={msg.text} label={msg.author.display} />;
+        return wrap(<SelfPromptBlock text={msg.text} label={msg.author.display} />);
       }
-      return (
+      return wrap(
         <UserMessage
-          key={msg.id} id={msg.id} text={msg.text} attachments={msg.attachments}
+          id={msg.id} text={msg.text} attachments={msg.attachments}
           author={msg.author} fallbackLabel={currentUserHandle}
           onEdit={onEditUser}
-        />
+        />,
       );
     }
-    return (
+    return wrap(
       <AssistantMessage
-        key={msg.id} text={msg.text} model={msg.model} attachments={msg.attachments}
+        text={msg.text} model={msg.model} attachments={msg.attachments}
         streaming={msg.streaming} author={msg.author}
         onRegenerate={msg.id === lastAssistantId && !isProcessing ? onRegenerate : undefined}
-      />
+      />,
     );
   };
   return (
@@ -417,13 +457,17 @@ const SelfPromptBlock = memo(function SelfPromptBlock({
 });
 
 const ToolCard = memo(function ToolCard({
-  toolInfo, fallbackText, onOpenMemory,
+  toolInfo, fallbackText, onOpenMemory, forceExpanded,
 }: {
   toolInfo?: ToolInfo;
   fallbackText: string;
   onOpenMemory?: (target: MemoryTarget) => void;
+  forceExpanded?: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(!!forceExpanded);
+  useEffect(() => {
+    if (forceExpanded) setExpanded(true);
+  }, [forceExpanded]);
   const parsed = useMemo<ToolInfo | undefined>(() => {
     if (toolInfo) return toolInfo;
     try {
@@ -662,6 +706,10 @@ const CompactionCard = memo(function CompactionCard({ info }: { info?: Compactio
 });
 
 const styles = StyleSheet.create({
+  anchorMessage: {
+    backgroundColor: colors.hover,
+    borderRadius: radius.md,
+  },
   // "Load earlier" — widens the rendered transcript window.
   loadEarlier: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',

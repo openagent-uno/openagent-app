@@ -36,6 +36,7 @@ import type {
 interface Props {
   node: WorkflowNode | null;
   blockTypes: BlockTypeSpec[];
+  initialField?: string;
   onChange: (nodeId: string, patch: Partial<WorkflowNode>) => void;
   onDelete: (nodeId: string) => void;
   onClose: () => void;
@@ -44,6 +45,7 @@ interface Props {
 export default function PropertiesPanelNative({
   node,
   blockTypes,
+  initialField,
   onChange,
   onDelete,
   onClose,
@@ -54,6 +56,8 @@ export default function PropertiesPanelNative({
   );
 
   if (!node) return null;
+
+  const focusedField = initialField?.split('.').pop();
 
   const config = (node.config || {}) as Record<string, any>;
   const setConfig = (patch: Record<string, unknown>) => {
@@ -99,6 +103,7 @@ export default function PropertiesPanelNative({
 
         <ScrollView style={styles.scroll} keyboardShouldPersistTaps="handled">
           <NativeFormField
+            focused={focusedField === 'label'}
             label="Label"
             value={node.label || ''}
             onChange={setLabel}
@@ -130,6 +135,7 @@ export default function PropertiesPanelNative({
                   name={key}
                   field={field}
                   value={config[key]}
+                  focused={focusedField === key}
                   onChange={(v) => setConfig({ [key]: v })}
                 />
               );
@@ -144,11 +150,13 @@ function GenericFieldNative({
   name,
   field,
   value,
+  focused,
   onChange,
 }: {
   name: string;
   field: BlockTypeFieldSpec;
   value: unknown;
+  focused?: boolean;
   onChange: (v: unknown) => void;
 }) {
   const label =
@@ -199,6 +207,7 @@ function GenericFieldNative({
         : JSON.stringify(value, null, 2);
     return (
       <NativeFormField
+        focused={focused}
         label={label}
         value={text}
         onChange={(v) => {
@@ -252,6 +261,7 @@ function GenericFieldNative({
 
   return (
     <NativeFormField
+      focused={focused}
       label={label}
       value={value == null ? '' : String(value)}
       onChange={(v) => {
@@ -282,6 +292,7 @@ function NativeFormField({
   multiline,
   monospaced,
   keyboardType,
+  focused,
 }: {
   label: string;
   value: string;
@@ -291,11 +302,13 @@ function NativeFormField({
   multiline?: boolean;
   monospaced?: boolean;
   keyboardType?: 'numeric';
+  focused?: boolean;
 }) {
   return (
     <View style={{ marginBottom: 12 }}>
       <Text style={styles.fieldLabel}>{label}</Text>
       <TextInput
+        autoFocus={focused}
         value={value}
         onChangeText={onChange}
         placeholder={placeholder}

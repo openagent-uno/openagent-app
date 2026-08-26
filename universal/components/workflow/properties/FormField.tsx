@@ -8,6 +8,7 @@
 import { colors, font, radius } from '../../../theme';
 
 interface Props {
+  fieldKey?: string;
   label: string;
   value: string;
   onChange: (v: string) => void;
@@ -20,6 +21,7 @@ interface Props {
 }
 
 export default function FormField({
+  fieldKey,
   label,
   value,
   onChange,
@@ -44,7 +46,10 @@ export default function FormField({
   } as const;
 
   return (
-    <div style={{ marginBottom: 10 }}>
+    <div
+      id={fieldKey ? `workflow-field-${encodeURIComponent(fieldKey)}` : undefined}
+      style={{ marginBottom: 10 }}
+    >
       <div
         style={{
           fontSize: 10,

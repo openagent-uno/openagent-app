@@ -693,7 +693,7 @@ const styles = StyleSheet.create({
   quoteText: {
     fontSize: 14, lineHeight: 22, color: colors.textSecondary,
     fontStyle: 'italic',
-    fontFamily: font.serif,
+    fontFamily: font.sans,
   },
   list: { marginVertical: 6 },
   listItem: {

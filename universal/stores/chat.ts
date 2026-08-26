@@ -20,6 +20,7 @@ import {
   type ToolInfo,
 } from '../../common/types';
 import type { SessionEntry } from '../services/api';
+import type { SessionMessage, SessionMessagePage, ToolInvocationDetail } from '../../common/unified-history';
 import {
   deleteSession as deleteSessionApi,
   fetchSessionRuns,
@@ -30,6 +31,51 @@ import {
 
 let nextMsgId = 1;
 const genId = () => `msg-${nextMsgId++}-${Date.now()}`;
+
+function safeJsonText(value: ToolInvocationDetail['result_safe']): string | null {
+  if (value == null) return null;
+  if (typeof value === 'string') return value;
+  try { return JSON.stringify(value); } catch { return String(value); }
+}
+
+function canonicalMessageToChat(message: SessionMessage): ChatMessage {
+  return {
+    id: message.id,
+    role: message.role,
+    text: message.text,
+    timestamp: Date.parse(message.created_at) || Date.now(),
+    ordinal: message.ordinal,
+    durableStatus: message.status,
+    completeness: message.completeness,
+    toolInvocationId: message.tool_invocation_id || undefined,
+    streaming: message.status === 'streaming',
+    author: {
+      kind: message.author.kind === 'user' ? 'human' : 'agent',
+      handle: message.author.handle || undefined,
+      display: message.author.display || undefined,
+    },
+    attachments: message.attachments?.map((attachment) => ({
+      type: attachment.kind,
+      path: attachment.artifact_id,
+      filename: attachment.filename,
+    })),
+  };
+}
+
+function toolInfoFromDetail(detail: ToolInvocationDetail): ToolInfo {
+  const args = detail.args_safe && typeof detail.args_safe === 'object' && !Array.isArray(detail.args_safe)
+    ? detail.args_safe as Record<string, any>
+    : { value: detail.args_safe };
+  return {
+    tool_name: detail.tool_name,
+    tool_call_id: detail.tool_call_id || undefined,
+    tool_invocation_id: detail.id,
+    tool_args: args,
+    tool_call_error: detail.status === 'error',
+    result: detail.error_safe || safeJsonText(detail.result_safe),
+    child_session_id: detail.child_session_id || undefined,
+  };
+}
 
 // When each session last heard anything at all from the server. Used by
 // ``settleStaleTurns`` to tell a turn that is still running apart from one
@@ -443,6 +489,8 @@ interface ChatState {
   hydrateFromServer: (entries: SessionEntry[]) => void;
   /** Mark hydration as done even when the server returned no sessions. */
   markHydrated: () => void;
+  /** Merge a stable-ID v2 transcript window without replacing live tail rows. */
+  mergeMessageWindow: (page: SessionMessagePage, tool?: ToolInvocationDetail) => void;
   addUserMessage: (sessionId: string, text: string, attachments?: Attachment[]) => void;
   /** Replace a previous user message in place (Edit & retry).
    *  Truncates everything after the edited message so the new turn
@@ -708,6 +756,63 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   markHydrated: () => set({ sessionsHydrated: true }),
+
+  mergeMessageWindow: (page, tool) => set((state) => {
+    const incoming = page.messages.map(canonicalMessageToChat);
+    if (tool) {
+      const messageId = tool.message_id;
+      for (let index = 0; index < incoming.length; index += 1) {
+        const message = incoming[index];
+        if (message.id !== messageId && message.toolInvocationId !== tool.id) continue;
+        incoming[index] = {
+          ...message,
+          role: 'tool',
+          toolInvocationId: tool.id,
+          toolInfo: toolInfoFromDetail(tool),
+        };
+      }
+    }
+    const known = state.sessions.some((session) => session.id === page.session_id);
+    const sessions = known
+      ? state.sessions
+      : [...state.sessions, {
+          id: page.session_id,
+          messages: [],
+          isProcessing: false,
+          ...childStubFor(page.session_id),
+        } as ChatSession];
+    return {
+      sessions: sessions.map((session) => {
+        if (session.id !== page.session_id) return session;
+        const byId = new Map(session.messages.map((message) => [message.id, message]));
+        for (const message of incoming) {
+          const prior = byId.get(message.id);
+          byId.set(message.id, {
+            ...prior,
+            ...message,
+            toolInfo: message.toolInfo || prior?.toolInfo,
+          });
+        }
+        const messages = [...byId.values()].sort((a, b) => {
+          if (a.ordinal != null && b.ordinal != null) return a.ordinal - b.ordinal;
+          if (a.ordinal != null) return -1;
+          if (b.ordinal != null) return 1;
+          return a.timestamp - b.timestamp;
+        });
+        return {
+          ...session,
+          messages,
+          messageWindow: {
+            revision: page.revision,
+            beforeCursor: page.before_cursor,
+            afterCursor: page.after_cursor,
+            hasMoreBefore: page.has_more_before,
+            hasMoreAfter: page.has_more_after,
+          },
+        };
+      }),
+    };
+  }),
 
   addUserMessage: (sessionId, text, attachments) => {
     const state = get();

@@ -52,7 +52,27 @@ run_unit() {
     # sono davvero. --experimental-strip-types serve a importare i sorgenti
     # TypeScript condivisi (common/) senza un passo di build.
     echo "🧪 node --test..."
+    local desktop_dist="$SCRIPT_DIR/desktop/dist"
+    cleanup_unit_artifacts() {
+        rm -rf -- "$desktop_dist"
+    }
+    # I test desktop importano il JavaScript compilato. Tienilo strettamente
+    # temporaneo anche quando la compilazione o un test falliscono/interrompono
+    # la funzione, così il gate non sporca la worktree.
+    trap cleanup_unit_artifacts RETURN
     cd "$SCRIPT_DIR/desktop"
+    if ! npx tsc; then
+        FAILURES=$((FAILURES + 1))
+        return
+    fi
+    # The shipped desktop runtime performs this same post-tsc bundle because
+    # cbor2 and noble are ESM-only while Electron's main process is CJS. Tests
+    # must exercise those runnable artifacts, not the known-broken raw tsc
+    # output.
+    if ! node scripts/bundle-main.js; then
+        FAILURES=$((FAILURES + 1))
+        return
+    fi
     node --test src/network/__tests__/*.test.mjs || FAILURES=$((FAILURES + 1))
 
     cd "$SCRIPT_DIR"

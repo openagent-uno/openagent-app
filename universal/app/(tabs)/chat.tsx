@@ -17,7 +17,7 @@ import {
 } from 'react-native';
 
 import type { Attachment } from '../../../common/types';
-import { isHiddenChildSession, runRoutePath, type RunLaunchTarget, type MemoryTarget } from '../../../common/types';
+import { runRoutePath, type RunLaunchTarget, type MemoryTarget } from '../../../common/types';
 import { useConnection } from '../../stores/connection';
 import { useChat } from '../../stores/chat';
 import { useUI } from '../../stores/ui';
@@ -26,7 +26,6 @@ import { fetchSessions } from '../../services/api';
 import MessageComposer, { type PendingFile, type SlashCommand } from '../../components/MessageComposer';
 import MessageList from '../../components/MessageList';
 import ContextPanel from '../../components/ContextPanel';
-import CommandPalette, { type PaletteEntry } from '../../components/CommandPalette';
 import BrandLogo from '../../components/BrandLogo';
 import { useHeaderInset, HeaderBack, HeaderMenu, HeaderRight } from '../../components/screenHeader';
 import PopupMenu from '../../components/PopupMenu';
@@ -40,7 +39,7 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import {
   uploadFile, guessMimeType, listDbModels,
   getSessionModelPin, pinSessionModel, unpinSessionModel, isAgentUnreachable,
-  getGatewayCommands, listServingAccounts,
+  getGatewayCommands, listServingAccounts, listSessionMessages, getToolInvocationDetail,
 } from '../../services/api';
 import { modelEffort, modelFamily } from '../../../common/types';
 import type { ModelEntry, GatewayCommandSpec, ProviderAccounts } from '../../../common/types';
@@ -89,7 +88,11 @@ export default function ChatScreen() {
   const currentUserHandle = useConnection((s) => s.config?.handle);
   const router = useRouter();
   const navigation = useNavigation<any>();
-  const routeParams = useLocalSearchParams<{ session?: string }>();
+  const routeParams = useLocalSearchParams<{
+    session?: string;
+    message?: string;
+    toolInvocation?: string;
+  }>();
   // Fine-grained selectors instead of the whole-store `useChat()`. The
   // no-arg form returns a freshly-merged state object on EVERY mutation,
   // so this ~1600-line screen used to re-render on every store change —
@@ -111,6 +114,7 @@ export default function ChatScreen() {
   const setLlmPin = useChat((s) => s.setLlmPin);
   const setSystemPrompt = useChat((s) => s.setSystemPrompt);
   const hydrateFromServer = useChat((s) => s.hydrateFromServer);
+  const mergeMessageWindow = useChat((s) => s.mergeMessageWindow);
   // Delete a chat session behind a confirmation dialog (vision §16: sessions
   // are durable — removal is an explicit, confirmed action). The server
   // cascades the delete to every sub-agent session this chat spawned, so the
@@ -131,30 +135,14 @@ export default function ChatScreen() {
     },
     [confirm, removeSession],
   );
-  // The app shell sidebar owns the visible session history. Chat keeps this
-  // sorted list only for the command palette / quick switcher.
-  const chatSessions = useMemo(() => {
-    // Sub-agent (delegation) sessions are navigable only from their parent's
-    // transcript card — never the sidebar/recent list. The active session view
-    // reads from the full ``sessions`` list, so a child opened from a card
-    // still renders even though it's filtered out here.
-    const visible = sessions.filter((s) => !isHiddenChildSession(s));
-    return [...visible].sort((a, b) => {
-      if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
-      const at = a.messages[a.messages.length - 1]?.timestamp ?? 0;
-      const bt = b.messages[b.messages.length - 1]?.timestamp ?? 0;
-      return bt - at;
-    });
-  }, [sessions]);
-
   const [input, setInput] = useState('');
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [dragActive, setDragActive] = useState(false);
-  const [paletteOpen, setPaletteOpen] = useState(false);
   const [llmModels, setLlmModels] = useState<ModelEntry[]>([]);
   // Set when the server refuses a model pin, so the composer can say why
   // the chip snapped back instead of leaving the rejection invisible.
   const [modelPinError, setModelPinError] = useState<string | null>(null);
+  const [anchorError, setAnchorError] = useState<string | null>(null);
   // The gateway's command registry. `null` until it loads (or if it fails),
   // in which case the composer falls back to the local handlers alone.
   const [gatewayCommands, setGatewayCommands] = useState<GatewayCommandSpec[] | null>(null);
@@ -370,6 +358,42 @@ export default function ChatScreen() {
     appliedParamRef.current = want;
     setActiveSession(want);
   }, [routeParams.session, activeSessionId, setActiveSession]);
+
+  // Exact operational-search anchor. The search overlay only navigates; Chat
+  // owns the authorized messages-around/tool-detail fetch and range merge.
+  useEffect(() => {
+    const session = typeof routeParams.session === 'string' ? routeParams.session : undefined;
+    const message = typeof routeParams.message === 'string' ? routeParams.message : undefined;
+    const toolInvocation = typeof routeParams.toolInvocation === 'string'
+      ? routeParams.toolInvocation : undefined;
+    if (!session || !message) return;
+    const controller = new AbortController();
+    setAnchorError(null);
+    void (async () => {
+      try {
+        const [page, tool] = await Promise.all([
+          listSessionMessages(session, { around: message, before: 30, after: 30 }, controller.signal),
+          toolInvocation
+            ? getToolInvocationDetail(toolInvocation, controller.signal)
+            : Promise.resolve(undefined),
+        ]);
+        if (controller.signal.aborted) return;
+        if (page.anchor_found === false) {
+          setAnchorError('This result is no longer available.');
+          return;
+        }
+        mergeMessageWindow(page, tool);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setAnchorError(
+          error instanceof Error && /404|not found/i.test(error.message)
+            ? 'This result is no longer available.'
+            : 'Could not load this message. Try opening the result again.',
+        );
+      }
+    })();
+    return () => controller.abort();
+  }, [mergeMessageWindow, routeParams.message, routeParams.session, routeParams.toolInvocation]);
 
   // Navigate into a child session (delegation card / run node) by swapping
   // the active session and reflecting it in the URL so it's deep-linkable.
@@ -704,13 +728,6 @@ export default function ChatScreen() {
         return;
       }
 
-      // Cmd/Ctrl+P (or Cmd+Shift+O à la VS Code) — open quick switcher.
-      if (mod && !e.altKey && (e.key === 'p' || e.key === 'P')) {
-        e.preventDefault();
-        setPaletteOpen(true);
-        return;
-      }
-
       // Cmd/Ctrl+Backspace — clear composer text + abort any in-flight
       // upload chips. Only when the focus is on the composer textarea
       // so the user doesn't lose chat sidebar context unexpectedly.
@@ -924,7 +941,6 @@ export default function ChatScreen() {
         if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
         // Only single printable characters; keep Space free to scroll.
         if (e.key.length !== 1 || e.key === ' ') return;
-        if (paletteOpen) return;
         // Don't hijack a keystroke already destined for a field.
         const el = document.activeElement as HTMLElement | null;
         const tag = el?.tagName?.toLowerCase();
@@ -939,7 +955,7 @@ export default function ChatScreen() {
       };
       window.addEventListener('keydown', onKey);
       return () => window.removeEventListener('keydown', onKey);
-    }, [paletteOpen]),
+    }, []),
   );
 
   const swState: SoundWavesState =
@@ -1391,18 +1407,6 @@ export default function ChatScreen() {
     [llmModels, providerHints],
   );
 
-  const paletteEntries: PaletteEntry[] = useMemo(() => chatSessions.map((s) => {
-    const last = s.messages[s.messages.length - 1];
-    return {
-      id: s.id,
-      title: s.title || 'Untitled chat',
-      subtitle: last ? `${last.role}: ${last.text.slice(0, 80)}` : 'Empty chat',
-      icon: 'message-circle',
-      pinned: s.pinned,
-      onSelect: () => setActiveSession(s.id),
-    };
-  }), [chatSessions, setActiveSession]);
-
   return (
     <>
       <View style={[styles.chatArea, { paddingTop: headerInset }]}>
@@ -1562,6 +1566,9 @@ export default function ChatScreen() {
                   onOpenRun={openRun}
                   onOpenMemory={openMemory}
                   currentUserHandle={currentUserHandle}
+                  anchorMessageId={typeof routeParams.message === 'string' ? routeParams.message : undefined}
+                  anchorToolInvocationId={typeof routeParams.toolInvocation === 'string' ? routeParams.toolInvocation : undefined}
+                  onAnchorLayout={(y) => scrollRef.current?.scrollTo({ y: Math.max(0, y - 96), animated: true })}
                 />
               </View>
             </ScrollView>
@@ -1599,6 +1606,11 @@ export default function ChatScreen() {
             {modelPinError && (
               <Notice style={styles.pinErrorBar} onDismiss={() => setModelPinError(null)}>
                 {`Could not switch model — ${modelPinError}`}
+              </Notice>
+            )}
+            {anchorError && (
+              <Notice style={styles.pinErrorBar} onDismiss={() => setAnchorError(null)}>
+                {anchorError}
               </Notice>
             )}
 
@@ -1684,11 +1696,6 @@ export default function ChatScreen() {
           </View>
         )}
       </View>
-      <CommandPalette
-        visible={paletteOpen}
-        onClose={() => setPaletteOpen(false)}
-        entries={paletteEntries}
-      />
     </>
   );
 }
@@ -1763,7 +1770,7 @@ const styles = StyleSheet.create({
   },
   heroGlyph: {
     fontSize: 26, color: colors.primary, marginBottom: 12,
-    fontFamily: font.serif,
+    fontFamily: font.display,
   },
   heroLogo: {
     width: 56, height: 56, marginBottom: 14,

@@ -63,7 +63,7 @@ export default function McpToolProperties({ node, onChange }: Props) {
 
   return (
     <div>
-      <div style={{ marginBottom: 10 }}>
+      <div id="workflow-field-mcp_name" style={{ marginBottom: 10 }}>
         <div style={styles.label}>MCP</div>
         {mcps.length === 0 ? (
           <div style={styles.emptyNote}>
@@ -88,7 +88,7 @@ export default function McpToolProperties({ node, onChange }: Props) {
         )}
       </div>
 
-      <div style={{ marginBottom: 10 }}>
+      <div id="workflow-field-tool_name" style={{ marginBottom: 10 }}>
         <div style={styles.label}>Tool</div>
         <select
           value={currentTool || ''}
@@ -111,6 +111,7 @@ export default function McpToolProperties({ node, onChange }: Props) {
       </div>
 
       <FormField
+        fieldKey="args"
         label="Arguments (JSON)"
         value={argsText}
         onChange={onArgsChange}
@@ -121,7 +122,7 @@ export default function McpToolProperties({ node, onChange }: Props) {
         rows={8}
       />
 
-      <div style={{ marginBottom: 10 }}>
+      <div id="workflow-field-on_error" style={{ marginBottom: 10 }}>
         <div style={styles.label}>On error</div>
         <div style={styles.chipRow}>
           {(['halt', 'continue', 'branch'] as OnError[]).map((e) => (

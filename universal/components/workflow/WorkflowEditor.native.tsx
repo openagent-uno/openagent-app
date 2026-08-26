@@ -47,12 +47,16 @@ interface Props {
   workflow: WorkflowTask;
   onBack: () => void;
   onWorkflowUpdated?: (wf: WorkflowTask) => void;
+  initialNodeId?: string;
+  initialField?: string;
 }
 
 export default function WorkflowEditorNative({
   workflow,
   onBack,
   onWorkflowUpdated,
+  initialNodeId,
+  initialField,
 }: Props) {
   const {
     blockTypes,
@@ -94,11 +98,14 @@ export default function WorkflowEditorNative({
     setEdges((g.edges || []).map((e) => ({ ...e })));
     setVariables(g.variables || {});
     setDirty(false);
-    setSelectedId(null);
+    setSelectedId(
+      initialNodeId && (g.nodes || []).some((node) => node.id === initialNodeId)
+        ? initialNodeId : null,
+    );
     setConnectFrom(null);
     // Concurrency input has its own seed effect so saving the cap
     // mid-edit can't clobber unsaved canvas state.
-  }, [workflow.id]);
+  }, [initialNodeId, workflow.id]);
 
   useEffect(() => {
     setMaxConcurrentInput(
@@ -475,6 +482,7 @@ export default function WorkflowEditorNative({
       <PropertiesPanelNative
         node={selectedNode}
         blockTypes={blockTypes}
+        initialField={initialField}
         onChange={patchNode}
         onDelete={deleteNode}
         onClose={() => setSelectedId(null)}

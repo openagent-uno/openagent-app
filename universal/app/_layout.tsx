@@ -37,7 +37,7 @@ const navDarkTheme: Theme = {
     border: 'rgba(63, 200, 255, 0.20)',
     notification: '#FF6B7A',
   },
-  fonts: { regular: { fontFamily: 'system', fontWeight: '400' }, medium: { fontFamily: 'system', fontWeight: '500' }, bold: { fontFamily: 'system', fontWeight: '700' }, heavy: { fontFamily: 'system', fontWeight: '900' } },
+  fonts: { regular: { fontFamily: 'System', fontWeight: '400' }, medium: { fontFamily: 'System', fontWeight: '500' }, bold: { fontFamily: 'System', fontWeight: '700' }, heavy: { fontFamily: 'System', fontWeight: '900' } },
 };
 
 function desktop(): any {

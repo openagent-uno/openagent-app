@@ -24,7 +24,6 @@ import Card from '../components/Card';
 import Input from '../components/Input';
 import WindowControls from '../components/WindowControls';
 import DragRegion from '../components/DragRegion';
-import { JarvisClock } from '../components/jarvis';
 import BrandLogo from '../components/BrandLogo';
 
 type Mode = 'signin' | 'join';
@@ -228,10 +227,7 @@ export default function LoginScreen() {
         {...(Platform.OS === 'web' ? { className: 'oa-slide-up' } : {})}
       >
         <View style={styles.wakeScene}>
-          <BrandLogo size={108} />
-          <View style={styles.clockWrap}>
-            <JarvisClock size="md" />
-          </View>
+          <BrandLogo size={76} />
         </View>
 
         {/* Standalone agent window opening its own connection — show a
@@ -333,6 +329,8 @@ export default function LoginScreen() {
               onChangeText={setSigninPassword}
               placeholder="••••••••"
               secureTextEntry
+              autoComplete="current-password"
+              textContentType="password"
               containerStyle={{ marginTop: 12 }}
               onSubmitEditing={handleSignIn}
             />
@@ -358,6 +356,7 @@ export default function LoginScreen() {
               placeholder="oa1abcdef… (paste from `openagent invite`)"
               autoCapitalize="none"
               autoCorrect={false}
+              autoComplete="off"
               mono
               containerStyle={{ marginTop: 0 }}
             />
@@ -380,6 +379,7 @@ export default function LoginScreen() {
               placeholder="alice"
               autoCapitalize="none"
               autoCorrect={false}
+              autoComplete="username"
               mono
               containerStyle={{ marginTop: 12 }}
               editable={ticketIntent?.role !== 'device'}
@@ -396,6 +396,8 @@ export default function LoginScreen() {
               onChangeText={setJoinPassword}
               placeholder="••••••••"
               secureTextEntry
+              autoComplete="new-password"
+              textContentType="newPassword"
               containerStyle={{ marginTop: 12 }}
               onSubmitEditing={handleJoin}
             />
@@ -446,15 +448,11 @@ const styles = StyleSheet.create({
   },
   wakeScene: {
     alignItems: 'center',
-    marginBottom: 32,
+    marginBottom: 24,
     marginTop: 8,
   },
-  clockWrap: {
-    marginTop: 12,
-  },
   sectionKicker: {
-    fontSize: 10, fontWeight: '600', color: colors.textMuted,
-    textTransform: 'uppercase', letterSpacing: 1,
+    fontSize: 11, fontWeight: '600', color: colors.textMuted,
     marginBottom: 10,
   },
   subtitle: {

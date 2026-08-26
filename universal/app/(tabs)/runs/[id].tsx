@@ -25,11 +25,15 @@ import { useUI } from '../../../stores/ui';
 import { setBaseUrl } from '../../../services/api';
 
 export default function RunDetailScreen() {
-  const { id, kind, parentId, name } = useLocalSearchParams<{
+  const { id, kind, parentId, name, traceStep, message, toolInvocation, session } = useLocalSearchParams<{
     id: string;
     kind: string;
     parentId: string;
     name?: string;
+    traceStep?: string;
+    message?: string;
+    toolInvocation?: string;
+    session?: string;
   }>();
   const navigation = useNavigation();
   const headerInset = useHeaderInset();
@@ -94,6 +98,10 @@ export default function RunDetailScreen() {
           parentId={parentId || ''}
           runId={id}
           name={name}
+          traceStepId={traceStep}
+          messageId={message}
+          toolInvocationId={toolInvocation}
+          targetSessionId={session}
         />
       ) : (
         <View style={styles.statusPane}>

@@ -32,19 +32,17 @@ import {
   StyleSheet,
   Platform,
   ScrollView,
+  ActivityIndicator,
 } from 'react-native';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  Easing,
-} from 'react-native-reanimated';
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter, useSegments, useGlobalSearchParams } from 'expo-router';
 import { useChat } from '../stores/chat';
 import { isHiddenChildSession } from '../../common/types';
 import { useActivity, type ActivityRun } from '../stores/activity';
 import { useConnection } from '../stores/connection';
+import { globalSearchAvailable, useSearch } from '../stores/search';
+import { openSearchTarget } from '../services/searchNavigation';
+import type { ActivityItem, SearchTarget } from '../../common/unified-history';
 import { useConfirm } from './ConfirmDialog';
 import PopupMenu from './PopupMenu';
 import { useEvents } from '../stores/events';
@@ -52,7 +50,7 @@ import AgentSwitcher from './AgentSwitcher';
 import BrandLogo from './BrandLogo';
 import WindowControls from './WindowControls';
 import DragRegion from './DragRegion';
-import { colors, font, radius, spacing, tracking } from '../theme';
+import { colors, font, radius, spacing } from '../theme';
 
 type IconName = keyof typeof Feather.glyphMap;
 
@@ -72,7 +70,7 @@ const NAV: NavItem[] = [
   { href: '/events', match: 'events', label: 'Events', icon: 'zap' },
 ];
 
-// Fixed nav-row geometry so the gliding rail can resolve a row's Y.
+// Fixed nav-row geometry shared by actions and navigation.
 const ROW_H = 38;
 const ROW_GAP = 2;
 const FEED_MAX = 60;
@@ -122,23 +120,9 @@ export default function Sidebar({
   }, [segments]);
 
   const navIndex = NAV.findIndex((n) => n.match === activeSeg);
-
-  // ── Gliding cyan rail ──
-  const railY = useSharedValue(navIndex < 0 ? 0 : navIndex * (ROW_H + ROW_GAP));
-  const railOpacity = useSharedValue(navIndex < 0 ? 0 : 1);
-  useEffect(() => {
-    railOpacity.value = withTiming(navIndex < 0 ? 0 : 1, { duration: 180 });
-    if (navIndex >= 0) {
-      railY.value = withTiming(navIndex * (ROW_H + ROW_GAP), {
-        duration: 280,
-        easing: Easing.out(Easing.cubic),
-      });
-    }
-  }, [navIndex, railOpacity, railY]);
-  const railStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: railY.value }],
-    opacity: railOpacity.value,
-  }));
+  const searchSupport = useSearch((state) => state.support);
+  const searchCapabilities = useSearch((state) => state.capabilities);
+  const canSearch = globalSearchAvailable({ support: searchSupport, capabilities: searchCapabilities });
 
   const go = (href: string) => {
     router.push(href as any);
@@ -179,24 +163,37 @@ export default function Sidebar({
         <BrandLogo size={22} wordmark />
       </View>
 
-      {/* ── New session (styled like a nav row) ── */}
-      <Pressable
-        onPress={startSession}
-        // @ts-ignore web hover
-        {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
-        style={[styles.newRow, styles.newRowFull]}
-        accessibilityRole="button"
-        accessibilityLabel="New session"
-      >
-        <Feather name="edit-3" size={16} color={colors.accent} />
-        <Text style={styles.newRowText}>New session</Text>
-      </Pressable>
+      {/* ── Primary actions ── */}
+      <View style={styles.actionGroup}>
+        <Pressable
+          onPress={startSession}
+          // @ts-ignore web hover
+          {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
+          style={[styles.newRow, styles.newRowFull]}
+          accessibilityRole="button"
+          accessibilityLabel="New session"
+        >
+          <Feather name="edit-3" size={16} color={colors.accent} />
+          <Text style={styles.newRowText}>New session</Text>
+        </Pressable>
+        {canSearch ? (
+          <Pressable
+            onPress={() => useSearch.getState().show()}
+            // @ts-ignore web hover
+            {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
+            style={[styles.searchRow, styles.newRowFull]}
+            accessibilityRole="button"
+            accessibilityLabel="Search"
+          >
+            <Feather name="search" size={16} color={colors.textSecondary} />
+            <Text style={styles.searchRowText}>Search</Text>
+            {Platform.OS === 'web' ? <Text style={styles.searchShortcut}>⌘P</Text> : null}
+          </Pressable>
+        ) : null}
+      </View>
 
       {/* ── Workspace nav ── */}
       <View style={styles.nav}>
-        <Animated.View pointerEvents="none" style={[styles.rail, { height: ROW_H }, railStyle]}>
-          <View style={styles.railFill} />
-        </Animated.View>
         {NAV.map((item) => {
           const isActive = navIndex >= 0 && item.match === activeSeg;
           return (
@@ -209,6 +206,7 @@ export default function Sidebar({
                 styles.row,
                 { height: ROW_H, marginBottom: ROW_GAP },
                 styles.rowFull,
+                isActive && styles.rowActive,
               ]}
               accessibilityRole="button"
               accessibilityState={{ selected: isActive }}
@@ -334,9 +332,15 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
   const filters = useActivity((s) => s.filters);
   const setFilter = useActivity((s) => s.setFilter);
   const loadActivity = useActivity((s) => s.loadActivity);
+  const unifiedSupport = useSearch((s) => s.support);
+  const unifiedItems = useSearch((s) => s.historyItems);
+  const unifiedLoading = useSearch((s) => s.historyLoading);
+  const unifiedPaginating = useSearch((s) => s.historyPaginating);
+  const unifiedError = useSearch((s) => s.historyError || s.capabilityError);
+  const loadMoreHistory = useSearch((s) => s.loadMoreHistory);
 
   useEffect(() => {
-    if (!isConnected) return;
+    if (!isConnected || unifiedSupport !== 'legacy') return;
     void loadActivity();
     const off1 = useEvents.getState().subscribe('workflow', () => void loadActivity());
     const off2 = useEvents.getState().subscribe('scheduled_task', () => void loadActivity());
@@ -344,13 +348,39 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
     // 'event' resource event, so a webhook trigger refreshes the feed live.
     const off3 = useEvents.getState().subscribe('event', () => void loadActivity());
     return () => { off1(); off2(); off3(); };
-  }, [isConnected, loadActivity]);
+  }, [isConnected, loadActivity, unifiedSupport]);
 
   const onChat = activeSeg === 'chat' && !onRunsRoute;
   const allOn = filters.chat && filters.workflow && filters.task && filters.event;
 
   const feed = useMemo<FeedItem[]>(() => {
     const items: FeedItem[] = [];
+    if (unifiedSupport === 'v2') {
+      for (const item of unifiedItems) {
+        // Delegated child sessions stay reachable from their parent transcript
+        // and from global search, but never become top-level Recent rows.
+        if (item.kind === 'delegated_session') continue;
+        if (item.kind === 'chat') {
+          if (!filters.chat) continue;
+        } else if (item.kind === 'workflow_run') {
+          if (!filters.workflow) continue;
+        } else if (item.kind === 'scheduled_run') {
+          if (!filters.task) continue;
+        } else if (!filters.event) continue;
+        const mapped = unifiedFeedItem(
+          item, router, activeRunId, activeSessionId, onChat, onNavigate,
+          item.kind === 'chat'
+            ? () => confirmAndRemove(item.session_id || item.resource_id, item.title)
+            : undefined,
+        );
+        if (mapped) items.push(mapped);
+      }
+      // Every v2 page was explicitly requested by the user reaching the end
+      // of the feed, so keep it visible. Re-applying the legacy 60-row cap
+      // here made subsequent pages load over the network and then disappear.
+      return items;
+    }
+    if (unifiedSupport !== 'legacy') return items;
     if (filters.chat) {
       for (const s of sessions) {
         // Sub-agent (delegation) sessions are navigable only from their
@@ -391,7 +421,10 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
     items.sort((a, b) => b.ts - a.ts);
     return items.slice(0, FEED_MAX);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions, workflowRuns, taskRuns, eventRuns, filters, onChat, activeSessionId, activeRunId]);
+  }, [
+    unifiedSupport, unifiedItems, sessions, workflowRuns, taskRuns, eventRuns,
+    filters, onChat, activeSessionId, activeRunId,
+  ]);
 
   return (
     <View style={styles.recent}>
@@ -430,8 +463,24 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
         </PopupMenu>
       </View>
 
-      <ScrollView style={styles.recentScroll} contentContainerStyle={styles.recentContent} showsVerticalScrollIndicator={false}>
-        {feed.length === 0 ? (
+      <ScrollView
+        style={styles.recentScroll}
+        contentContainerStyle={styles.recentContent}
+        showsVerticalScrollIndicator={false}
+        scrollEventThrottle={120}
+        onScroll={({ nativeEvent }) => {
+          if (unifiedSupport !== 'v2') return;
+          const remaining = nativeEvent.contentSize.height
+            - nativeEvent.layoutMeasurement.height
+            - nativeEvent.contentOffset.y;
+          if (remaining < 120) void loadMoreHistory();
+        }}
+      >
+        {unifiedLoading && feed.length === 0 ? (
+          <ActivityIndicator size="small" color={colors.textMuted} style={styles.recentLoader} />
+        ) : unifiedError && feed.length === 0 ? (
+          <Text style={styles.recentError}>{unifiedError}</Text>
+        ) : feed.length === 0 ? (
           <Text style={styles.recentEmpty}>Nothing here yet.</Text>
         ) : (
           feed.map((it) => (
@@ -466,6 +515,9 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
             </Pressable>
           ))
         )}
+        {unifiedPaginating ? (
+          <ActivityIndicator size="small" color={colors.textMuted} style={styles.recentLoader} />
+        ) : null}
       </ScrollView>
     </View>
   );
@@ -520,6 +572,61 @@ function runItem(
       router.push(target as any);
       onNavigate?.();
     },
+  };
+}
+
+function unifiedFeedItem(
+  item: ActivityItem,
+  router: ReturnType<typeof useRouter>,
+  activeRunId: string | null,
+  activeSessionId: string | null,
+  onChat: boolean,
+  onNavigate?: () => void,
+  onDelete?: () => void,
+): FeedItem | null {
+  let target: SearchTarget;
+  let prefix: string;
+  let icon: IconName;
+  if (item.kind === 'chat' || item.kind === 'delegated_session') {
+    const sessionId = item.session_id || item.resource_id;
+    target = { kind: 'chat', session_id: sessionId };
+    prefix = 'c';
+    icon = 'message-circle';
+  } else {
+    if (!item.parent?.id) return null;
+    if (item.kind === 'workflow_run') {
+      target = { kind: 'workflow_run', run_id: item.resource_id, workflow_id: item.parent.id };
+      prefix = 'w';
+      icon = 'git-branch';
+    } else if (item.kind === 'scheduled_run') {
+      target = {
+        kind: 'scheduled_run', run_id: item.resource_id, task_id: item.parent.id,
+        ...(item.session_id ? { session_id: item.session_id } : {}),
+      };
+      prefix = 't';
+      icon = 'clock';
+    } else {
+      target = {
+        kind: 'event_delivery', delivery_id: item.resource_id, event_id: item.parent.id,
+        ...(item.session_id ? { session_id: item.session_id } : {}),
+      };
+      prefix = 'e';
+      icon = 'zap';
+    }
+  }
+  const sessionId = target.kind === 'chat' ? target.session_id : null;
+  return {
+    key: `${prefix}-${item.id}`,
+    icon,
+    label: item.title,
+    ts: Date.parse(item.occurred_at),
+    active: sessionId ? onChat && sessionId === activeSessionId : activeRunId === item.resource_id,
+    dotColor: item.live ? colors.warning : item.status ? runStatusColor(item.status) : null,
+    onPress: () => {
+      openSearchTarget(router, target);
+      onNavigate?.();
+    },
+    onDelete,
   };
 }
 
@@ -579,6 +686,7 @@ const styles = StyleSheet.create({
   brandFull: { gap: spacing.sm },
 
   // New session row
+  actionGroup: { gap: ROW_GAP, marginBottom: spacing.md },
   newRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -587,32 +695,17 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.primaryLight,
   },
-  newRowFull: { gap: 11, paddingHorizontal: spacing.md, height: ROW_H, marginBottom: spacing.md },
+  newRowFull: { gap: 11, paddingHorizontal: spacing.md, height: ROW_H },
   newRowText: { fontFamily: font.sans, fontSize: 14, color: colors.text, fontWeight: '600' },
+  searchRow: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md },
+  searchRowText: { flex: 1, fontFamily: font.sans, fontSize: 14, color: colors.textSecondary, fontWeight: '500' },
+  searchShortcut: { fontFamily: font.mono, fontSize: 9.5, color: colors.textMuted },
 
   // Nav
   nav: { position: 'relative' },
-  rail: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    borderRadius: radius.md,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  railFill: {
-    position: 'absolute',
-    left: 0,
-    top: 6,
-    bottom: 6,
-    width: 2.5,
-    borderRadius: radius.pill,
-    backgroundColor: colors.accent,
-    ...(Platform.OS === 'web' ? ({ boxShadow: `0 0 8px ${colors.accentGlow}` } as any) : {}),
-  },
   row: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md },
   rowFull: { gap: 11, paddingHorizontal: spacing.md },
+  rowActive: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
   rowLabel: { fontFamily: font.sans, fontSize: 14, color: colors.textSecondary, fontWeight: '500' },
   rowLabelActive: { color: colors.text, fontWeight: '600' },
 
@@ -622,11 +715,9 @@ const styles = StyleSheet.create({
   recentHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xs, marginBottom: spacing.xs },
   recentHeading: {
     fontFamily: font.sans,
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '600',
     color: colors.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: tracking.wider,
   },
   filterBtn: { width: 24, height: 24, alignItems: 'center', justifyContent: 'center', borderRadius: radius.sm, borderWidth: 1, borderColor: 'transparent' },
   filterBtnActive: { borderColor: colors.border, backgroundColor: colors.primaryLight },
@@ -638,6 +729,8 @@ const styles = StyleSheet.create({
   recentScroll: { flex: 1 },
   recentContent: { gap: 1, paddingBottom: spacing.sm },
   recentEmpty: { fontFamily: font.sans, fontSize: 12, color: colors.textMuted, fontStyle: 'italic', paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
+  recentError: { fontFamily: font.sans, fontSize: 11.5, lineHeight: 16, color: colors.error, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
+  recentLoader: { marginVertical: spacing.md },
   feedRow: {
     flexDirection: 'row',
     alignItems: 'center',

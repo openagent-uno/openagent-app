@@ -20,6 +20,24 @@ import type {
   SkillSummary, SkillDetail, SkillWriteResult, CreateSkillInput,
   ProviderAccounts, AgentEvent, CreateEventInput, UpdateEventInput, EventDelivery, EventTypeSpec,
 } from '../../common/types';
+import type {
+  ApiErrorPayload,
+  CapabilitiesResponse,
+  EventDeliveryDetail,
+  HistoryPage,
+  HistoryQuery,
+  ScheduledRunDetail,
+  SearchPage,
+  SearchRequest,
+  SessionMessagePage,
+  SessionMessagesQuery,
+  ToolInvocationDetail,
+  WorkflowRunDetail,
+} from '../../common/unified-history';
+import {
+  mergeCanonicalWorkflowTrace,
+  type WorkflowRunWithCanonicalTrace,
+} from '../../common/workflow-trace';
 
 let baseUrl = '';
 
@@ -43,10 +61,16 @@ const REQUEST_TIMEOUT_MS = 30_000;
  *  is a support ticket we wrote ourselves. */
 export class ApiError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  readonly code?: ApiErrorPayload['code'];
+  readonly retryable?: boolean;
+  readonly details?: ApiErrorPayload['details'];
+  constructor(status: number, message: string, payload?: ApiErrorPayload) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.code = payload?.code;
+    this.retryable = payload?.retryable;
+    this.details = payload?.details;
   }
 }
 
@@ -55,6 +79,11 @@ export class ApiError extends Error {
  *  the wrong method 405; both mean "this server can't do that yet". */
 export function isUnsupportedByAgent(e: unknown): boolean {
   return e instanceof ApiError && (e.status === 404 || e.status === 405);
+}
+
+/** A v2 endpoint exists but this server intentionally disabled the feature. */
+export function isExplicitlyUnsupported(e: unknown): boolean {
+  return e instanceof ApiError && e.status === 501 && e.code === 'unsupported';
 }
 
 /** True when the request never reached the agent at all: the loopback tunnel
@@ -77,24 +106,46 @@ export function isAgentUnreachable(e: unknown): boolean {
 function withTimeout(init: RequestInit, label: string): RequestInit {
   if (typeof AbortController === 'undefined') return init;
   const ctrl = new AbortController();
+  const upstream = init.signal;
+  const onUpstreamAbort = () => ctrl.abort(upstream?.reason);
+  if (upstream?.aborted) onUpstreamAbort();
+  else upstream?.addEventListener('abort', onUpstreamAbort, { once: true });
   const timer = setTimeout(() => ctrl.abort(`request timed out after ${REQUEST_TIMEOUT_MS}ms: ${label}`), REQUEST_TIMEOUT_MS);
-  // Clear when the promise settles. We attach this on the returned
-  // init via a sentinel field the caller picks up — simpler than
-  // wrapping every helper in a try/finally.
-  (init as any).__timer = timer;
-  return { ...init, signal: ctrl.signal };
+  const timed = { ...init, signal: ctrl.signal };
+  // Sentinels are removed in `clearTimer`; they never reach fetch's
+  // observable request surface.
+  (timed as any).__timer = timer;
+  (timed as any).__cleanupAbort = () => upstream?.removeEventListener('abort', onUpstreamAbort);
+  return timed;
 }
 
 function clearTimer(init: RequestInit): void {
   const t = (init as any).__timer;
   if (t) clearTimeout(t);
+  (init as any).__cleanupAbort?.();
 }
 
-async function get<T>(path: string): Promise<T> {
-  const init = withTimeout({}, `GET ${path}`);
+async function responseError(res: Response): Promise<ApiError> {
+  const text = await res.text();
+  let payload: ApiErrorPayload | undefined;
+  try {
+    const decoded = JSON.parse(text) as { error?: ApiErrorPayload };
+    if (decoded?.error?.code && decoded.error.message) payload = decoded.error;
+  } catch {
+    // Older gateways return plain text. Preserve it below.
+  }
+  return new ApiError(
+    res.status,
+    payload?.message || `API ${res.status}${text ? `: ${text}` : ''}`,
+    payload,
+  );
+}
+
+async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const init = withTimeout({ signal }, `GET ${path}`);
   try {
     const res = await fetch(`${baseUrl}${path}`, init);
-    if (!res.ok) throw new ApiError(res.status, `API ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw await responseError(res);
     return res.json();
   } finally {
     clearTimer(init);
@@ -116,15 +167,16 @@ async function put<T>(path: string, body: object): Promise<T> {
   }
 }
 
-async function post<T>(path: string, body: object = {}): Promise<T> {
+async function post<T>(path: string, body: object = {}, signal?: AbortSignal): Promise<T> {
   const init = withTimeout({
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal,
   }, `POST ${path}`);
   try {
     const res = await fetch(`${baseUrl}${path}`, init);
-    if (!res.ok) throw new ApiError(res.status, `API ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw await responseError(res);
     return res.json();
   } finally {
     clearTimer(init);
@@ -559,7 +611,10 @@ export async function getWorkflowRuns(
 }
 
 export async function getWorkflowRun(runId: string): Promise<WorkflowRun> {
-  return get<WorkflowRun>(`/api/workflow-runs/${encodeURIComponent(runId)}`);
+  const run = await get<WorkflowRunWithCanonicalTrace>(
+    `/api/workflow-runs/${encodeURIComponent(runId)}`,
+  );
+  return mergeCanonicalWorkflowTrace(run);
 }
 
 export async function getWorkflowStats(
@@ -1138,6 +1193,95 @@ export interface SessionEntry {
 
 export interface SessionListResponse {
   sessions: SessionEntry[];
+}
+
+// ── Unified operational history/search beta ──
+
+export async function getUnifiedCapabilities(signal?: AbortSignal): Promise<CapabilitiesResponse> {
+  return get<CapabilitiesResponse>('/api/capabilities', signal);
+}
+
+export async function listUnifiedHistory(
+  query: HistoryQuery = {},
+  signal?: AbortSignal,
+): Promise<HistoryPage> {
+  const params = new URLSearchParams();
+  if (query.kinds?.length) params.set('kinds', query.kinds.join(','));
+  if (query.status?.length) params.set('status', query.status.join(','));
+  if (query.origin) params.set('origin', query.origin);
+  if (query.parent_type) params.set('parent_type', query.parent_type);
+  if (query.parent_id) params.set('parent_id', query.parent_id);
+  if (query.from) params.set('from', query.from);
+  if (query.to) params.set('to', query.to);
+  if (query.include_children != null) {
+    params.set('include_children', query.include_children ? 'true' : 'false');
+  }
+  if (query.limit != null) params.set('limit', String(query.limit));
+  if (query.cursor) params.set('cursor', query.cursor);
+  const suffix = params.toString();
+  return get<HistoryPage>(`/api/history${suffix ? `?${suffix}` : ''}`, signal);
+}
+
+export async function searchOperationalHistory(
+  request: SearchRequest,
+  signal?: AbortSignal,
+): Promise<SearchPage> {
+  return post<SearchPage>('/api/search', request, signal);
+}
+
+export async function listSessionMessages(
+  sessionId: string,
+  query: SessionMessagesQuery = {},
+  signal?: AbortSignal,
+): Promise<SessionMessagePage> {
+  const params = new URLSearchParams();
+  if ('around' in query && query.around) {
+    params.set('around', query.around);
+    if (query.before != null) params.set('before', String(query.before));
+    if (query.after != null) params.set('after', String(query.after));
+  } else if ('cursor' in query && query.cursor) {
+    params.set('cursor', query.cursor);
+    params.set('direction', query.direction);
+    if (query.limit != null) params.set('limit', String(query.limit));
+  } else if ('limit' in query && query.limit != null) {
+    params.set('limit', String(query.limit));
+  }
+  const suffix = params.toString();
+  return get<SessionMessagePage>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/messages${suffix ? `?${suffix}` : ''}`,
+    signal,
+  );
+}
+
+export async function getToolInvocationDetail(
+  toolInvocationId: string,
+  signal?: AbortSignal,
+): Promise<ToolInvocationDetail> {
+  return get<ToolInvocationDetail>(
+    `/api/tool-invocations/${encodeURIComponent(toolInvocationId)}`,
+    signal,
+  );
+}
+
+export async function getWorkflowRunDetail(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<WorkflowRunDetail> {
+  return get<WorkflowRunDetail>(`/api/workflow-runs/${encodeURIComponent(runId)}`, signal);
+}
+
+export async function getScheduledRunDetail(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<ScheduledRunDetail> {
+  return get<ScheduledRunDetail>(`/api/scheduled-runs/${encodeURIComponent(runId)}`, signal);
+}
+
+export async function getEventDeliveryDetail(
+  deliveryId: string,
+  signal?: AbortSignal,
+): Promise<EventDeliveryDetail> {
+  return get<EventDeliveryDetail>(`/api/event-deliveries/${encodeURIComponent(deliveryId)}`, signal);
 }
 
 export async function fetchSessions(): Promise<SessionEntry[]> {

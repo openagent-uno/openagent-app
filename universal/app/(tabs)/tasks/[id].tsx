@@ -14,7 +14,7 @@
  */
 
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
@@ -39,7 +39,7 @@ interface TaskForm {
 const EMPTY_FORM: TaskForm = { name: '', cron_expression: '', prompt: '', model: null };
 
 export default function TaskEditScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, field } = useLocalSearchParams<{ id: string; field?: string }>();
   const navigation = useNavigation();
   const router = useRouter();
   const headerInset = useHeaderInset();
@@ -56,6 +56,8 @@ export default function TaskEditScreen() {
   // the user picks from configured models instead of typing a runtime_id.
   const [models, setModels] = useState<ModelEntry[]>([]);
   const [modelMenuOpen, setModelMenuOpen] = useState(false);
+  const nameRef = useRef<TextInput>(null);
+  const promptRef = useRef<TextInput>(null);
 
   useEffect(() => {
     if (!connConfig) return;
@@ -88,6 +90,18 @@ export default function TaskEditScreen() {
       cancelled = true;
     };
   }, [connConfig, id, isNew]);
+
+  useEffect(() => {
+    if (loading || !field) return;
+    const timer = setTimeout(() => {
+      if (field === 'name') nameRef.current?.focus();
+      if (field === 'prompt') promptRef.current?.focus();
+      if (Platform.OS === 'web' && typeof document !== 'undefined') {
+        document.getElementById(`task-field-${field}`)?.scrollIntoView({ block: 'center' });
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [field, loading]);
 
   // Load the enabled LLM catalog for the model picker (non-fatal on failure —
   // the picker just shows "Default" only).
@@ -167,6 +181,8 @@ export default function TaskEditScreen() {
         <ScrollView style={styles.body} contentContainerStyle={styles.bodyContent}>
           <Text style={styles.label}>Name</Text>
           <TextInput
+            ref={nameRef}
+            nativeID="task-field-name"
             style={styles.input}
             value={form.name}
             onChangeText={(v) => setForm({ ...form, name: v })}
@@ -174,7 +190,7 @@ export default function TaskEditScreen() {
             placeholderTextColor={colors.textMuted}
           />
 
-          <View style={styles.cronSlot}>
+          <View style={styles.cronSlot} nativeID="task-field-schedule">
             <CronPicker
               label="Schedule"
               value={form.cron_expression}
@@ -227,6 +243,7 @@ export default function TaskEditScreen() {
           <Text style={styles.label}>Prompt</Text>
           {Platform.OS === 'web' ? (
             <textarea
+              id="task-field-prompt"
               value={form.prompt}
               onChange={(e: any) => setForm({ ...form, prompt: e.target.value })}
               placeholder="Prompt — what should the agent do?"
@@ -239,6 +256,8 @@ export default function TaskEditScreen() {
             />
           ) : (
             <TextInput
+              ref={promptRef}
+              nativeID="task-field-prompt"
               style={[styles.input, { height: 120, textAlignVertical: 'top' }]}
               value={form.prompt}
               onChangeText={(v) => setForm({ ...form, prompt: v })}

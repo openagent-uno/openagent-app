@@ -32,6 +32,7 @@ import { registerAllShortcuts, unregisterAllShortcuts, getShortcutsMap } from '.
 import { buildMenu, rebuildMenu, setupMenuAutoRebuild } from './menu';
 import { createTray, updateTrayAgentList, destroyTray } from './tray';
 import { setupDockMenu, updateDockAgentList } from './dock';
+import { configureAutoUpdater, shouldAcceptUpdate } from './update-policy';
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.heic', '.tiff']);
 
@@ -135,6 +136,10 @@ function registerDialogHandlers(): void {
 }
 
 const isDev = !app.isPackaged;
+const packagedSmoke = process.argv.includes('--packaged-smoke');
+const expectedSmokeVersion = process.argv
+  .find((value) => value.startsWith('--expected-version='))
+  ?.slice('--expected-version='.length);
 
 app.setAboutPanelOptions({
   applicationName: 'OpenAgent',
@@ -146,7 +151,7 @@ if (process.platform === 'win32') {
   app.setAppUserModelId('ai.openagent.desktop');
 }
 
-const gotLock = app.requestSingleInstanceLock();
+const gotLock = packagedSmoke || app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 }
@@ -381,10 +386,20 @@ setCreateWindowFactory(createWindow);
 function setupAutoUpdater(): void {
   if (isDev) return;
   const { autoUpdater } = require('electron-updater');
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  const installedVersion = app.getVersion();
+  const policy = configureAutoUpdater(autoUpdater, installedVersion);
+  autoUpdater.autoDownload = policy.automaticCheck;
+  autoUpdater.autoInstallOnAppQuit = policy.installOnQuit;
 
   autoUpdater.on('update-downloaded', (info: any) => {
+    if (!shouldAcceptUpdate(installedVersion, info.version)) {
+      // A stale or malformed provider response must never become a queued
+      // downgrade on quit, even if electron-updater's own guard changes.
+      autoUpdater.autoInstallOnAppQuit = false;
+      console.error(`Rejected updater candidate ${info.version} for ${installedVersion}`);
+      return;
+    }
+    autoUpdater.autoInstallOnAppQuit = policy.installOnQuit;
     dialog.showMessageBox({
       type: 'info',
       title: 'Update Ready',
@@ -400,7 +415,9 @@ function setupAutoUpdater(): void {
     console.error('Auto-updater error:', err.message);
   });
 
-  autoUpdater.checkForUpdatesAndNotify();
+  // Beta builds stay on an explicit, user-initiated update path until the
+  // desktop app has launch-crash recovery. Stable behavior is unchanged.
+  if (policy.automaticCheck) autoUpdater.checkForUpdatesAndNotify();
 }
 
 // ── IPC: Window-control handlers (module-level so they're registered
@@ -592,6 +609,27 @@ ipcMain.handle('network:decode-ticket', (_event, ticket: unknown) => {
 // ── Lifecycle ──
 
 app.whenReady().then(async () => {
+  if (packagedSmoke) {
+    try {
+      if (!app.isPackaged) throw new Error('packaged smoke was started from an unpackaged app');
+      if (!expectedSmokeVersion || app.getVersion() !== expectedSmokeVersion) {
+        throw new Error(`version mismatch: expected ${expectedSmokeVersion || '<missing>'}, got ${app.getVersion()}`);
+      }
+      for (const required of [
+        path.join(process.resourcesPath, 'app.asar'),
+        path.join(process.resourcesPath, 'web-build', 'index.html'),
+      ]) {
+        if (!fs.existsSync(required)) throw new Error(`missing packaged resource: ${required}`);
+      }
+      console.log(`packaged-smoke ok ${app.getVersion()} ${process.platform} ${process.arch}`);
+      app.exit(0);
+    } catch (error) {
+      console.error(`packaged-smoke failed: ${error instanceof Error ? error.message : String(error)}`);
+      app.exit(1);
+    }
+    return;
+  }
+
   registerStorageHandlers();
   registerDialogHandlers();
   registerLoopbackHandlers();

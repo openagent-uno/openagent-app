@@ -51,6 +51,7 @@ export default function AiPromptProperties({ node, onChange }: Props) {
   return (
     <div>
       <FormField
+        fieldKey="prompt"
         label="Prompt"
         value={config.prompt || ''}
         onChange={(v) => setConfig({ prompt: v })}
@@ -60,6 +61,7 @@ export default function AiPromptProperties({ node, onChange }: Props) {
         rows={5}
       />
       <FormField
+        fieldKey="system"
         label="System prompt (optional)"
         value={config.system || ''}
         onChange={(v) => setConfig({ system: v })}
@@ -69,7 +71,7 @@ export default function AiPromptProperties({ node, onChange }: Props) {
         rows={3}
       />
 
-      <div style={{ marginBottom: 10 }}>
+      <div id="workflow-field-model_override" style={{ marginBottom: 10 }}>
         <div style={styles.label}>Model override</div>
         {availableModels.length > 0 ? (
           <select
@@ -103,7 +105,7 @@ export default function AiPromptProperties({ node, onChange }: Props) {
         </div>
       </div>
 
-      <div style={{ marginBottom: 10 }}>
+      <div id="workflow-field-session_policy" style={{ marginBottom: 10 }}>
         <div style={styles.label}>Session policy</div>
         <div style={styles.chipRow}>
           {(['ephemeral', 'shared'] as Policy[]).map((p) => (
@@ -128,7 +130,7 @@ export default function AiPromptProperties({ node, onChange }: Props) {
         </div>
       </div>
 
-      <div style={{ marginBottom: 10 }}>
+      <div id="workflow-field-on_error" style={{ marginBottom: 10 }}>
         <div style={styles.label}>On error</div>
         <div style={styles.chipRow}>
           {(['halt', 'continue', 'branch'] as OnError[]).map((e) => (

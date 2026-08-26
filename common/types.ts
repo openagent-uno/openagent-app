@@ -3,6 +3,14 @@
  * Used by both the universal app and the desktop Electron wrapper.
  */
 
+import type {
+  CapabilitiesResponse,
+  HistoryChangedEvent,
+  SearchIndexChangedEvent,
+  Completeness,
+  MessageStatus,
+} from './unified-history';
+
 // ── WebSocket Protocol ──
 
 export type ClientMessage =
@@ -129,7 +137,13 @@ export type ResourceKind = 'mcp' | 'scheduled_task' | 'workflow' | 'vault' | 'co
 export type ResourceAction = 'created' | 'updated' | 'deleted' | 'changed';
 
 export type ServerMessage =
-  | { type: 'auth_ok'; agent_name: string; version: string }
+  | {
+      type: 'auth_ok';
+      agent_name: string;
+      version: string;
+      /** New gateways may inline discovery; older ones omit it. */
+      capabilities?: CapabilitiesResponse;
+    }
   | { type: 'auth_error'; reason: string }
   // Rehydration snapshot for a turn that is still live on the server.
   // Frames reuse the normal stream wire types (text_final/status/delta/etc.)
@@ -179,6 +193,8 @@ export type ServerMessage =
   // Resource-change ping: a list the desktop app might be showing
   // moved on the server. Subscribed stores refetch on receipt.
   | { type: 'resource_event'; resource: ResourceKind; action: ResourceAction; id?: string }
+  | HistoryChangedEvent
+  | SearchIndexChangedEvent
   // Live host telemetry — emitted every ~2s by the gateway when at
   // least one client is connected. The System screen subscribes here
   // and re-renders without polling.
@@ -867,6 +883,12 @@ export interface ChatMessage {
   // attachment markers ``parse_response_markers`` extracted on the
   // server side). Used by MessageList to render a soft caret / cursor.
   streaming?: boolean;
+  /** Durable v2 transcript ordering/status. Absent on legacy run rows. */
+  ordinal?: number;
+  durableStatus?: MessageStatus;
+  completeness?: Completeness;
+  /** Canonical operational-search anchor, distinct from legacy tool_call_id. */
+  toolInvocationId?: string;
 }
 
 export interface ChatSession {
@@ -918,6 +940,14 @@ export interface ChatSession {
    *  Applies to every session kind — chat, sub-agent, scheduled firing,
    *  workflow AI node — since they are all ordinary sessions. */
   contextUsage?: SessionContext;
+  /** Cursor/range metadata from the v2 messages-around endpoint. */
+  messageWindow?: {
+    revision: string;
+    beforeCursor: string | null;
+    afterCursor: string | null;
+    hasMoreBefore: boolean;
+    hasMoreAfter: boolean;
+  };
 }
 
 // ── System telemetry ──
@@ -1777,6 +1807,10 @@ export type UpdateWorkflowInput = Partial<{
 // each block finishes. Shared between the UI's RunHistoryContent and
 // the workflow-manager MCP's get_workflow_run tool.
 export interface WorkflowTraceEntry {
+  /** Stable v2 attempt-level anchor; legacy gateways omit it. */
+  id?: string;
+  /** Compatibility alias emitted by early beta gateways. */
+  trace_step_id?: string;
   node_id: string;
   type: BlockType;
   started_at: number;
@@ -1789,6 +1823,7 @@ export interface WorkflowTraceEntry {
    *  screen renders a DelegationCard that deep-links into the node's full
    *  conversation. */
   child_session_id?: string;
+  tool_invocation_ids?: string[];
 }
 
 export interface WorkflowRun {

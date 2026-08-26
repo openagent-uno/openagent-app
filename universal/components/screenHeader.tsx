@@ -75,11 +75,11 @@ export const themedHeader = {
   // window drag region (Electron) via the transparent DragRegion.
   headerBackground: () => <HeaderGlassBackground />,
   headerTitleStyle: {
-    fontFamily: font.sans,
+    fontFamily: font.display,
     fontSize: 17,
     fontWeight: '600' as const,
     color: colors.text,
-    letterSpacing: 0.3,
+    letterSpacing: -0.1,
   },
 };
 

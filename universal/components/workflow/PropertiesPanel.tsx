@@ -11,6 +11,7 @@
  */
 
 import Feather from '@expo/vector-icons/Feather';
+import { useEffect } from 'react';
 import type { BlockTypeSpec, WorkflowNode } from '../../../common/types';
 import { colors, font, radius } from '../../theme';
 import AiPromptProperties from './properties/AiPromptProperties';
@@ -23,6 +24,7 @@ import TriggerScheduleProperties from './properties/TriggerScheduleProperties';
 interface Props {
   node: WorkflowNode | null;
   blockTypes: BlockTypeSpec[];
+  initialField?: string;
   onChange: (nodeId: string, patch: Partial<WorkflowNode>) => void;
   onDelete: (nodeId: string) => void;
 }
@@ -37,9 +39,26 @@ const DEDICATED_EDITORS: Record<string, any> = {
 export default function PropertiesPanel({
   node,
   blockTypes,
+  initialField,
   onChange,
   onDelete,
 }: Props) {
+  const nodeId = node?.id;
+  useEffect(() => {
+    if (!nodeId || !initialField || typeof document === 'undefined') return;
+    const candidates = [initialField, initialField.split('.').pop()].filter(Boolean) as string[];
+    const timer = setTimeout(() => {
+      for (const candidate of candidates) {
+        const element = document.getElementById(`workflow-field-${encodeURIComponent(candidate)}`);
+        if (!element) continue;
+        element.scrollIntoView({ block: 'center' });
+        element.focus?.({ preventScroll: true });
+        break;
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [initialField, nodeId]);
+
   if (!node) {
     return (
       <div style={styles.sidebar}>
@@ -81,6 +100,7 @@ export default function PropertiesPanel({
 
       <div style={styles.scroll}>
         <FormField
+          fieldKey="label"
           label="Label"
           value={node.label || ''}
           onChange={(v) => handlePatch({ label: v })}

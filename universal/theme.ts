@@ -14,8 +14,13 @@
  * place. On native, `colors` holds raw hex values for the active mode.
  */
 
+import { Platform } from 'react-native';
+
+const WEB_SANS = "'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+const WEB_DISPLAY = "'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
+const WEB_MONO = "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace";
+
 const STYLE_ELEMENT_ID = 'oa-theme-vars';
-const FONTS_ELEMENT_ID = 'oa-fonts';
 const GLOBAL_CSS_ELEMENT_ID = 'oa-global-css';
 
 const isWeb = typeof document !== 'undefined';
@@ -326,19 +331,6 @@ export const glassSurface = {
   webFilter: 'blur(2.6px) saturate(140%)',
 } as const;
 
-/** Inject Geist + Geist Mono + Orbitron + Rajdhani fonts on web.
- *  Orbitron is the JARVIS wordmark / clock face; Rajdhani is the
- *  condensed display font for tracked-out small caps and labels. */
-function ensureFonts(): void {
-  if (!isWeb) return;
-  if (document.getElementById(FONTS_ELEMENT_ID)) return;
-  const link = document.createElement('link');
-  link.id = FONTS_ELEMENT_ID;
-  link.rel = 'stylesheet';
-  link.href = 'https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500&family=Orbitron:wght@400;500;600;700;800&family=Rajdhani:wght@300;400;500;600;700&display=swap';
-  document.head.appendChild(link);
-}
-
 /** Global base styles — JARVIS canvas, scrollbar, keyframes, focus rings. */
 function ensureGlobalCss(): void {
   if (!isWeb) return;
@@ -350,9 +342,8 @@ function ensureGlobalCss(): void {
   }
   el.textContent = `
     html, body, #root { background: var(--oa-bg) !important; color: var(--oa-text); margin: 0; min-height: 100vh; }
-    body { font-family: 'Rajdhani', 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-      -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
-      letter-spacing: 0.005em; }
+    body { font-family: ${WEB_SANS};
+      -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
     * { box-sizing: border-box; }
     /* Some default react-native-web bottom-tabbar wrappers paint a white
        safe-area strip; force any direct child of the bottom nav to keep
@@ -446,7 +437,7 @@ function ensureGlobalCss(): void {
       margin: 0 !important;
       padding: 12px !important;
       background: transparent !important;
-      font-family: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace !important;
+      font-family: ${WEB_MONO} !important;
       font-size: 12.5px !important;
       line-height: 19px !important;
       overflow-x: auto;
@@ -519,7 +510,6 @@ export function setTheme(mode: ThemeMode): void {
   themeListeners.forEach((fn) => fn(mode));
 }
 
-ensureFonts();
 ensureCssVariables();
 ensureGlobalCss();
 
@@ -555,10 +545,14 @@ export const radius = {
 } as const;
 
 export const font = {
-  mono: '"Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace',
-  sans: '"Rajdhani", "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-  display: '"Orbitron", "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-  serif: '"Orbitron", Georgia, serif',
+  sans: Platform.select({ web: WEB_SANS, default: undefined }),
+  display: Platform.select({ web: WEB_DISPLAY, default: undefined }),
+  mono: Platform.select({
+    ios: 'Menlo',
+    android: 'monospace',
+    web: WEB_MONO,
+    default: 'monospace',
+  })!,
 } as const;
 
 export const tracking = {
