@@ -14,10 +14,18 @@ test('maps every canonical SearchTarget to one existing route', () => {
     [{ kind: 'scheduled_run', task_id: 'task', run_id: 'r', message_id: 'm' }, '/(tabs)/runs/[id]'],
     [{ kind: 'event_definition', event_id: 'e', field: 'name' }, '/(tabs)/events/[id]'],
     [{ kind: 'event_delivery', event_id: 'e', delivery_id: 'd', tool_invocation_id: 't' }, '/(tabs)/runs/[id]'],
+    [{ kind: 'ui_view', view_id: 'view' }, '/(tabs)/views/[id]'],
   ];
   for (const [target, pathname] of cases) {
     assert.equal(searchNavigationIntent(target).pathname, pathname, target.kind);
   }
+});
+
+test('routes a view search target with its opaque canonical id', () => {
+  assert.deepEqual(searchNavigationIntent({ kind: 'ui_view', view_id: 'view/one?two' }), {
+    pathname: '/(tabs)/views/[id]',
+    params: { id: 'view/one?two' },
+  });
 });
 
 test('keeps canonical ids and converts only route parameter names', () => {

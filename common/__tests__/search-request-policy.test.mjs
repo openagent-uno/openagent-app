@@ -3,8 +3,8 @@ import test from 'node:test';
 
 import { canUseUnifiedHistoryCache, searchPresentation } from '../search-request-policy.ts';
 
-test('uses history cache only for empty, unfiltered All', () => {
-  assert.equal(canUseUnifiedHistoryCache('', 'all', [], false, 'any'), true);
+test('never mistakes the activity feed for definition/tool/view search', () => {
+  assert.equal(canUseUnifiedHistoryCache('', 'all', [], false, 'any'), false);
   assert.equal(canUseUnifiedHistoryCache('', 'workflows', [], false, 'any'), false);
   assert.equal(canUseUnifiedHistoryCache('', 'all', ['failed'], false, 'any'), false);
   assert.equal(canUseUnifiedHistoryCache('', 'all', [], true, 'any'), false);
