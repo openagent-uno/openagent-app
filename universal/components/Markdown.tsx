@@ -594,7 +594,7 @@ function renderInline(text: string): (string | ReactElement)[] {
         <Text
           key={`l${idx++}`}
           style={styles.link}
-          onPress={() => Linking.openURL(match![14])}
+          onPress={() => { void openSafeMarkdownLink(match![14]); }}
         >
           {match[13]}
         </Text>
@@ -615,6 +615,23 @@ function renderInline(text: string): (string | ReactElement)[] {
   }
 
   return parts.length ? parts : [text];
+}
+
+async function openSafeMarkdownLink(raw: string): Promise<void> {
+  if (!raw || raw.length > 8192 || Array.from(raw).some((char) => {
+    const code = char.charCodeAt(0);
+    return code < 32 || code === 127;
+  })) return;
+  try {
+    const parsed = new URL(raw);
+    const safe = parsed.protocol === 'mailto:'
+      ? !parsed.username && !parsed.password
+      : (parsed.protocol === 'https:' || parsed.protocol === 'http:')
+        && !!parsed.hostname && !parsed.username && !parsed.password;
+    if (safe) await Linking.openURL(parsed.toString());
+  } catch {
+    // Invalid and relative URLs are inert in model-authored markdown.
+  }
 }
 
 const styles = StyleSheet.create({

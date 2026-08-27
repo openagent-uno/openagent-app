@@ -38,6 +38,11 @@ import { buildMenu, rebuildMenu, setupMenuAutoRebuild } from './menu';
 import { createTray, updateTrayAgentList, destroyTray } from './tray';
 import { setupDockMenu, updateDockAgentList } from './dock';
 import { configureAutoUpdater, shouldAcceptUpdate } from './update-policy';
+import {
+  isAllowedExternalUrl,
+  isAllowedRendererNavigation,
+  PRODUCTION_CSP,
+} from './security-policy';
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.heic', '.tiff']);
 
@@ -249,7 +254,13 @@ function startStaticServer(): Promise<number> {
 
       try {
         const content = fs.readFileSync(filePath);
-        res.writeHead(200, { 'Content-Type': contentType });
+        res.writeHead(200, {
+          'Content-Type': contentType,
+          'Content-Security-Policy': PRODUCTION_CSP,
+          'X-Content-Type-Options': 'nosniff',
+          'Referrer-Policy': 'no-referrer',
+          'Cross-Origin-Opener-Policy': 'same-origin',
+        });
         res.end(content);
       } catch (err) {
         console.error(`[openagent] 404 ${req.url} -> ${filePath}`);
@@ -310,6 +321,7 @@ function createWindow(opts: CreateWindowOptions = {}): BrowserWindow {
       preload: path.resolve(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true,
     },
   });
   const webContentsId = win.webContents.id;
@@ -325,8 +337,25 @@ function createWindow(opts: CreateWindowOptions = {}): BrowserWindow {
   win.loadURL(target.toString());
 
   win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
+    if (isAllowedExternalUrl(url)) {
+      void shell.openExternal(url).catch((error) => {
+        console.error(`[openagent] failed to open external URL: ${error}`);
+      });
+    }
     return { action: 'deny' };
+  });
+
+  // A compromised renderer must not replace the trusted app document with a
+  // remote page that would inherit the preload bridge. Internal SPA routes
+  // remain same-origin; safe external links are delegated to the OS browser.
+  win.webContents.on('will-navigate', (event, url) => {
+    if (isAllowedRendererNavigation(url, baseUrl)) return;
+    event.preventDefault();
+    if (isAllowedExternalUrl(url)) {
+      void shell.openExternal(url).catch((error) => {
+        console.error(`[openagent] failed to open external navigation: ${error}`);
+      });
+    }
   });
 
   if (markChild) relayChildIds.add(webContentsId);
