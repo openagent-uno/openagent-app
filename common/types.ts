@@ -10,6 +10,9 @@ import type {
   Completeness,
   MessageStatus,
 } from './unified-history';
+import type { MessagePart } from './ui-views';
+import type { AttachmentRef } from './attachments';
+export type { AttachmentRef } from './attachments';
 
 // ── WebSocket Protocol ──
 
@@ -74,6 +77,13 @@ export type ClientMessage =
       // a provider is configured. Chat-tab sessions pass false so typed
       // replies stay silent; voice-mode sessions keep the default.
       speak?: boolean;
+      client_capabilities?: {
+        attachments: boolean;
+        ordered_parts: boolean;
+        inline_ui: boolean;
+        sidebar_ui: boolean;
+        custom_ui_version: number;
+      };
     }
   | { type: 'session_close'; session_id: string }
   | { type: 'text_delta'; session_id: string; text: string; final?: boolean }
@@ -106,9 +116,14 @@ export type ClientMessage =
       type: 'attachment';
       session_id: string;
       kind: 'image' | 'file' | 'voice' | 'video';
+      artifact_id?: string;
+      artifact_link_id?: string;
+      url?: string;
       path?: string;
       filename?: string;
       mime_type?: string;
+      size_bytes?: number;
+      sha256?: string;
     }
   | {
       type: 'interrupt';
@@ -131,9 +146,24 @@ export type ClientMessage =
   | { type: 'terminal_input'; terminal_id: string; data: string }
   | { type: 'terminal_resize'; terminal_id: string; cols: number; rows: number }
   | { type: 'terminal_signal'; terminal_id: string; signal: 'INT' | 'TERM' | 'HUP' | 'QUIT' | 'KILL' }
-  | { type: 'terminal_close'; terminal_id: string };
+  | { type: 'terminal_close'; terminal_id: string }
+  | {
+      type: 'ui_subscribe'; subscriptionId: string; viewId: string;
+      /** Exact immutable layout/action revision for inline embeds. Omitted for
+       * mutable sidebar pages; knownRevision is only a cache hint. */
+      revision?: number;
+      knownRevision?: number;
+    }
+  | { type: 'ui_unsubscribe'; subscriptionId: string }
+  | {
+      type: 'ui_action';
+      subscriptionId: string;
+      actionId: string;
+      input?: unknown;
+      idempotencyKey: string;
+    };
 
-export type ResourceKind = 'mcp' | 'scheduled_task' | 'workflow' | 'vault' | 'config' | 'session' | 'event';
+export type ResourceKind = 'mcp' | 'scheduled_task' | 'workflow' | 'vault' | 'config' | 'session' | 'event' | 'ui_view';
 export type ResourceAction = 'created' | 'updated' | 'deleted' | 'changed';
 
 export type ServerMessage =
@@ -168,7 +198,17 @@ export type ServerMessage =
   // don't recognize ``delta`` ignore it and render the final
   // ``response`` like before — backward-compatible.
   | { type: 'delta'; text: string; session_id: string }
-  | { type: 'response'; text: string; session_id: string; attachments?: Attachment[]; model?: string }
+  | {
+      type: 'response';
+      text: string;
+      session_id: string;
+      attachments?: Attachment[];
+      /** Ordered parts are additive; artifacts is accepted by the client as
+       * the early-beta alias but new gateways should emit parts. */
+      parts?: unknown[];
+      artifacts?: unknown[];
+      model?: string;
+    }
   // The agent-self seed that opens a spawned child session (a delegated
   // sub-agent, a scheduled firing, a workflow node) — the task/mission/role
   // prompt. Streamed FIRST so a run screen shows the Mission block at the top
@@ -269,13 +309,30 @@ export type ServerMessage =
   | { type: 'terminal_ready'; terminal_id: string; pid: number | null; shell: string; cols: number; rows: number; cwd?: string }
   | { type: 'terminal_output'; terminal_id: string; data: string }
   | { type: 'terminal_exit'; terminal_id: string; exit_code: number | null; signal: string | null }
-  | { type: 'terminal_error'; terminal_id: string; error: string };
+  | { type: 'terminal_error'; terminal_id: string; error: string }
+  // OA-UI v1 realtime feed. Camel-case is canonical on the wire; the view
+  // store accepts snake-case aliases from early beta gateways at runtime.
+  | { type: 'ui_snapshot'; subscriptionId: string; view: unknown }
+  | {
+      type: 'ui_data'; subscriptionId: string; viewId: string; key: string;
+      value: unknown; version: number; generation?: number; seq?: number;
+    }
+  | {
+      type: 'ui_source_status'; subscriptionId: string; viewId: string; key: string;
+      status: string; error?: { code?: string; message: string } | string;
+      updatedAt?: string | number; generation?: number; seq?: number;
+    }
+  | { type: 'ui_view_changed'; viewId: string; revision: number; action?: string }
+  | {
+      type: 'ui_action_result'; subscriptionId?: string; viewId?: string;
+      actionId?: string; result?: unknown; error?: unknown;
+    }
+  | {
+      type: 'ui_error'; subscriptionId?: string; viewId?: string;
+      code?: string; message: string;
+    };
 
-export interface Attachment {
-  type: 'image' | 'file' | 'voice' | 'video';
-  path: string;
-  filename: string;
-}
+export type Attachment = AttachmentRef;
 
 // ── Interactive terminal ──
 // One live (or recently-closed) PTY shell on the gateway host. Returned
@@ -871,6 +928,9 @@ export interface ChatMessage {
   text: string;
   timestamp: number;
   attachments?: Attachment[];
+  /** Ordered rich response parts. Absent on stable/legacy gateways, in which
+   * case renderers preserve the historical text-then-attachments order. */
+  parts?: MessagePart[];
   toolInfo?: ToolInfo;
   /** Set on ``role: 'compaction'`` messages — the compaction card payload. */
   compactionInfo?: CompactionInfo;

@@ -28,6 +28,7 @@ export const SEARCH_SCOPES = [
   'workflows',
   'scheduled',
   'events',
+  'views',
 ] as const;
 export type SearchScope = (typeof SEARCH_SCOPES)[number];
 
@@ -69,6 +70,7 @@ export const SEARCH_TARGET_KINDS = [
   'scheduled_run',
   'event_definition',
   'event_delivery',
+  'ui_view',
 ] as const;
 export type SearchTargetKind = (typeof SEARCH_TARGET_KINDS)[number];
 
@@ -80,7 +82,8 @@ export type SearchRootKind =
   | 'scheduled_definition'
   | 'scheduled_run'
   | 'event_definition'
-  | 'event_delivery';
+  | 'event_delivery'
+  | 'ui_view';
 
 export type SearchMatchKind =
   | 'title'
@@ -91,7 +94,8 @@ export type SearchMatchKind =
   | 'tool_args'
   | 'tool_result'
   | 'error'
-  | 'workflow_step';
+  | 'workflow_step'
+  | 'static_text';
 
 export type ApiErrorCode =
   | 'invalid_request'
@@ -331,6 +335,10 @@ export interface EventDeliveryTarget {
   message_id?: OpaqueId;
   tool_invocation_id?: OpaqueId;
 }
+export interface UIViewTarget {
+  kind: 'ui_view';
+  view_id: OpaqueId;
+}
 
 export type SearchTarget =
   | ChatTarget
@@ -341,7 +349,8 @@ export type SearchTarget =
   | ScheduledDefinitionTarget
   | ScheduledRunTarget
   | EventDefinitionTarget
-  | EventDeliveryTarget;
+  | EventDeliveryTarget
+  | UIViewTarget;
 
 export type EventDownstreamTarget =
   | ChatTarget
@@ -433,11 +442,19 @@ export interface SessionMessage {
   tool_invocation_id?: OpaqueId | null;
   attachments?: {
     artifact_id: OpaqueId;
+    artifact_link_id?: OpaqueId;
     kind: 'image' | 'file' | 'voice' | 'video';
     filename: string;
-    mime: string;
+    mime?: string;
+    mime_type?: string;
     size_bytes?: number;
+    sha256?: string;
+    url?: string;
   }[];
+  /** Additive ordered response parts. Beta gateways may use either the final
+   * kind/snake_case envelope or the early type/camelCase alias. */
+  parts?: unknown[];
+  artifacts?: unknown[];
   created_at: IsoDateTime;
   completeness: Completeness;
 }

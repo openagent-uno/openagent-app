@@ -59,6 +59,7 @@ const SCOPES: { key: SearchScopeSelection; label: string }[] = [
   { key: 'workflows', label: 'Workflows' },
   { key: 'scheduled', label: 'Scheduled' },
   { key: 'events', label: 'Events' },
+  { key: 'views', label: 'Views' },
 ];
 
 const PERIODS: { key: SearchPeriod; label: string }[] = [
@@ -82,6 +83,7 @@ function iconForScope(scope: SearchScope | SearchScopeSelection): IconName {
     case 'workflows': return 'git-branch';
     case 'scheduled': return 'clock';
     case 'events': return 'zap';
+    case 'views': return 'layout';
     default: return 'search';
   }
 }
@@ -196,6 +198,7 @@ function asRows(
       result.root.kind.startsWith('workflow') ? 'workflows'
         : result.root.kind.startsWith('scheduled') ? 'scheduled'
           : result.root.kind.startsWith('event') ? 'events'
+            : result.root.kind === 'ui_view' ? 'views'
             : match.kind.startsWith('tool') ? 'tools' : 'chats',
     ),
     fragments: match.fragments,
@@ -374,7 +377,7 @@ export default function GlobalSearchOverlayShared({ platform, onOpenTarget }: Pr
           </View>
 
           <View style={styles.filterRow}>
-            {state.scope !== 'chats' && STATUS_FILTERS.map((entry) => {
+            {state.scope !== 'chats' && state.scope !== 'views' && STATUS_FILTERS.map((entry) => {
               const selected = !state.errorsOnly
                 && entry.value.join(',') === state.statuses.join(',');
               return (
@@ -389,7 +392,7 @@ export default function GlobalSearchOverlayShared({ platform, onOpenTarget }: Pr
                 </Pressable>
               );
             })}
-            {state.scope !== 'chats' ? (
+            {state.scope !== 'chats' && state.scope !== 'views' ? (
               <Pressable
                 onPress={() => state.setErrorsOnly(!state.errorsOnly)}
                 style={[styles.filterChip, state.errorsOnly && styles.filterChipActive]}

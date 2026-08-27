@@ -229,7 +229,7 @@ const INITIAL = {
   displayedRequestFingerprint: null,
   activeRequest: null,
   resultsUpdated: false,
-  usingHistoryCache: true,
+  usingHistoryCache: false,
   requestGeneration: 0,
 };
 
@@ -362,8 +362,7 @@ export const useSearch = create<SearchStore>((set, get) => ({
       historyPaginating: false,
       historyError: null,
       historyGeneration: state.historyGeneration + 1,
-      // A filtered sidebar page is not a truthful unfiltered search cache.
-      usingHistoryCache: historyCoversAllKinds(normalized) && state.usingHistoryCache,
+      usingHistoryCache: false,
     });
     if (state.support === 'v2' && normalized.length) {
       await get().loadHistory(true);
@@ -460,7 +459,7 @@ export const useSearch = create<SearchStore>((set, get) => ({
       scope,
       // Chat roots have no run status. Keeping a hidden status filter after
       // switching from Workflows/Scheduled made valid chats appear missing.
-      ...(scope === 'chats' ? { statuses: [], errorsOnly: false } : {}),
+      ...(scope === 'chats' || scope === 'views' ? { statuses: [], errorsOnly: false } : {}),
       searchError: null,
       requestGeneration: state.requestGeneration + 1,
     }));

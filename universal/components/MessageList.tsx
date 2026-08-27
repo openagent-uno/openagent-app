@@ -32,12 +32,15 @@ import {
   type RunLaunchTarget,
   type ToolInfo,
 } from '../../common/types';
+import type { MessagePart } from '../../common/ui-views';
+import { attachmentKey } from '../../common/attachments';
 import AttachmentBlock from './Attachments';
 import Markdown from './Markdown';
 import DelegationCard from './DelegationCard';
 import RunLaunchCard from './RunLaunchCard';
 import ReasoningIndicator from './ReasoningIndicator';
 import { colors, font, radius } from '../theme';
+import UIViewSurface from './ui/UIViewSurface';
 
 // How many trailing messages to render before "Load earlier". Caps the
 // DOM + per-delta reconciliation on long transcripts to a fixed window.
@@ -215,6 +218,7 @@ function MessageListBase({
       return wrap(
         <UserMessage
           id={msg.id} text={msg.text} attachments={msg.attachments}
+          parts={msg.parts}
           author={msg.author} fallbackLabel={currentUserHandle}
           onEdit={onEditUser}
         />,
@@ -223,6 +227,7 @@ function MessageListBase({
     return wrap(
       <AssistantMessage
         text={msg.text} model={msg.model} attachments={msg.attachments}
+        parts={msg.parts}
         streaming={msg.streaming} author={msg.author}
         onRegenerate={msg.id === lastAssistantId && !isProcessing ? onRegenerate : undefined}
       />,
@@ -289,11 +294,12 @@ export default MessageList;
 // ── Atoms ────────────────────────────────────────────────────────────
 
 const UserMessage = memo(function UserMessage({
-  id, text, attachments, author, fallbackLabel, onEdit,
+  id, text, attachments, parts, author, fallbackLabel, onEdit,
 }: {
   id: string;
   text: string;
   attachments?: Attachment[];
+  parts?: MessagePart[];
   author?: MessageAuthor;
   fallbackLabel?: string;
   onEdit?: (id: string, newText: string) => void;
@@ -377,20 +383,22 @@ const UserMessage = memo(function UserMessage({
             </View>
           </>
         ) : (
-          text ? <Text style={styles.userText} selectable>{text}</Text> : null
+          parts?.length ? <OrderedParts parts={parts} assistant={false} />
+            : text ? <Text style={styles.userText} selectable>{text}</Text> : null
         )}
-        {!editing && <AttachmentBlock attachments={attachments} />}
+        {!editing && !parts?.length && <AttachmentBlock attachments={attachments} />}
       </View>
     </View>
   );
 });
 
 const AssistantMessage = memo(function AssistantMessage({
-  text, model, attachments, streaming, author, onRegenerate,
+  text, model, attachments, parts, streaming, author, onRegenerate,
 }: {
   text: string;
   model?: string;
   attachments?: Attachment[];
+  parts?: MessagePart[];
   streaming?: boolean;
   author?: MessageAuthor;
   onRegenerate?: () => void;
@@ -424,9 +432,50 @@ const AssistantMessage = memo(function AssistantMessage({
         )}
       </View>
       <View style={styles.assistantBody}>
-        <Markdown text={text} streaming={streaming} />
-        <AttachmentBlock attachments={attachments} downloadable />
+        {parts?.length ? <OrderedParts parts={parts} assistant /> : (
+          <>
+            <Markdown text={text} streaming={streaming} />
+            <AttachmentBlock attachments={attachments} downloadable />
+          </>
+        )}
       </View>
+    </View>
+  );
+});
+
+const OrderedParts = memo(function OrderedParts({
+  parts,
+  assistant,
+}: {
+  parts: MessagePart[];
+  assistant: boolean;
+}) {
+  return (
+    <View style={styles.parts}>
+      {parts.map((part, index) => {
+        if (part.kind === 'text') {
+          return assistant
+            ? <Markdown key={`text-${index}`} text={part.text} />
+            : <Text key={`text-${index}`} style={styles.userText} selectable>{part.text}</Text>;
+        }
+        if (part.kind === 'attachment') {
+          return (
+            <AttachmentBlock
+              key={`attachment-${attachmentKey(part.attachment)}-${index}`}
+              attachments={[part.attachment]}
+              downloadable={assistant}
+            />
+          );
+        }
+        return (
+          <UIViewSurface
+            key={`ui-${part.view_id}-${index}`}
+            viewId={part.view_id}
+            revision={part.revision}
+            mode="inline"
+          />
+        );
+      })}
     </View>
   );
 });
@@ -771,6 +820,7 @@ const styles = StyleSheet.create({
     fontSize: 14, lineHeight: 22, color: colors.text,
     fontWeight: '400',
   },
+  parts: { width: '100%', gap: 7 },
 
   // Agent-self seed prompt (Mission / Role / Task) — an accent-ruled quote.
   selfPromptBlock: {

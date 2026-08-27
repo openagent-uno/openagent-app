@@ -21,6 +21,8 @@ import {
 } from '../../common/types';
 import type { SessionEntry } from '../services/api';
 import type { SessionMessage, SessionMessagePage, ToolInvocationDetail } from '../../common/unified-history';
+import { normalizeAttachmentRefs, normalizeMessageContent } from '../../common/ui-views';
+import { attachmentKey } from '../../common/attachments';
 import {
   deleteSession as deleteSessionApi,
   fetchSessionRuns,
@@ -44,6 +46,9 @@ function safeJsonText(value: ToolInvocationDetail['result_safe']): string | null
 }
 
 function canonicalMessageToChat(message: SessionMessage): ChatMessage {
+  // Feed the server payload straight through the canonical normalizer so
+  // additive CAS metadata is never lost while projecting history into chat.
+  const attachments = normalizedAttachments(message.attachments);
   return {
     id: message.id,
     role: message.role,
@@ -59,12 +64,14 @@ function canonicalMessageToChat(message: SessionMessage): ChatMessage {
       handle: message.author.handle || undefined,
       display: message.author.display || undefined,
     },
-    attachments: message.attachments?.map((attachment) => ({
-      type: attachment.kind,
-      path: attachment.artifact_id,
-      filename: attachment.filename,
-    })),
+    attachments,
+    parts: normalizeMessageContent(message.parts, message.artifacts, message.text, attachments ?? []),
   };
+}
+
+function normalizedAttachments(raw: unknown): Attachment[] | undefined {
+  const attachments = normalizeAttachmentRefs(raw);
+  return attachments.length ? attachments : undefined;
 }
 
 type LoadedTranscript =
@@ -389,9 +396,12 @@ function liveMessagesFromFrames(
   let statusText: string | undefined;
 
   const pushUser = (text: string, attachments?: Attachment[], author?: ChatMessage['author']) => {
-    if (!text) return;
+    if (!text && !attachments?.length) return;
     const last = messages[messages.length - 1];
-    if (last?.role === 'user' && last.text === text && (last.author?.kind ?? '') === (author?.kind ?? '')) {
+    if (last?.role === 'user'
+        && last.text === text
+        && attachmentSignature(last.attachments) === attachmentSignature(attachments)
+        && (last.author?.kind ?? '') === (author?.kind ?? '')) {
       return;
     }
     messages.push({
@@ -407,7 +417,7 @@ function liveMessagesFromFrames(
   for (const frame of frames) {
     if (!frame || typeof frame !== 'object') continue;
     if (frame.type === 'text_final') {
-      pushUser(frame.text || '', frame.attachments, undefined);
+      pushUser(frame.text || '', normalizedAttachments(frame.attachments), undefined);
       isProcessing = true;
       continue;
     }
@@ -475,12 +485,14 @@ function liveMessagesFromFrames(
       continue;
     }
     if (frame.type === 'response') {
+      const attachments = normalizedAttachments(frame.attachments);
       const last = messages[messages.length - 1];
       if (last?.role === 'assistant' && last.streaming) {
         messages[messages.length - 1] = {
           ...last,
           text: frame.text,
-          attachments: frame.attachments ?? undefined,
+          attachments,
+          parts: normalizeMessageContent(frame.parts, frame.artifacts, frame.text, attachments ?? []),
           model: frame.model,
           streaming: false,
         };
@@ -490,7 +502,8 @@ function liveMessagesFromFrames(
           role: 'assistant',
           text: frame.text,
           timestamp: Date.now(),
-          attachments: frame.attachments ?? undefined,
+          attachments,
+          parts: normalizeMessageContent(frame.parts, frame.artifacts, frame.text, attachments ?? []),
           model: frame.model,
         });
       }
@@ -522,6 +535,10 @@ function liveMessagesFromFrames(
   }
 
   return { messages, isProcessing, isReasoning, statusText };
+}
+
+function attachmentSignature(attachments?: Attachment[]): string {
+  return (attachments ?? []).map((item) => `${item.type}:${attachmentKey(item)}:${item.filename}`).join('|');
 }
 
 interface ChatState {
@@ -1123,12 +1140,15 @@ export const useChat = create<ChatState>((set, get) => ({
 
     if (msg.type === 'text_final') {
       const text = msg.text || '';
-      if (!text) return stubAdded ? { sessions: s.sessions } : {};
+      const attachments = normalizedAttachments(msg.attachments);
+      if (!text && !attachments?.length) return stubAdded ? { sessions: s.sessions } : {};
       return {
         sessions: s.sessions.map((ses) => {
           if (ses.id !== msg.session_id) return ses;
           const last = ses.messages[ses.messages.length - 1];
-          if (last?.role === 'user' && last.text === text) return ses;
+          if (last?.role === 'user'
+              && last.text === text
+              && attachmentSignature(last.attachments) === attachmentSignature(attachments)) return ses;
           return {
             ...ses,
             isProcessing: true,
@@ -1139,7 +1159,7 @@ export const useChat = create<ChatState>((set, get) => ({
               role: 'user' as const,
               text,
               timestamp: Date.now(),
-              attachments: msg.attachments && msg.attachments.length ? msg.attachments : undefined,
+              attachments,
             }],
           };
         }),
@@ -1330,6 +1350,7 @@ export const useChat = create<ChatState>((set, get) => ({
     }
 
     if (msg.type === 'response') {
+      const attachments = normalizedAttachments(msg.attachments);
       // Drop any buffered deltas for this session — the response
       // frame is canonical, applying them on top would duplicate
       // content.
@@ -1348,7 +1369,8 @@ export const useChat = create<ChatState>((set, get) => ({
             msgs[msgs.length - 1] = {
               ...last,
               text: msg.text,
-              attachments: msg.attachments ?? undefined,
+              attachments,
+              parts: normalizeMessageContent(msg.parts, msg.artifacts, msg.text, attachments ?? []),
               model: msg.model,
               streaming: false,
             };
@@ -1358,7 +1380,8 @@ export const useChat = create<ChatState>((set, get) => ({
               role: 'assistant' as const,
               text: msg.text,
               timestamp: Date.now(),
-              attachments: msg.attachments ?? undefined,
+              attachments,
+              parts: normalizeMessageContent(msg.parts, msg.artifacts, msg.text, attachments ?? []),
               model: msg.model,
             });
           }

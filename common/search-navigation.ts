@@ -94,6 +94,8 @@ export function searchNavigationIntent(
       addCause(params, causedBy);
       return { pathname: '/(tabs)/runs/[id]', params };
     }
+    case 'ui_view':
+      return { pathname: '/(tabs)/views/[id]', params: { id: target.view_id } };
     default:
       return unreachable(target);
   }

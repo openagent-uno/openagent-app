@@ -39,11 +39,21 @@ import {
   mergeCanonicalWorkflowTrace,
   type WorkflowRunWithCanonicalTrace,
 } from '../../common/workflow-trace';
+import type { UIJson } from '../../common/ui-views';
+import { normalizeAttachmentRefs, normalizeMessageContent } from '../../common/ui-views';
+import { attachmentContentRef } from '../../common/attachments';
 
 let baseUrl = '';
 
 export function setBaseUrl(host: string, port: number) {
   baseUrl = `http://${host}:${port}`;
+}
+
+/** Current REST origin, used only for gateway-owned media links. Keeping it
+ * behind a helper prevents custom view specs from choosing arbitrary local
+ * file URLs. */
+export function apiUrl(path: string): string {
+  return `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
 // Hard ceiling so a hung loopback stream (Iroh stalls, server crashes
@@ -207,6 +217,68 @@ async function patch<T>(path: string, body: object): Promise<T> {
   } finally {
     clearTimer(init);
   }
+}
+
+// ── OA-UI custom views ──────────────────────────────────────────────
+
+export async function getUICapabilities(): Promise<unknown> {
+  return get('/api/ui/capabilities');
+}
+
+export async function listUIViews(options: {
+  surface?: 'sidebar' | 'inline';
+  sessionId?: string;
+  limit?: number;
+  cursor?: string;
+} = {}): Promise<unknown> {
+  const params = new URLSearchParams();
+  if (options.surface) params.set('surface', options.surface);
+  if (options.sessionId) params.set('sessionId', options.sessionId);
+  if (options.limit) params.set('limit', String(options.limit));
+  if (options.cursor) params.set('cursor', options.cursor);
+  const query = params.toString();
+  return get(`/api/ui/views${query ? `?${query}` : ''}`);
+}
+
+export async function getUIView(viewId: string, revision?: number): Promise<unknown> {
+  const query = revision != null ? `?revision=${encodeURIComponent(String(revision))}` : '';
+  return get(`/api/ui/views/${encodeURIComponent(viewId)}${query}`);
+}
+
+export async function invokeUIViewAction(
+  viewId: string,
+  actionId: string,
+  input: unknown,
+  idempotencyKey: string,
+  revision?: number,
+): Promise<unknown> {
+  return post(
+    `/api/ui/views/${encodeURIComponent(viewId)}/actions/${encodeURIComponent(actionId)}`,
+    {
+      ...(input !== undefined ? { input } : {}),
+      idempotencyKey,
+      ...(revision != null ? { revision } : {}),
+    },
+  );
+}
+
+export async function reactivateUIView(
+  viewId: string,
+  options: { expectedRevision?: number; expiresAt?: string | number | null } = {},
+): Promise<unknown> {
+  return post(`/api/ui/views/${encodeURIComponent(viewId)}/reactivate`, options);
+}
+
+export async function setUIViewData(
+  viewId: string,
+  key: string,
+  value: UIJson,
+  expectedVersion?: number,
+): Promise<unknown> {
+  return put(
+    `/api/ui/views/${encodeURIComponent(viewId)}/data/${encodeURIComponent(key)}`,
+    { value, ...(expectedVersion != null ? { expectedVersion } : {}) },
+  );
 }
 
 // ── Vault API ──
@@ -705,10 +777,13 @@ export function guessMimeType(filename: string, kind: 'image' | 'file'): string 
 export async function uploadFile(
   file: File | Blob,
   filename = 'upload',
-  opts?: { language?: string; signal?: AbortSignal },
-): Promise<{
-  path: string;
-  filename: string;
+  opts?: {
+    language?: string;
+    sessionId?: string;
+    kind?: Attachment['type'];
+    signal?: AbortSignal;
+  },
+): Promise<Attachment & {
   transcription?: string;
   // Set by /api/upload when the file is audio. The chat screen flips
   // ``input_was_voice`` on the WS message so the gateway returns a
@@ -721,32 +796,61 @@ export async function uploadFile(
   } else {
     form.append('file', file, filename);
   }
+  if (opts?.kind) form.append('kind', opts.kind);
   // ``lang`` (ISO-639-1) hints the STT backend; empty means auto-detect.
-  const qs = opts?.language ? `?lang=${encodeURIComponent(opts.language)}` : '';
+  const query = new URLSearchParams();
+  if (opts?.language) query.set('lang', opts.language);
+  if (opts?.sessionId) query.set('session_id', opts.sessionId);
+  const encodedQuery = query.toString();
+  const qs = encodedQuery ? `?${encodedQuery}` : '';
   const res = await fetch(`${baseUrl}/api/upload${qs}`, {
     method: 'POST',
     body: form,
     signal: opts?.signal,
   });
   if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
-  return res.json();
+  const payload = await res.json() as Record<string, unknown>;
+  const [attachment] = normalizeAttachmentRefs([{ type: opts?.kind, ...payload }]);
+  if (!attachment) throw new Error('Upload failed: gateway returned an invalid attachment reference');
+  return {
+    ...attachment,
+    ...(typeof payload.transcription === 'string' ? { transcription: payload.transcription } : {}),
+    ...(typeof payload.transcribed_from_voice === 'boolean'
+      ? { transcribed_from_voice: payload.transcribed_from_voice }
+      : {}),
+  };
 }
 
 // ── File Download (agent → client) ──
 
 /**
- * URL of the ``/api/files`` endpoint for a given server-side path.
- * Used when the agent returns an attachment in a ``response`` message
- * and the client needs to fetch it (remote install) or just link to
- * it (desktop w/ local gateway).
+ * URL of the deprecated ``/api/files`` endpoint for a legacy server-side
+ * path. Canonical AttachmentRefs use {@link attachmentUrl} and
+ * ``/api/artifacts/{id}/content`` instead.
  *
  * Auth is enforced by the loopback sidecar's Iroh transport — the
  * URL doesn't need a token query param. The legacy ``token`` argument
  * is preserved for callers that still pass it; it's ignored.
  */
 export function fileUrl(path: string, _token?: string): string {
+  if (/^\/api\/artifacts\/[^/?#]+\/content$/.test(path) || /^\/api\/files\?(?:[^#]*)$/.test(path)) {
+    return apiUrl(path);
+  }
   const params = new URLSearchParams({ path });
   return `${baseUrl}/api/files?${params.toString()}`;
+}
+
+/** Resolve a durable attachment through its authenticated canonical URL. */
+export function attachmentUrl(attachment: Attachment): string {
+  const ref = attachmentContentRef(attachment);
+  return ref ? fileUrl(ref) : '';
+}
+
+/** Download a canonical CAS ref, with path-only support for old gateways. */
+export async function downloadAttachment(attachment: Attachment, _token?: string): Promise<void> {
+  const ref = attachmentContentRef(attachment);
+  if (!ref) throw new Error('Attachment has no downloadable content reference');
+  return downloadFile(ref, attachment.filename);
 }
 
 /**
@@ -1357,7 +1461,9 @@ export interface SessionRunMessage {
     tokens_before?: number;
     tokens_after?: number;
   };
-  attachments?: { type: 'image' | 'file' | 'voice' | 'video'; path: string; filename: string }[];
+  attachments?: Record<string, unknown>[];
+  parts?: unknown[];
+  artifacts?: unknown[];
   model?: string;
   /** Per-message authorship (human handle/display, or an agent-self seed).
    *  Server-provided; absent on legacy rows. */
@@ -1373,6 +1479,7 @@ export interface SessionRunsResponse {
 // author / toolInfo passthrough stays consistent across every loader (chat
 // store hydration and the run-detail transcript alike).
 export function runMsgToChat(m: SessionRunMessage): ChatMessage {
+  const attachments = normalizeAttachmentRefs(m.attachments);
   return {
     id: m.id,
     role: m.role,
@@ -1391,7 +1498,8 @@ export function runMsgToChat(m: SessionRunMessage): ChatMessage {
           tokensAfter: m.compaction.tokens_after,
         } as CompactionInfo
       : undefined,
-    attachments: m.attachments as Attachment[] | undefined,
+    attachments: attachments.length ? attachments : undefined,
+    parts: normalizeMessageContent(m.parts, m.artifacts, m.text, attachments),
     model: m.model,
     author: m.author as MessageAuthor | undefined,
   };

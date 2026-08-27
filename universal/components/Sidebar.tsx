@@ -48,6 +48,7 @@ import { historyKindsForFilters } from '../../common/history-feed-policy';
 import { useConfirm } from './ConfirmDialog';
 import PopupMenu from './PopupMenu';
 import { useEvents } from '../stores/events';
+import { useUIViews } from '../stores/uiViews';
 import AgentSwitcher from './AgentSwitcher';
 import BrandLogo from './BrandLogo';
 import WindowControls from './WindowControls';
@@ -70,6 +71,7 @@ const NAV: NavItem[] = [
   { href: '/tasks', match: 'tasks', label: 'Scheduled', icon: 'clock' },
   { href: '/workflows', match: 'workflows', label: 'Workflows', icon: 'git-branch' },
   { href: '/events', match: 'events', label: 'Events', icon: 'zap' },
+  { href: '/views', match: 'views', label: 'Views', icon: 'layout' },
 ];
 
 // Fixed nav-row geometry shared by actions and navigation.
@@ -106,6 +108,7 @@ export default function Sidebar({
 }) {
   const router = useRouter();
   const segments = useSegments();
+  const routeParams = useGlobalSearchParams<{ id?: string }>();
   // Post-auth WS drop — surfaced right above the agent name so the connection
   // state lives next to the agent identity (moved here from the chat screen).
   const isReconnecting = useConnection((s) => s.isReconnecting);
@@ -114,7 +117,7 @@ export default function Sidebar({
   const isMac = typeof window !== 'undefined' && (window as any).desktop?.platform === 'darwin';
 
   const activeSeg = useMemo(() => {
-    const known = ['memory', 'mcps', 'skills', 'tasks', 'workflows', 'events', 'settings', 'system', 'logs', 'chat'];
+    const known = ['memory', 'mcps', 'skills', 'tasks', 'workflows', 'events', 'views', 'settings', 'system', 'logs', 'chat'];
     for (let i = segments.length - 1; i >= 0; i--) {
       if (known.includes(segments[i])) return segments[i];
     }
@@ -125,6 +128,7 @@ export default function Sidebar({
   const searchSupport = useSearch((state) => state.support);
   const searchCapabilities = useSearch((state) => state.capabilities);
   const canSearch = globalSearchAvailable({ support: searchSupport, capabilities: searchCapabilities });
+  const customViews = useUIViews((state) => state.items);
 
   const go = (href: string) => {
     router.push(href as any);
@@ -229,6 +233,37 @@ export default function Sidebar({
           );
         })}
       </View>
+
+      {customViews.length > 0 ? (
+        <FlatList
+          style={styles.viewList}
+          contentContainerStyle={styles.viewListContent}
+          data={customViews}
+          keyExtractor={(item) => item.id}
+          showsVerticalScrollIndicator={false}
+          renderItem={({ item, index }) => {
+            const selected = activeSeg === 'views' && routeParams.id === item.id;
+            const showGroup = !!item.sidebarGroup
+              && customViews[index - 1]?.sidebarGroup !== item.sidebarGroup;
+            return (
+              <View>
+                {showGroup ? <Text style={styles.viewGroup} numberOfLines={1}>{item.sidebarGroup}</Text> : null}
+                <Pressable
+                  onPress={() => go(`/views/${encodeURIComponent(item.id)}`)}
+                  style={[styles.viewRow, selected && styles.viewRowActive]}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={item.title}
+                  {...(Platform.OS === 'web' ? { className: 'oa-side-row' } as any : {})}
+                >
+                  <View style={[styles.viewDot, item.status !== 'active' && styles.viewDotStale]} />
+                  <Text style={[styles.viewText, selected && styles.rowLabelActive]} numberOfLines={1}>{item.title}</Text>
+                </Pressable>
+              </View>
+            );
+          }}
+        />
+      ) : null}
 
       {/* ── Recent feed ── */}
       <RecentFeed activeSeg={activeSeg} onNavigate={onNavigate} />
@@ -732,6 +767,14 @@ const styles = StyleSheet.create({
   rowActive: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
   rowLabel: { fontFamily: font.sans, fontSize: 13.5, color: colors.textSecondary, fontWeight: '500' },
   rowLabelActive: { color: colors.text, fontWeight: '600' },
+  viewList: { maxHeight: 116, marginTop: 2, marginBottom: 2 },
+  viewListContent: { paddingLeft: 17 },
+  viewGroup: { paddingHorizontal: 9, paddingTop: 4, paddingBottom: 2, fontFamily: font.sans, fontSize: 8.5, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.7, color: colors.textMuted },
+  viewRow: { height: 27, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: radius.sm },
+  viewRowActive: { backgroundColor: colors.surface },
+  viewDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: colors.success },
+  viewDotStale: { backgroundColor: colors.textMuted },
+  viewText: { flex: 1, fontFamily: font.sans, fontSize: 11.5, color: colors.textSecondary },
 
   // Recent
   recent: { flex: 1, minHeight: 0, marginTop: spacing.sm, position: 'relative' },

@@ -18,6 +18,7 @@ import {
 
 import type { Attachment } from '../../../common/types';
 import { runRoutePath, type RunLaunchTarget, type MemoryTarget } from '../../../common/types';
+import { attachmentsForSend } from '../../../common/attachments';
 import { useConnection } from '../../stores/connection';
 import { useChat } from '../../stores/chat';
 import { useUI } from '../../stores/ui';
@@ -562,20 +563,24 @@ export default function ChatScreen() {
     const controller = new AbortController();
     const retry = () => runUpload(file, id, kind, previewUrl);
     setPendingFiles((prev) => prev.map((p) => p.id === id
-      ? { id, filename: file.name, remotePath: '', kind, uploading: true, previewUrl, abort: () => controller.abort(), retry }
+      ? { id, filename: file.name, kind, uploading: true, previewUrl, abort: () => controller.abort(), retry }
       : p));
     (async () => {
       try {
-        const result = await uploadFile(file, undefined, { signal: controller.signal });
+        const result = await uploadFile(file, undefined, {
+          kind,
+          sessionId: activeSessionIdRef.current ?? undefined,
+          signal: controller.signal,
+        });
         setPendingFiles((prev) => prev.map((p) => p.id === id
-          ? { id, filename: result.filename, remotePath: result.path, kind, previewUrl, retry }
+          ? { id, filename: result.filename, attachment: result, kind, previewUrl, retry }
           : p));
       } catch (e: any) {
         if (e?.name === 'AbortError' || controller.signal.aborted) return;
         const msg = e instanceof Error ? e.message : String(e);
         console.error('Upload failed:', file.name, msg);
         setPendingFiles((prev) => prev.map((p) => p.id === id
-          ? { id, filename: file.name, remotePath: '', kind, error: msg, previewUrl, retry }
+          ? { id, filename: file.name, kind, error: msg, previewUrl, retry }
           : p));
       }
     })();
@@ -594,7 +599,7 @@ export default function ChatScreen() {
       // runUpload then transitions it through uploading → ok/error.
       setPendingFiles((prev) => [
         ...prev,
-        { id, filename: file.name, remotePath: '', kind, uploading: true, previewUrl },
+        { id, filename: file.name, kind, uploading: true, previewUrl },
       ]);
       runUpload(file, id, kind, previewUrl);
     }
@@ -876,11 +881,14 @@ export default function ChatScreen() {
     const sid = activeSessionIdRef.current;
     const ses = activeSessionRef.current;
     if (!conn || !sid) return;
+    const original = ses?.messages.find((message) => message.id === messageId);
+    const attachments = attachmentsForSend(original?.attachments);
     const ok = editUserMessage(sid, messageId, newText);
     if (!ok) return;
     conn.sendMessage(newText, sid, {
       llmPin: ses?.llmPin,
       systemPrompt: ses?.systemPrompt,
+      attachments,
     });
   }, [editUserMessage]);
 
@@ -908,14 +916,12 @@ export default function ChatScreen() {
     if (!conn || !sid || !ses) return;
     const lastUser = [...ses.messages].reverse().find((m) => m.role === 'user');
     if (!lastUser) return;
-    const attachments = lastUser.attachments;
-    addUserMessage(sid, lastUser.text || '(regenerate)', attachments);
+    const attachments = attachmentsForSend(lastUser.attachments);
+    addUserMessage(sid, lastUser.text || '(regenerate)', lastUser.attachments);
     conn.sendMessage(lastUser.text, sid, {
       llmPin: ses.llmPin,
       systemPrompt: ses.systemPrompt,
-      attachments: attachments?.map((a) => ({
-        type: a.type, path: a.path, filename: a.filename,
-      })),
+      attachments,
     });
   }, [addUserMessage]);
 
@@ -993,7 +999,9 @@ export default function ChatScreen() {
     // Failed uploads stay in pendingFiles as visible error chips so the
     // user knows the file didn't make it; they must dismiss explicitly.
     // Filter them out of the WS message + attachment list here.
-    const sendableFiles = pendingFiles.filter((f) => !f.error && f.remotePath);
+    const sendableFiles = pendingFiles.filter(
+      (f) => !f.error && !f.uploading && (f.attachment || f.remotePath),
+    );
     if (!text && sendableFiles.length === 0) return;
 
     // Intercept gateway slash-commands typed with an argument (e.g.
@@ -1020,17 +1028,16 @@ export default function ChatScreen() {
       }
     }
 
-    const attachments: Attachment[] = sendableFiles.map((f) => ({
-      type: f.kind,
-      path: f.remotePath,
-      filename: f.filename,
-    }));
+    const attachments: Attachment[] = sendableFiles.flatMap((f) => {
+      if (f.attachment) return [f.attachment];
+      return f.remotePath ? [{ type: f.kind, path: f.remotePath, filename: f.filename }] : [];
+    });
 
     addUserMessage(activeSessionId, text, attachments.length ? attachments : undefined);
     ws.sendMessage(text, activeSessionId, {
       llmPin: activeSession?.llmPin,
       systemPrompt: activeSession?.systemPrompt,
-      attachments: attachments.length ? attachments : undefined,
+      attachments: attachmentsForSend(attachments),
     });
     setInput('');
     // Drop only the chips we actually sent; keep failed + still-uploading
@@ -1064,7 +1071,6 @@ export default function ChatScreen() {
           ...oversized.map((p) => ({
             id: newPendingId(),
             filename: p.filename,
-            remotePath: '',
             kind: p.kind,
             error: `File too large (${(p.size / 1024 / 1024).toFixed(1)} MB; limit ${Math.round(p.maxBytes / 1024 / 1024)} MB)`,
           })),
@@ -1083,7 +1089,6 @@ export default function ChatScreen() {
         ...items.map(({ id, meta, controller }) => ({
           id,
           filename: meta.filename,
-          remotePath: '',
           kind: meta.kind,
           uploading: true,
           abort: () => controller.abort(),
@@ -1095,16 +1100,20 @@ export default function ChatScreen() {
           if (controller.signal.aborted) return;
           const blob = new Blob([bytes as BlobPart], { type: guessMimeType(meta.filename, meta.kind) });
           const file = new File([blob], meta.filename, { type: blob.type });
-          const result = await uploadFile(file, undefined, { signal: controller.signal });
+          const result = await uploadFile(file, undefined, {
+            kind: meta.kind,
+            sessionId: activeSessionIdRef.current ?? undefined,
+            signal: controller.signal,
+          });
           setPendingFiles((prev) => prev.map((p) => p.id === id
-            ? { id, filename: result.filename, remotePath: result.path, kind: meta.kind }
+            ? { id, filename: result.filename, attachment: result, kind: meta.kind }
             : p));
         } catch (e: any) {
           if (e?.name === 'AbortError' || controller.signal.aborted) return;
           const msg = e instanceof Error ? e.message : String(e);
           console.error('Desktop upload failed:', meta.filename, msg);
           setPendingFiles((prev) => prev.map((p) => p.id === id
-            ? { id, filename: meta.filename, remotePath: '', kind: meta.kind, error: msg }
+            ? { id, filename: meta.filename, kind: meta.kind, error: msg }
             : p));
         }
       }));
@@ -1163,13 +1172,17 @@ export default function ChatScreen() {
         if (!activeSessionId || !ws) return;
         try {
           const langHint2 = voiceLanguage && voiceLanguage !== 'auto' ? voiceLanguage : undefined;
-          const result = await uploadFile(file, undefined, { language: langHint2 });
-          const transcription = (result as any).transcription;
-          const msg = transcription
-            ? transcription
-            : `The user sent a voice message:\n- audio: ${result.filename} — local path: ${result.path}\nUse Read to inspect it.`;
-          addUserMessage(activeSessionId, 'Voice message');
-          ws.sendMessage(msg, activeSessionId, { source: 'stt' });
+          const result = await uploadFile(file, undefined, {
+            kind: 'voice',
+            language: langHint2,
+            sessionId: activeSessionId,
+          });
+          const msg = result.transcription || 'The user sent a voice message.';
+          addUserMessage(activeSessionId, msg, [result]);
+          ws.sendMessage(msg, activeSessionId, {
+            source: 'stt',
+            attachments: attachmentsForSend([result]),
+          });
         } catch (e: any) {
           console.error('Voice upload failed:', e);
         }

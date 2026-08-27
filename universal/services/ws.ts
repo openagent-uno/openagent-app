@@ -4,6 +4,7 @@
  */
 
 import type { Attachment, ClientMessage, ServerMessage } from '../../common/types';
+import { attachmentsForSend } from '../../common/attachments';
 
 export type MessageHandler = (msg: ServerMessage) => void;
 
@@ -394,6 +395,13 @@ export class OpenAgentWS {
       client_kind: options?.clientKind,
       coalesce_window_ms: options?.coalesceWindowMs,
       speak,
+      client_capabilities: {
+        attachments: true,
+        ordered_parts: true,
+        inline_ui: true,
+        sidebar_ui: true,
+        custom_ui_version: 1,
+      },
     });
     this.openedSessions.add(sessionId);
   }
@@ -457,13 +465,14 @@ export class OpenAgentWS {
     // forwards to Agent.run_stream(attachments=...), which routes
     // non-image files via the agent's native files= parameter (no
     // string injection into the user prompt).
+    const attachments = attachmentsForSend(options?.attachments);
     this.send({
       type: 'text_final',
       session_id: sessionId,
       text,
       source: options?.source ?? 'user_typed',
-      ...(options?.attachments && options.attachments.length
-        ? { attachments: options.attachments }
+      ...(attachments
+        ? { attachments }
         : {}),
     });
   }
@@ -484,6 +493,41 @@ export class OpenAgentWS {
     reason: 'user_speech' | 'user_text' | 'manual' = 'manual',
   ): void {
     this.send({ type: 'interrupt', session_id: sessionId, reason });
+  }
+
+  // ── OA-UI v1 subscriptions ───────────────────────────────────────
+
+  subscribeUIView(
+    subscriptionId: string,
+    viewId: string,
+    options: { revision?: number; knownRevision?: number } = {},
+  ): void {
+    this.send({
+      type: 'ui_subscribe',
+      subscriptionId,
+      viewId,
+      ...(options.revision != null ? { revision: options.revision } : {}),
+      ...(options.knownRevision != null ? { knownRevision: options.knownRevision } : {}),
+    });
+  }
+
+  unsubscribeUIView(subscriptionId: string): void {
+    this.send({ type: 'ui_unsubscribe', subscriptionId });
+  }
+
+  sendUIViewAction(
+    subscriptionId: string,
+    actionId: string,
+    input: unknown,
+    idempotencyKey: string,
+  ): void {
+    this.send({
+      type: 'ui_action',
+      subscriptionId,
+      actionId,
+      ...(input !== undefined ? { input } : {}),
+      idempotencyKey,
+    });
   }
 
   // ── Interactive terminals (PTY on the gateway host) ──

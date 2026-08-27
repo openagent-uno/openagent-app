@@ -3,9 +3,9 @@ import type { RunStatus, SearchGrouping, SearchScope, SearchSort } from './unifi
 export type SearchScopeSelection = 'all' | SearchScope;
 export type SearchPeriod = 'any' | '24h' | '7d' | '30d';
 
-/** Only this view is guaranteed to be identical to the already-loaded
- * history page. Every scope or filter needs a server query so matches on a
- * later history page cannot be mistaken for an empty result set. */
+/** The operational feed does not contain definition-only corpora such as
+ * Views (nor individual tool matches). Consequently even empty/unfiltered
+ * global search must use the independently paged search endpoint. */
 export function canUseUnifiedHistoryCache(
   query: string,
   scope: SearchScopeSelection,
@@ -13,11 +13,10 @@ export function canUseUnifiedHistoryCache(
   errorsOnly: boolean,
   period: SearchPeriod,
 ): boolean {
-  return !query.trim()
-    && scope === 'all'
-    && statuses.length === 0
-    && !errorsOnly
-    && period === 'any';
+  // Keep the full signature while this beta still shares request-policy code
+  // with older clients; none of these combinations is cache-equivalent now.
+  void query; void scope; void statuses; void errorsOnly; void period;
+  return false;
 }
 
 /** Match grouping keeps every internal occurrence independently pageable.

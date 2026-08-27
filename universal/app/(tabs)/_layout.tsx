@@ -26,6 +26,7 @@ import { useLayout } from '../../hooks/useLayout';
 import { useConnection } from '../../stores/connection';
 import { useChat } from '../../stores/chat';
 import { globalSearchAvailable, useSearch } from '../../stores/search';
+import { useUIViews } from '../../stores/uiViews';
 import { openSearchTarget } from '../../services/searchNavigation';
 import { sessionEntryFromActivity } from '../../services/api';
 import type { EventCause, SearchTarget } from '../../../common/unified-history';
@@ -63,9 +64,11 @@ export default function AppDrawerLayout() {
   useEffect(() => {
     if (!accountId) {
       useSearch.getState().clear();
+      useUIViews.getState().clear();
       return;
     }
     void initializeAccountSearch(accountId);
+    void useUIViews.getState().initialize(accountId);
   }, [accountId]);
 
   useEffect(() => {
@@ -92,6 +95,7 @@ export default function AppDrawerLayout() {
         // generation/version, so re-run it even when the auth frame omits its
         // optional inline capabilities (the stable gateway does today).
         void initializeAccountSearch(accountId, true);
+        void useUIViews.getState().initialize(accountId, true);
       }
     });
   }, [accountId, ws]);
@@ -166,6 +170,7 @@ export default function AppDrawerLayout() {
       <Drawer.Screen name="workflows" options={{ headerShown: false }} />
       <Drawer.Screen name="tasks" options={{ headerShown: false }} />
       <Drawer.Screen name="events" options={{ headerShown: false }} />
+      <Drawer.Screen name="views" options={{ headerShown: false }} />
       {/* Hidden / legacy routes — reachable by link, never listed. */}
       {/* Single-run detail (from the sidebar's Recent feed) — a drawer-root
           stack so opening a run never highlights a workspace tab. */}
