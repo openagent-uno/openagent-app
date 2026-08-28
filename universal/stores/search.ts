@@ -33,6 +33,7 @@ import {
   type SearchPeriod,
   type SearchScopeSelection,
 } from '../../common/search-request-policy';
+import type { ChatSearchTarget } from '../../common/search-navigation';
 import {
   ApiError,
   getUnifiedCapabilities,
@@ -45,6 +46,13 @@ import {
 
 export type UnifiedSupport = 'unknown' | 'v2' | 'legacy' | 'error';
 export type { SearchPeriod, SearchScopeSelection } from '../../common/search-request-policy';
+
+export interface ChatSearchDestination {
+  sessionId: string;
+  messageId?: string;
+  toolInvocationId?: string;
+  generation: number;
+}
 
 const HISTORY_PAGE_SIZE = 60;
 const SEARCH_PAGE_SIZE = 40;
@@ -176,6 +184,10 @@ interface SearchStore {
   resultsUpdated: boolean;
   usingHistoryCache: boolean;
   requestGeneration: number;
+  /** In-app exact chat result. The Chat screen consumes this independently
+   * of Expo Router params, which Drawer same-route navigation may discard. */
+  chatDestination: ChatSearchDestination | null;
+  chatDestinationGeneration: number;
 
   initialize: (accountId: string, force?: boolean) => Promise<void>;
   setHistoryKinds: (kinds: ActivityKind[]) => Promise<void>;
@@ -194,6 +206,8 @@ interface SearchStore {
   acceptUpdatedResults: () => Promise<void>;
   handleHistoryChanged: (event: HistoryChangedEvent) => void;
   handleSearchIndexChanged: (event: SearchIndexChangedEvent) => void;
+  setChatDestination: (target: ChatSearchTarget) => void;
+  clearChatDestination: () => void;
   clear: () => void;
 }
 
@@ -231,6 +245,8 @@ const INITIAL = {
   resultsUpdated: false,
   usingHistoryCache: false,
   requestGeneration: 0,
+  chatDestination: null as ChatSearchDestination | null,
+  chatDestinationGeneration: 0,
 };
 
 export const useSearch = create<SearchStore>((set, get) => ({
@@ -645,6 +661,26 @@ export const useSearch = create<SearchStore>((set, get) => ({
     }
   },
 
+  setChatDestination: (target) => set((state) => {
+    const generation = state.chatDestinationGeneration + 1;
+    return {
+      chatDestination: {
+        sessionId: target.session_id,
+        ...(target.kind !== 'chat' ? { messageId: target.message_id } : {}),
+        ...(target.kind === 'chat_tool'
+          ? { toolInvocationId: target.tool_invocation_id }
+          : {}),
+        generation,
+      },
+      chatDestinationGeneration: generation,
+    };
+  }),
+
+  clearChatDestination: () => set((state) => ({
+    chatDestination: null,
+    chatDestinationGeneration: state.chatDestinationGeneration + 1,
+  })),
+
   clear: () => {
     abortAll();
     set((state) => ({
@@ -652,6 +688,7 @@ export const useSearch = create<SearchStore>((set, get) => ({
       historyKinds: [...ACTIVITY_KINDS],
       historyGeneration: state.historyGeneration + 1,
       requestGeneration: state.requestGeneration + 1,
+      chatDestinationGeneration: state.chatDestinationGeneration + 1,
     }));
   },
 }));

@@ -1,13 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { searchNavigationIntent } from '../search-navigation.ts';
+import { resolveChatAnchor, searchNavigationIntent } from '../search-navigation.ts';
 
 test('maps every canonical SearchTarget to one existing route', () => {
   const cases = [
-    [{ kind: 'chat', session_id: 's' }, '/(tabs)/chat'],
-    [{ kind: 'chat_message', session_id: 's', message_id: 'm' }, '/(tabs)/chat'],
-    [{ kind: 'chat_tool', session_id: 's', message_id: 'm', tool_invocation_id: 't' }, '/(tabs)/chat'],
+    [{ kind: 'chat', session_id: 's' }, '/chat'],
+    [{ kind: 'chat_message', session_id: 's', message_id: 'm' }, '/chat'],
+    [{ kind: 'chat_tool', session_id: 's', message_id: 'm', tool_invocation_id: 't' }, '/chat'],
     [{ kind: 'workflow_definition', workflow_id: 'w', node_id: 'n', field: 'prompt' }, '/(tabs)/workflows/[id]'],
     [{ kind: 'workflow_run', workflow_id: 'w', run_id: 'r', trace_step_id: 'step' }, '/(tabs)/runs/[id]'],
     [{ kind: 'scheduled_definition', task_id: 'task', field: 'schedule' }, '/(tabs)/tasks/[id]'],
@@ -25,6 +25,36 @@ test('routes a view search target with its opaque canonical id', () => {
   assert.deepEqual(searchNavigationIntent({ kind: 'ui_view', view_id: 'view/one?two' }), {
     pathname: '/(tabs)/views/[id]',
     params: { id: 'view/one?two' },
+  });
+});
+
+test('new in-app chat destinations override stale Drawer route anchors', () => {
+  const staleRoute = {
+    sessionId: 's', messageId: 'old-message', toolInvocationId: 'old-tool',
+  };
+  assert.deepEqual(resolveChatAnchor(staleRoute, {
+    sessionId: 's', messageId: 'new-message', generation: 7,
+  }, 's'), {
+    sessionId: 's',
+    messageId: 'new-message',
+    toolInvocationId: undefined,
+    generation: 7,
+  });
+  assert.deepEqual(resolveChatAnchor(staleRoute, {
+    sessionId: 's', generation: 8,
+  }, 's'), { generation: 8 });
+});
+
+test('route anchors remain the deep-link fallback outside an in-app destination', () => {
+  assert.deepEqual(resolveChatAnchor({
+    sessionId: 'route-session', messageId: 'route-message', toolInvocationId: 'route-tool',
+  }, {
+    sessionId: 'other-session', messageId: 'other-message', generation: 4,
+  }, 'route-session'), {
+    sessionId: 'route-session',
+    messageId: 'route-message',
+    toolInvocationId: 'route-tool',
+    generation: 0,
   });
 });
 

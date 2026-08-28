@@ -20,7 +20,6 @@ import { useRouter, withLayoutContext } from 'expo-router';
 import { useCallback, useEffect } from 'react';
 import { Platform } from 'react-native';
 import Sidebar from '../../components/Sidebar';
-import SessionDetailsDrawerShell from '../../components/SessionDetailsDrawer';
 import GlobalSearchOverlay from '../../components/search/GlobalSearchOverlay';
 import { HeaderMenu, themedHeader } from '../../components/screenHeader';
 import { useLayout } from '../../hooks/useLayout';
@@ -30,6 +29,7 @@ import { globalSearchAvailable, useSearch } from '../../stores/search';
 import { useNavigationSidebar } from '../../stores/navigationSidebar';
 import { useUIViews } from '../../stores/uiViews';
 import { openSearchTarget } from '../../services/searchNavigation';
+import type { SearchOpenMetadata } from '../../../common/search-navigation';
 import { sessionEntryFromActivity } from '../../services/api';
 import type { EventCause, SearchTarget } from '../../../common/unified-history';
 import { colors } from '../../theme';
@@ -118,15 +118,18 @@ export default function AppDrawerLayout() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const handleOpenTarget = useCallback((target: SearchTarget, causedBy?: EventCause | null) => {
-    openSearchTarget(router, target, causedBy);
+  const handleOpenTarget = useCallback((
+    target: SearchTarget,
+    causedBy?: EventCause | null,
+    metadata?: SearchOpenMetadata,
+  ) => {
+    openSearchTarget(router, target, causedBy, metadata);
   }, [router]);
 
   return (
     <>
-      <SessionDetailsDrawerShell>
-        <Drawer
-          // The Drawer is the cross-section "back" boundary. react-navigation's
+      <Drawer
+        // The Drawer is the cross-section "back" boundary. react-navigation's
           // default backBehavior is 'firstRoute', which REBUILDS the drawer
           // history to [firstRoute(chat), current] on every section switch — so
           // any back that bubbles out of a section stack lands on chat (the
@@ -170,30 +173,29 @@ export default function AppDrawerLayout() {
               borderLeftColor: colors.borderLight,
             },
           }}
-        >
-          {/* Leaf screens render the drawer header directly. */}
-          <Drawer.Screen name="chat" options={leaf('Chat')} />
-          <Drawer.Screen name="model" options={leaf('Model')} />
-          <Drawer.Screen name="system" options={leaf('System')} />
-          <Drawer.Screen name="logs" options={leaf('Logs')} />
-          <Drawer.Screen name="settings" options={leaf('Settings')} />
-          {/* Stacks own their own headers (per-screen titles + back). */}
-          <Drawer.Screen name="memory" options={{ headerShown: false }} />
-          <Drawer.Screen name="mcps" options={{ headerShown: false }} />
-          <Drawer.Screen name="skills" options={{ headerShown: false }} />
-          <Drawer.Screen name="workflows" options={{ headerShown: false }} />
-          <Drawer.Screen name="tasks" options={{ headerShown: false }} />
-          <Drawer.Screen name="events" options={{ headerShown: false }} />
-          <Drawer.Screen name="views" options={{ headerShown: false }} />
-          {/* Hidden / legacy routes — reachable by link, never listed. */}
-          {/* Single-run detail (from the sidebar's Recent feed) — a drawer-root
-              stack so opening a run never highlights a workspace tab. */}
-          <Drawer.Screen name="runs" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
-          <Drawer.Screen name="terminal" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
-          <Drawer.Screen name="automations" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
-          <Drawer.Screen name="members" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
-        </Drawer>
-      </SessionDetailsDrawerShell>
+      >
+        {/* Leaf screens render the drawer header directly. */}
+        <Drawer.Screen name="chat" options={leaf('Chat')} />
+        <Drawer.Screen name="model" options={leaf('Model')} />
+        <Drawer.Screen name="system" options={leaf('System')} />
+        <Drawer.Screen name="logs" options={leaf('Logs')} />
+        <Drawer.Screen name="settings" options={leaf('Settings')} />
+        {/* Stacks own their own headers (per-screen titles + back). */}
+        <Drawer.Screen name="memory" options={{ headerShown: false }} />
+        <Drawer.Screen name="mcps" options={{ headerShown: false }} />
+        <Drawer.Screen name="skills" options={{ headerShown: false }} />
+        <Drawer.Screen name="workflows" options={{ headerShown: false }} />
+        <Drawer.Screen name="tasks" options={{ headerShown: false }} />
+        <Drawer.Screen name="events" options={{ headerShown: false }} />
+        <Drawer.Screen name="views" options={{ headerShown: false }} />
+        {/* Hidden / legacy routes — reachable by link, never listed. */}
+        {/* Single-run detail (from the sidebar's Recent feed) — a drawer-root
+            stack so opening a run never highlights a workspace tab. */}
+        <Drawer.Screen name="runs" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
+        <Drawer.Screen name="terminal" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
+        <Drawer.Screen name="automations" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
+        <Drawer.Screen name="members" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
+      </Drawer>
       <GlobalSearchOverlay onOpenTarget={handleOpenTarget} />
     </>
   );

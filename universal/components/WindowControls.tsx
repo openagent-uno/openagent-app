@@ -61,13 +61,12 @@ export default function WindowControls() {
         const active = hovered === i;
 
         const itemProps: any = {
-          key: btn.label,
           onMouseEnter: () => setHovered(i),
           onMouseLeave: () => setHovered(null),
         };
 
         return (
-          <View {...itemProps}>
+          <View key={btn.label} {...itemProps}>
             <Pressable
               onPress={btn.onPress}
               style={[

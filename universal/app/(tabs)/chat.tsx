@@ -19,14 +19,15 @@ import {
 import type { Attachment } from '../../../common/types';
 import { runRoutePath, type RunLaunchTarget, type MemoryTarget } from '../../../common/types';
 import { attachmentsForSend } from '../../../common/attachments';
+import { resolveChatAnchor } from '../../../common/search-navigation';
 import { useConnection } from '../../stores/connection';
 import { useChat } from '../../stores/chat';
 import { useEvents } from '../../stores/events';
 import { useSearch } from '../../stores/search';
-import { useSessionDetailsDrawer } from '../../stores/sessionDetailsDrawer';
 import { fetchChildSessions, fetchSessions } from '../../services/api';
 import MessageComposer, { type PendingFile, type SlashCommand } from '../../components/MessageComposer';
 import MessageList from '../../components/MessageList';
+import SessionDetailsDrawerShell from '../../components/SessionDetailsDrawer';
 import BrandLogo from '../../components/BrandLogo';
 import {
   useHeaderInset,
@@ -118,10 +119,11 @@ export default function ChatScreen() {
   const setDraftInput = useChat((s) => s.setDraftInput);
   const setLlmPin = useChat((s) => s.setLlmPin);
   const setSystemPrompt = useChat((s) => s.setSystemPrompt);
-  const closeSessionDetails = useSessionDetailsDrawer((s) => s.requestClose);
   const hydrateFromServer = useChat((s) => s.hydrateFromServer);
   const mergeMessageWindow = useChat((s) => s.mergeMessageWindow);
   const loadEarlierMessages = useChat((s) => s.loadEarlierMessages);
+  const chatSearchDestination = useSearch((s) => s.chatDestination);
+  const clearChatSearchDestination = useSearch((s) => s.clearChatDestination);
   // Delete a chat session behind a confirmation dialog (vision §16: sessions
   // are durable — removal is an explicit, confirmed action). The server
   // cascades the delete to every sub-agent session this chat spawned, so the
@@ -297,13 +299,6 @@ export default function ChatScreen() {
     enabled: !voiceConfig.chatAlwaysListen,
   });
 
-  // The inspector belongs to Chat and the shared Run detail route. Close it
-  // when this screen loses focus so unrelated workspace sections never retain
-  // a stale session panel with no matching header control.
-  useFocusEffect(useCallback(() => (
-    () => closeSessionDetails()
-  ), [closeSessionDetails]));
-
   // TTS-availability check on focus
   useFocusEffect(
     useCallback(() => {
@@ -371,28 +366,60 @@ export default function ChatScreen() {
   const appliedParamRef = useRef<string | null>(null);
   useEffect(() => {
     const want = typeof routeParams.session === 'string' ? routeParams.session : undefined;
-    if (!want || want === activeSessionId) return;
+    if (!want) {
+      appliedParamRef.current = null;
+      return;
+    }
     if (appliedParamRef.current === want) return;
     appliedParamRef.current = want;
+    if (want === activeSessionId) return;
     setActiveSession(want);
   }, [routeParams.session, activeSessionId, setActiveSession]);
+
+  // Expo Router v5 can drop changed query parameters when a Drawer replaces
+  // its already-focused Chat route. Search therefore carries the exact
+  // in-app message/tool destination in account-scoped memory as well. Clear a
+  // stale anchor as soon as the user intentionally switches to another chat.
+  useEffect(() => {
+    if (!chatSearchDestination || chatSearchDestination.sessionId === activeSessionId) return;
+    clearChatSearchDestination();
+  }, [activeSessionId, chatSearchDestination, clearChatSearchDestination]);
+
+  const routeAnchorSession = typeof routeParams.session === 'string'
+    ? routeParams.session : undefined;
+  const routeAnchorMessage = typeof routeParams.message === 'string'
+    ? routeParams.message : undefined;
+  const routeAnchorTool = typeof routeParams.toolInvocation === 'string'
+    ? routeParams.toolInvocation : undefined;
+  // A fresh in-app destination wins over possibly stale route params. Root
+  // chat destinations are explicit too, so opening a conversation clears an
+  // earlier message/tool highlight even if the Drawer drops the new params.
+  const resolvedAnchor = resolveChatAnchor({
+    sessionId: routeAnchorSession,
+    messageId: routeAnchorMessage,
+    toolInvocationId: routeAnchorTool,
+  }, chatSearchDestination, activeSessionId);
+  const anchorSession = resolvedAnchor.sessionId;
+  const anchorMessage = resolvedAnchor.messageId;
+  const anchorToolInvocation = resolvedAnchor.toolInvocationId;
+  const anchorGeneration = resolvedAnchor.generation;
 
   // Exact operational-search anchor. The search overlay only navigates; Chat
   // owns the authorized messages-around/tool-detail fetch and range merge.
   useEffect(() => {
-    const session = typeof routeParams.session === 'string' ? routeParams.session : undefined;
-    const message = typeof routeParams.message === 'string' ? routeParams.message : undefined;
-    const toolInvocation = typeof routeParams.toolInvocation === 'string'
-      ? routeParams.toolInvocation : undefined;
-    if (!session || !message) return;
+    if (!anchorSession || !anchorMessage) return;
     const controller = new AbortController();
     setAnchorError(null);
     void (async () => {
       try {
         const [page, tool] = await Promise.all([
-          listSessionMessages(session, { around: message, before: 30, after: 30 }, controller.signal),
-          toolInvocation
-            ? getToolInvocationDetail(toolInvocation, controller.signal)
+          listSessionMessages(
+            anchorSession,
+            { around: anchorMessage, before: 30, after: 30 },
+            controller.signal,
+          ),
+          anchorToolInvocation
+            ? getToolInvocationDetail(anchorToolInvocation, controller.signal)
             : Promise.resolve(undefined),
         ]);
         if (controller.signal.aborted) return;
@@ -411,7 +438,13 @@ export default function ChatScreen() {
       }
     })();
     return () => controller.abort();
-  }, [mergeMessageWindow, routeParams.message, routeParams.session, routeParams.toolInvocation]);
+  }, [
+    anchorGeneration,
+    anchorMessage,
+    anchorSession,
+    anchorToolInvocation,
+    mergeMessageWindow,
+  ]);
 
   // Navigate into a child session (delegation card / run node) by swapping
   // the active session and reflecting it in the URL so it's deep-linkable.
@@ -1446,7 +1479,7 @@ export default function ChatScreen() {
   );
 
   return (
-    <>
+    <SessionDetailsDrawerShell topInset={headerInset}>
       <View style={[styles.chatArea, { paddingTop: headerInset }]}>
         {dragActive && (
           <View style={styles.dropOverlay} pointerEvents="none">
@@ -1595,8 +1628,8 @@ export default function ChatScreen() {
                   onOpenRun={openRun}
                   onOpenMemory={openMemory}
                   currentUserHandle={currentUserHandle}
-                  anchorMessageId={typeof routeParams.message === 'string' ? routeParams.message : undefined}
-                  anchorToolInvocationId={typeof routeParams.toolInvocation === 'string' ? routeParams.toolInvocation : undefined}
+                  anchorMessageId={anchorMessage}
+                  anchorToolInvocationId={anchorToolInvocation}
                   onAnchorLayout={(y) => scrollRef.current?.scrollTo({ y: Math.max(0, y - 96), animated: true })}
                   hasMoreBefore={activeSession.messageWindow?.hasMoreBefore}
                   onLoadEarlier={handleLoadEarlier}
@@ -1727,7 +1760,7 @@ export default function ChatScreen() {
           </View>
         )}
       </View>
-    </>
+    </SessionDetailsDrawerShell>
   );
 }
 

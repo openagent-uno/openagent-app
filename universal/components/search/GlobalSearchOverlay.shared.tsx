@@ -20,8 +20,10 @@ import type {
   RunStatus,
   SearchMatch,
   SearchScope,
+  SearchRootKind,
   SearchTarget,
 } from '../../../common/unified-history';
+import type { SearchOpenMetadata } from '../../../common/search-navigation';
 import { colors, font, glassSurface, radius, shadows, spacing } from '../../theme';
 import BlurView from '../BlurView';
 import {
@@ -36,7 +38,11 @@ type IconName = keyof typeof Feather.glyphMap;
 
 interface Props {
   platform: 'web' | 'native';
-  onOpenTarget: (target: SearchTarget, causedBy?: EventCause | null) => void;
+  onOpenTarget: (
+    target: SearchTarget,
+    causedBy?: EventCause | null,
+    metadata?: SearchOpenMetadata,
+  ) => void;
 }
 
 interface DisplayRow {
@@ -49,6 +55,7 @@ interface DisplayRow {
   fragments?: HighlightFragment[];
   fidelity?: string;
   target: SearchTarget;
+  rootKind: SearchRootKind;
   causedBy?: EventCause | null;
 }
 
@@ -185,6 +192,7 @@ function asRows(
         icon: iconForActivity(item.kind),
         fidelity: fidelityLabel(item.completeness),
         target,
+        rootKind: item.kind,
       }];
     });
   }
@@ -204,6 +212,7 @@ function asRows(
     fragments: match.fragments,
     fidelity: fidelityLabel(match.completeness, match.sensitivity === 'redacted'),
     target: match.target,
+    rootKind: result.root.kind,
     causedBy: result.caused_by,
   })));
 }
@@ -277,7 +286,11 @@ export default function GlobalSearchOverlayShared({ platform, onOpenTarget }: Pr
         const row = rows[active];
         if (!row || !displayedCurrent || effectiveLoading) return;
         event.preventDefault();
-        onOpenTarget(row.target, row.causedBy);
+        onOpenTarget(row.target, row.causedBy, {
+          title: row.title,
+          occurredAt: row.occurredAt,
+          rootKind: row.rootKind,
+        });
         useSearch.getState().hide();
         return;
       }
@@ -299,7 +312,11 @@ export default function GlobalSearchOverlayShared({ platform, onOpenTarget }: Pr
 
   const openRow = (row: DisplayRow) => {
     if (!displayedCurrent || effectiveLoading) return;
-    onOpenTarget(row.target, row.causedBy);
+    onOpenTarget(row.target, row.causedBy, {
+      title: row.title,
+      occurredAt: row.occurredAt,
+      rootKind: row.rootKind,
+    });
     useSearch.getState().hide();
   };
 
@@ -360,14 +377,20 @@ export default function GlobalSearchOverlayShared({ platform, onOpenTarget }: Pr
             ) : null}
           </View>
 
-          <View style={styles.chipRow}>
+          <View
+            style={styles.chipRow}
+            {...(platform === 'web' ? ({ role: 'tablist', 'aria-label': 'Search categories' } as any) : {})}
+          >
             {SCOPES.map((entry) => (
               <Pressable
                 key={entry.key}
                 onPress={() => state.setScope(entry.key)}
                 style={[styles.chip, state.scope === entry.key && styles.chipActive]}
-                accessibilityRole="button"
+                accessibilityRole="tab"
                 accessibilityState={{ selected: state.scope === entry.key }}
+                {...(platform === 'web'
+                  ? ({ 'aria-selected': state.scope === entry.key } as any)
+                  : {})}
               >
                 <Text style={[styles.chipText, state.scope === entry.key && styles.chipTextActive]}>
                   {entry.label}
@@ -387,6 +410,7 @@ export default function GlobalSearchOverlayShared({ platform, onOpenTarget }: Pr
                   style={[styles.filterChip, selected && styles.filterChipActive]}
                   accessibilityRole="button"
                   accessibilityState={{ selected }}
+                  {...(platform === 'web' ? ({ 'aria-pressed': selected } as any) : {})}
                 >
                   <Text style={[styles.filterText, selected && styles.filterTextActive]}>{entry.label}</Text>
                 </Pressable>
@@ -398,6 +422,7 @@ export default function GlobalSearchOverlayShared({ platform, onOpenTarget }: Pr
                 style={[styles.filterChip, state.errorsOnly && styles.filterChipActive]}
                 accessibilityRole="button"
                 accessibilityState={{ selected: state.errorsOnly }}
+                {...(platform === 'web' ? ({ 'aria-pressed': state.errorsOnly } as any) : {})}
               >
                 <Text style={[styles.filterText, state.errorsOnly && styles.filterTextActive]}>Errors only</Text>
               </Pressable>
@@ -409,6 +434,9 @@ export default function GlobalSearchOverlayShared({ platform, onOpenTarget }: Pr
                 style={[styles.filterChip, state.period === entry.key && styles.filterChipActive]}
                 accessibilityRole="button"
                 accessibilityState={{ selected: state.period === entry.key }}
+                {...(platform === 'web'
+                  ? ({ 'aria-pressed': state.period === entry.key } as any)
+                  : {})}
               >
                 <Text style={[styles.filterText, state.period === entry.key && styles.filterTextActive]}>{entry.label}</Text>
               </Pressable>

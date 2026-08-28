@@ -1,10 +1,10 @@
 /**
  * Cross-navigator request bridge for the right session-details drawer.
  *
- * Chat headers live inside the left app drawer (and sometimes an inner Stack),
- * while the details drawer is their outer react-navigation parent. Keeping the
- * request in a tiny store avoids brittle ``getParent().getParent()`` chains and
- * lets every header use the same symmetric button.
+ * Chat/run headers are owned above their route content, while the details
+ * drawer is nested inside that content. Keeping requests in a tiny store avoids
+ * brittle parent/child navigator chains and lets every header use the same
+ * symmetric button.
  */
 
 import { create } from 'zustand';

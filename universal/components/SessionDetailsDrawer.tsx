@@ -14,7 +14,11 @@ import {
   createDrawerNavigator,
   useDrawerStatus,
 } from '@react-navigation/drawer';
-import { useNavigation } from '@react-navigation/native';
+import {
+  NavigationContainer,
+  NavigationIndependentTree,
+  useNavigation,
+} from '@react-navigation/native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import {
@@ -44,6 +48,14 @@ import type {
   WorkflowRunDetail,
 } from '../../common/unified-history';
 import { normalizeRunTimestamp } from '../../common/run-date-normalization';
+import {
+  RUN_RELATIONS_REFRESH_EVERY_POLLS,
+  isLiveRunStatus,
+  mergeSessionHierarchyRows,
+  planRunRelationRefresh,
+  runLivePollDelay,
+  shouldContinueRunPolling,
+} from '../../common/session-details';
 import {
   runRoutePath,
   runTargetForChildSession,
@@ -233,9 +245,7 @@ function descendantChildren(items: SessionDescendantItem[]): ChildRow[] {
 }
 
 function mergeChildRows(current: ChildRow[], incoming: ChildRow[]): ChildRow[] {
-  const byId = new Map(current.map((row) => [row.id, row]));
-  for (const row of incoming) byId.set(row.id, row);
-  return [...byId.values()].sort((a, b) => (
+  return mergeSessionHierarchyRows(current, incoming).sort((a, b) => (
     a.depth - b.depth
     || toMs(b.lastActiveAt || b.createdAt) - toMs(a.lastActiveAt || a.createdAt)
     || a.id.localeCompare(b.id)
@@ -341,7 +351,7 @@ function SessionDetailsContent({
   const descendantsAvailable = useSearch((state) => (
     state.capabilities?.features.session_descendants?.version === 1
   ));
-  const historyGeneration = useSearch((state) => state.historyGeneration);
+  const historyRevision = useSearch((state) => state.historyRevision);
   const [related, setRelated] = useState<RelatedState>(EMPTY_RELATED);
   const [loading, setLoading] = useState(false);
   const [loadingMoreChildren, setLoadingMoreChildren] = useState(false);
@@ -406,7 +416,7 @@ function SessionDetailsContent({
     accountId,
     activeSessionId,
     descendantsAvailable,
-    historyGeneration,
+    historyRevision,
     recursiveRunsAvailable,
     refreshGeneration,
     relatedRunsAvailable,
@@ -431,7 +441,7 @@ function SessionDetailsContent({
       if (
         useConnection.getState().activeAccountId !== accountId
         || useChat.getState().activeSessionId !== activeSessionId
-        || useSearch.getState().historyGeneration !== historyGeneration
+        || useSearch.getState().historyRevision !== historyRevision
       ) return;
       setRelated((current) => {
         if (current.relatedRunsCursor !== cursor) return current;
@@ -457,7 +467,7 @@ function SessionDetailsContent({
   }, [
     accountId,
     activeSessionId,
-    historyGeneration,
+    historyRevision,
     loadingMoreRuns,
     recursiveRunsAvailable,
     related.relatedRunsCursor,
@@ -475,7 +485,7 @@ function SessionDetailsContent({
       if (
         useConnection.getState().activeAccountId !== accountId
         || useChat.getState().activeSessionId !== activeSessionId
-        || useSearch.getState().historyGeneration !== historyGeneration
+        || useSearch.getState().historyRevision !== historyRevision
       ) return;
       setRelated((current) => (
         current.childrenCursor !== cursor
@@ -501,7 +511,7 @@ function SessionDetailsContent({
     activeSessionId,
     accountId,
     descendantsAvailable,
-    historyGeneration,
+    historyRevision,
     loadingMoreChildren,
     related.childrenCursor,
   ]);
@@ -740,7 +750,7 @@ type ResolvedRunDetail = WorkflowRunDetail | ScheduledRunDetail | EventDeliveryD
 interface RunDrawerState {
   detail: ResolvedRunDetail | null;
   context: SessionContext | null;
-  childSessions: SessionEntry[];
+  childSessions: ChildRow[];
   childPageQueue: RunPageRequest[];
   childCoverageLimited: boolean;
   relatedRuns: SessionRelatedRunItem[];
@@ -765,7 +775,7 @@ interface RunPageRequest {
 }
 
 interface ChildPageBatch {
-  entries: SessionEntry[];
+  rows: ChildRow[];
   queue: RunPageRequest[];
   failed: boolean;
   limited: boolean;
@@ -788,13 +798,21 @@ function makeRunPageQueue(parentIds: string[]): RunPageRequest[] {
   return [...new Set(parentIds.filter(Boolean))].map((sessionId) => ({ sessionId }));
 }
 
-function mergeSessionEntries(
-  current: SessionEntry[],
-  incoming: SessionEntry[],
-): SessionEntry[] {
-  const entries = new Map(current.map((entry) => [entry.session_id, entry]));
-  for (const entry of incoming) entries.set(entry.session_id, entry);
-  return [...entries.values()];
+function reconcileRunPageQueue(
+  current: RunPageRequest[],
+  refreshedSourceIds: string[],
+  incoming: RunPageRequest[],
+): RunPageRequest[] {
+  const refreshed = new Set(refreshedSourceIds);
+  const queue = new Map<string, RunPageRequest>();
+  for (const request of current) {
+    if (refreshed.has(request.sessionId)) continue;
+    queue.set(`${request.sessionId}:${request.cursor ?? ''}`, request);
+  }
+  for (const request of incoming) {
+    queue.set(`${request.sessionId}:${request.cursor ?? ''}`, request);
+  }
+  return [...queue.values()];
 }
 
 function mergeRelatedRunItems(
@@ -813,18 +831,18 @@ async function loadChildSessionPageBatch(
 ): Promise<ChildPageBatch> {
   const batch = queue.slice(0, sourceLimit);
   const remaining = queue.slice(batch.length);
-  const entries = new Map<string, SessionEntry>();
+  let rows: ChildRow[] = [];
   const continuations: RunPageRequest[] = [];
   const retries: RunPageRequest[] = [];
   let failed = false;
   let limited = false;
   const results = await Promise.allSettled(batch.map(async (request) => {
     if (!descendantsAvailable) {
-      const rows = await fetchChildSessions(request.sessionId, 200);
+      const entries = await fetchChildSessions(request.sessionId, 200);
       return {
-        rows,
+        rows: relatedChildren(entries),
         next: undefined,
-        limited: rows.length >= 200,
+        limited: entries.length >= 200,
       };
     }
     const page = await listSessionDescendants(request.sessionId, {
@@ -835,7 +853,7 @@ async function loadChildSessionPageBatch(
       ? { sessionId: request.sessionId, cursor: page.next_cursor }
       : undefined;
     return {
-      rows: page.items.map(descendantEntry),
+      rows: descendantChildren(page.items),
       next,
       limited: page.has_more && !next,
     };
@@ -847,11 +865,11 @@ async function loadChildSessionPageBatch(
       return;
     }
     limited ||= result.value.limited;
-    for (const entry of result.value.rows) entries.set(entry.session_id, entry);
+    rows = mergeChildRows(rows, result.value.rows);
     if (result.value.next) continuations.push(result.value.next);
   });
   return {
-    entries: [...entries.values()],
+    rows,
     queue: [...remaining, ...continuations, ...retries],
     failed,
     limited,
@@ -906,6 +924,8 @@ interface RunSessionRow {
   subtitle: string;
   status?: string | null;
   entry?: SessionEntry;
+  depth: number;
+  lineageRedacted: boolean;
 }
 
 function eventTargetSession(detail: EventDeliveryDetail): string | undefined {
@@ -934,10 +954,26 @@ function primaryRunSession(
   return undefined;
 }
 
+function relatedSessionIdsForRun(
+  target: SessionDetailsRunTarget,
+  detail: ResolvedRunDetail | null,
+): string[] {
+  const primary = primaryRunSession(target, detail);
+  const workflowSessions = target.kind === 'workflow' && detail
+    ? (detail as WorkflowRunDetail).trace_steps
+        .map((step) => step.child_session_id || '')
+        .filter(Boolean)
+    : [];
+  return [...new Set([
+    ...(primary ? [primary] : []),
+    ...workflowSessions,
+  ])];
+}
+
 function runSessionRows(
   target: SessionDetailsRunTarget,
   detail: ResolvedRunDetail | null,
-  children: SessionEntry[],
+  children: ChildRow[],
 ): RunSessionRow[] {
   const rows = new Map<string, RunSessionRow>();
   const primary = primaryRunSession(target, detail);
@@ -946,6 +982,8 @@ function runSessionRows(
       id: primary,
       title: target.kind === 'event' ? 'Delivery session' : 'Run session',
       subtitle: 'Owning session',
+      depth: 0,
+      lineageRedacted: false,
     });
   }
   if (target.kind === 'workflow' && detail) {
@@ -957,6 +995,8 @@ function runSessionRows(
         title: step.node_id,
         subtitle: `${step.type} node`,
         status: step.status,
+        depth: 0,
+        lineageRedacted: false,
         entry: {
           session_id: step.child_session_id,
           client_id: '',
@@ -972,15 +1012,24 @@ function runSessionRows(
       });
     }
   }
-  for (const entry of children) {
+  for (const child of children) {
+    const entry = child.entry;
     if (!entry.session_id) continue;
     const existing = rows.get(entry.session_id);
+    const hierarchy = [
+      child.depth > 1 ? `Depth ${child.depth}` : null,
+      child.lineageRedacted ? 'Restricted lineage' : null,
+    ].filter(Boolean).join(' · ');
     rows.set(entry.session_id, {
       id: entry.session_id,
       title: entry.title || existing?.title || entry.session_id,
-      subtitle: existing?.subtitle || originLabel(entry.origin),
-      status: existing?.status || (entry._live ? 'running' : null),
+      subtitle: [existing?.subtitle || originLabel(entry.origin), hierarchy]
+        .filter(Boolean)
+        .join(' · '),
+      status: child.status || existing?.status || (entry._live ? 'running' : null),
       entry,
+      depth: child.depth,
+      lineageRedacted: child.lineageRedacted,
     });
   }
   return [...rows.values()];
@@ -1032,6 +1081,7 @@ function RunDetailsContent({
   const descendantsAvailable = useSearch((state) => (
     state.capabilities?.features.session_descendants?.version === 1
   ));
+  const historyRevision = useSearch((searchState) => searchState.historyRevision);
   const [state, setState] = useState<RunDrawerState>(EMPTY_RUN_DETAILS);
   const [loading, setLoading] = useState(false);
   const [loadingMoreChildren, setLoadingMoreChildren] = useState(false);
@@ -1039,11 +1089,19 @@ function RunDetailsContent({
   const [refreshGeneration, setRefreshGeneration] = useState(0);
   const loadedTarget = useRef<string | null>(null);
   const loadGeneration = useRef(0);
+  const backgroundAncillaryRefresh = useRef(false);
+  const manualChildLoad = useRef(false);
+  const manualRelatedRunLoad = useRef(false);
+  const handledHistoryRevision = useRef(historyRevision);
 
   useEffect(() => {
     let cancelled = false;
     let refreshTimer: ReturnType<typeof setTimeout> | undefined;
     const generation = ++loadGeneration.current;
+    const livePollStartedAt = Date.now();
+    const hydratedSourceIds = new Set<string>();
+    let livePollAttempts = 0;
+    let roundRobinCursor = 0;
     setLoading(true);
     const targetKey = `${accountId ?? ''}:${target.kind}:${target.runId}`;
     if (loadedTarget.current !== targetKey) {
@@ -1051,24 +1109,142 @@ function RunDetailsContent({
       setState(EMPTY_RUN_DETAILS);
     }
 
+    const refreshAncillaryState = async (
+      snapshot: ResolvedRunDetail,
+      sourceIds: string[],
+    ) => {
+      if (
+        !sourceIds.length
+        || backgroundAncillaryRefresh.current
+        || manualChildLoad.current
+        || manualRelatedRunLoad.current
+      ) {
+        return;
+      }
+      backgroundAncillaryRefresh.current = true;
+      try {
+        const sessionId = primaryRunSession(target, snapshot);
+        const sourceQueue = makeRunPageQueue(sourceIds);
+        const [contextResult, childrenResult, relatedRunsResult] = await Promise.allSettled([
+          sessionId ? getSessionContext(sessionId) : Promise.resolve(null),
+          loadChildSessionPageBatch(
+            sourceQueue,
+            descendantsAvailable,
+            sourceIds.length,
+          ),
+          relatedRunsAvailable
+            ? loadRelatedRunPageBatch(
+                sourceQueue,
+                recursiveRunsAvailable,
+                sourceIds.length,
+              )
+            : Promise.resolve<RelatedRunPageBatch>({ items: [], queue: [], failed: false }),
+        ]);
+        if (cancelled || loadGeneration.current !== generation) return;
+
+        const childrenOk = childrenResult.status === 'fulfilled'
+          && !childrenResult.value.failed;
+        const runsOk = !relatedRunsAvailable || (
+          relatedRunsResult.status === 'fulfilled' && !relatedRunsResult.value.failed
+        );
+        if (childrenOk && runsOk) {
+          for (const sourceId of sourceIds) hydratedSourceIds.add(sourceId);
+        }
+
+        setState((current) => {
+          let warning = current.warning;
+          if (sessionId && contextResult.status === 'rejected') {
+            warning = appendWarning(warning, 'Session context is temporarily unavailable.');
+          }
+          if (!childrenOk) {
+            warning = appendWarning(warning, 'Child sessions are temporarily unavailable.');
+          }
+          if (!runsOk) {
+            warning = appendWarning(warning, 'Causal run links are temporarily unavailable.');
+          }
+          return {
+            ...current,
+            detail: snapshot,
+            context: contextResult.status === 'fulfilled' && contextResult.value
+              ? contextResult.value
+              : current.context,
+            childSessions: childrenResult.status === 'fulfilled'
+              ? mergeChildRows(current.childSessions, childrenResult.value.rows)
+              : current.childSessions,
+            childPageQueue: childrenResult.status === 'fulfilled'
+              ? reconcileRunPageQueue(
+                  current.childPageQueue,
+                  sourceIds,
+                  childrenResult.value.queue,
+                )
+              : current.childPageQueue,
+            childCoverageLimited: current.childCoverageLimited || (
+              childrenResult.status === 'fulfilled' && childrenResult.value.limited
+            ),
+            relatedRuns: relatedRunsResult.status === 'fulfilled'
+              ? mergeRelatedRunItems(current.relatedRuns, relatedRunsResult.value.items)
+              : current.relatedRuns,
+            relatedRunPageQueue: relatedRunsResult.status === 'fulfilled'
+              ? reconcileRunPageQueue(
+                  current.relatedRunPageQueue,
+                  sourceIds,
+                  relatedRunsResult.value.queue,
+                )
+              : current.relatedRunPageQueue,
+            warning,
+          };
+        });
+      } finally {
+        backgroundAncillaryRefresh.current = false;
+      }
+    };
+
     const scheduleLiveRefresh = (snapshot: ResolvedRunDetail | null) => {
-      if (!snapshot || !['pending', 'queued', 'received', 'running'].includes(snapshot.status)) {
+      if (!snapshot || !isLiveRunStatus(snapshot.status)) return;
+      const elapsedMs = Date.now() - livePollStartedAt;
+      if (!shouldContinueRunPolling(snapshot.status, elapsedMs, livePollAttempts)) {
+        setState((current) => ({
+          ...current,
+          warning: appendWarning(
+            current.warning,
+            'Live refresh paused after ten minutes. Use Refresh to continue.',
+          ),
+        }));
         return;
       }
       refreshTimer = setTimeout(() => {
         void (async () => {
+          livePollAttempts += 1;
+          let refreshed: ResolvedRunDetail;
           try {
-            const refreshed = await resolveRunDetail(target);
-            if (cancelled || loadGeneration.current !== generation) return;
-            setState((current) => ({ ...current, detail: refreshed }));
-            scheduleLiveRefresh(refreshed);
+            refreshed = await resolveRunDetail(target);
           } catch {
             if (!cancelled && loadGeneration.current === generation) {
               scheduleLiveRefresh(snapshot);
             }
+            return;
+          }
+          if (cancelled || loadGeneration.current !== generation) return;
+          setState((current) => ({ ...current, detail: refreshed }));
+
+          const sourceIds = relatedSessionIdsForRun(target, refreshed);
+          const terminalRefresh = !isLiveRunStatus(refreshed.status);
+          const plan = planRunRelationRefresh({
+            sessionIds: sourceIds,
+            hydratedSessionIds: hydratedSourceIds,
+            roundRobinCursor,
+            pollAttempt: terminalRefresh
+              ? RUN_RELATIONS_REFRESH_EVERY_POLLS
+              : livePollAttempts,
+            sourceLimit: RUN_INITIAL_SOURCE_BATCH_SIZE,
+          });
+          roundRobinCursor = plan.nextRoundRobinCursor;
+          await refreshAncillaryState(refreshed, plan.sourceIds);
+          if (!cancelled && loadGeneration.current === generation) {
+            scheduleLiveRefresh(refreshed);
           }
         })();
-      }, 2000);
+      }, runLivePollDelay(livePollAttempts));
     };
 
     void (async () => {
@@ -1082,15 +1258,7 @@ function RunDetailsContent({
       if (cancelled || loadGeneration.current !== generation) return;
 
       const sessionId = primaryRunSession(target, detail);
-      const workflowSessionIds = target.kind === 'workflow' && detail
-        ? (detail as WorkflowRunDetail).trace_steps
-            .map((step) => step.child_session_id || '')
-            .filter(Boolean)
-        : [];
-      const relatedSessionIds = [
-        ...(sessionId ? [sessionId] : []),
-        ...workflowSessionIds,
-      ];
+      const relatedSessionIds = relatedSessionIdsForRun(target, detail);
       const childQueue = makeRunPageQueue(relatedSessionIds);
       const relatedRunQueue = relatedRunsAvailable
         ? makeRunPageQueue(relatedSessionIds)
@@ -1129,7 +1297,7 @@ function RunDetailsContent({
       setState({
         detail,
         context: contextResult.status === 'fulfilled' ? contextResult.value : null,
-        childSessions: childrenResult.status === 'fulfilled' ? childrenResult.value.entries : [],
+        childSessions: childrenResult.status === 'fulfilled' ? childrenResult.value.rows : [],
         childPageQueue: childrenResult.status === 'fulfilled'
           ? childrenResult.value.queue
           : childQueue,
@@ -1144,6 +1312,14 @@ function RunDetailsContent({
           : relatedRunQueue,
         warning: warnings.length ? warnings.join(' ') : null,
       });
+      const initialSources = relatedSessionIds.slice(0, RUN_INITIAL_SOURCE_BATCH_SIZE);
+      const childrenOk = childrenResult.status === 'fulfilled' && !childrenResult.value.failed;
+      const runsOk = !relatedRunsAvailable || (
+        relatedRunsResult.status === 'fulfilled' && !relatedRunsResult.value.failed
+      );
+      if (childrenOk && runsOk) {
+        for (const sourceId of initialSources) hydratedSourceIds.add(sourceId);
+      }
       setLoading(false);
       scheduleLiveRefresh(detail);
     })();
@@ -1160,10 +1336,19 @@ function RunDetailsContent({
     target,
   ]);
 
+  useEffect(() => {
+    if (handledHistoryRevision.current === historyRevision) return;
+    handledHistoryRevision.current = historyRevision;
+    if (state.detail && !isLiveRunStatus(state.detail.status)) {
+      setRefreshGeneration((value) => value + 1);
+    }
+  }, [historyRevision, state.detail]);
+
   const loadMoreChildSessions = useCallback(async () => {
     const queue = state.childPageQueue;
-    if (!queue.length || loadingMoreChildren) return;
+    if (!queue.length || loadingMoreChildren || backgroundAncillaryRefresh.current) return;
     const generation = loadGeneration.current;
+    manualChildLoad.current = true;
     setLoadingMoreChildren(true);
     try {
       const batch = await loadChildSessionPageBatch(
@@ -1176,7 +1361,7 @@ function RunDetailsContent({
         if (current.childPageQueue !== queue) return current;
         return {
           ...current,
-          childSessions: mergeSessionEntries(current.childSessions, batch.entries),
+          childSessions: mergeChildRows(current.childSessions, batch.rows),
           childPageQueue: batch.queue,
           childCoverageLimited: current.childCoverageLimited || batch.limited,
           warning: batch.failed
@@ -1185,14 +1370,16 @@ function RunDetailsContent({
         };
       });
     } finally {
+      manualChildLoad.current = false;
       setLoadingMoreChildren(false);
     }
   }, [descendantsAvailable, loadingMoreChildren, state.childPageQueue]);
 
   const loadMoreRelatedRuns = useCallback(async () => {
     const queue = state.relatedRunPageQueue;
-    if (!queue.length || loadingMoreRuns) return;
+    if (!queue.length || loadingMoreRuns || backgroundAncillaryRefresh.current) return;
     const generation = loadGeneration.current;
+    manualRelatedRunLoad.current = true;
     setLoadingMoreRuns(true);
     try {
       const batch = await loadRelatedRunPageBatch(
@@ -1213,6 +1400,7 @@ function RunDetailsContent({
         };
       });
     } finally {
+      manualRelatedRunLoad.current = false;
       setLoadingMoreRuns(false);
     }
   }, [loadingMoreRuns, recursiveRunsAvailable, state.relatedRunPageQueue]);
@@ -1384,7 +1572,10 @@ function RunDetailsContent({
             <Pressable
               key={row.id}
               onPress={() => openSession(row)}
-              style={styles.itemRow}
+              style={[
+                styles.itemRow,
+                row.depth > 0 && { paddingLeft: Math.min(row.depth, 4) * 10 + spacing.sm },
+              ]}
               accessibilityRole="button"
               accessibilityLabel={`Open ${row.title}`}
               {...(Platform.OS === 'web' ? { className: 'oa-side-row' } as any : {})}
@@ -1491,18 +1682,20 @@ function RunDetailsContent({
   );
 }
 
-function DrawerContent() {
+function DrawerContent({ topInset }: { topInset: number }) {
   const isOpen = useSessionDetailsDrawer((state) => state.isOpen);
   const runTarget = useSessionDetailsDrawer((state) => state.runTarget);
   const requestClose = useSessionDetailsDrawer((state) => state.requestClose);
   const { isPhone } = useLayout();
   const insets = useSafeAreaInsets();
   const onNavigate = isPhone ? requestClose : undefined;
+  const resolvedTopInset = Math.max(topInset, isPhone ? insets.top : 0);
   return (
     <View
       style={[
         styles.drawerSurface,
-        isPhone && { paddingTop: insets.top, paddingBottom: insets.bottom },
+        { paddingTop: resolvedTopInset },
+        isPhone && { paddingBottom: insets.bottom },
       ]}
     >
       {isOpen ? (
@@ -1545,35 +1738,45 @@ function WorkspaceScreen() {
   return <View style={styles.workspace}>{children}</View>;
 }
 
-/** Wrap the expo-router left drawer in a second, right-positioned Drawer.
- *  The inner navigator remains the route owner; this outer navigator owns one
- *  workspace screen and therefore cannot disturb route/back history. */
-export default function SessionDetailsDrawerShell({ children }: { children: ReactNode }) {
+/** Wrap one detail-capable route in a right-positioned Drawer. Keeping this
+ *  navigator below the file route (never around the Expo Router drawer) lets
+ *  Expo Router remain the sole owner of URL and cross-section history. */
+export default function SessionDetailsDrawerShell({
+  children,
+  topInset = 0,
+}: {
+  children: ReactNode;
+  topInset?: number;
+}) {
   const layout = useLayout();
   const isOpen = useSessionDetailsDrawer((state) => state.isOpen);
   const width = Math.min(DETAILS_WIDTH, Math.max(280, layout.width * 0.88));
   return (
     <ShellContent.Provider value={children}>
-      <RightDrawer.Navigator
-        defaultStatus="closed"
-        drawerContent={() => <DrawerContent />}
-        screenOptions={{
-          headerShown: false,
-          drawerPosition: 'right',
-          drawerType: layout.isPhone || !isOpen ? 'front' : 'permanent',
-          drawerStyle: {
-            width,
-            backgroundColor: 'transparent',
-            borderLeftWidth: 0,
-          },
-          sceneStyle: { backgroundColor: colors.bg },
-          overlayColor: layout.isPhone ? 'rgba(0, 0, 0, 0.30)' : 'transparent',
-          swipeEnabled: false,
-          freezeOnBlur: false,
-        }}
-      >
-        <RightDrawer.Screen name="__workspace__" component={WorkspaceScreen} />
-      </RightDrawer.Navigator>
+      <NavigationIndependentTree>
+        <NavigationContainer documentTitle={{ enabled: false }}>
+          <RightDrawer.Navigator
+            defaultStatus={isOpen ? 'open' : 'closed'}
+            drawerContent={() => <DrawerContent topInset={topInset} />}
+            screenOptions={{
+              headerShown: false,
+              drawerPosition: 'right',
+              drawerType: layout.isPhone || !isOpen ? 'front' : 'permanent',
+              drawerStyle: {
+                width,
+                backgroundColor: 'transparent',
+                borderLeftWidth: 0,
+              },
+              sceneStyle: { backgroundColor: colors.bg },
+              overlayColor: layout.isPhone ? 'rgba(0, 0, 0, 0.30)' : 'transparent',
+              swipeEnabled: false,
+              freezeOnBlur: false,
+            }}
+          >
+            <RightDrawer.Screen name="__workspace__" component={WorkspaceScreen} />
+          </RightDrawer.Navigator>
+        </NavigationContainer>
+      </NavigationIndependentTree>
     </ShellContent.Provider>
   );
 }

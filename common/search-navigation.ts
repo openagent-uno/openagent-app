@@ -1,9 +1,72 @@
-import type { EventCause, SearchTarget } from './unified-history';
+import type { EventCause, SearchRootKind, SearchTarget } from './unified-history';
 
 /** Pure, serializable route intent. The universal service performs the push. */
 export interface SearchNavigationIntent {
   pathname: string;
   params: Record<string, string>;
+}
+
+/** Presentation metadata that lets Chat replace a lazy search-result stub
+ * with the canonical title without loading any message content eagerly. */
+export interface SearchOpenMetadata {
+  title: string;
+  occurredAt: string;
+  rootKind: SearchRootKind;
+}
+
+export interface ChatAnchorInput {
+  sessionId?: string;
+  messageId?: string;
+  toolInvocationId?: string;
+  generation?: number;
+}
+
+export interface ResolvedChatAnchor {
+  sessionId?: string;
+  messageId?: string;
+  toolInvocationId?: string;
+  generation: number;
+}
+
+/**
+ * Prefer the latest in-app search selection over route parameters: an outer
+ * React Navigation Drawer may retain an older query string when opening a
+ * second result on the already-focused Chat screen. An explicit root-chat
+ * selection therefore resolves to no anchor and clears that stale highlight.
+ */
+export function resolveChatAnchor(
+  route: ChatAnchorInput,
+  inApp: ChatAnchorInput | null,
+  activeSessionId?: string | null,
+): ResolvedChatAnchor {
+  const current = inApp?.sessionId === activeSessionId ? inApp : null;
+  if (current) {
+    return current.messageId
+      ? {
+          sessionId: current.sessionId,
+          messageId: current.messageId,
+          toolInvocationId: current.toolInvocationId,
+          generation: current.generation ?? 0,
+        }
+      : { generation: current.generation ?? 0 };
+  }
+  return {
+    sessionId: route.sessionId,
+    messageId: route.messageId,
+    toolInvocationId: route.toolInvocationId,
+    generation: 0,
+  };
+}
+
+export type ChatSearchTarget = Extract<
+  SearchTarget,
+  { kind: 'chat' | 'chat_message' | 'chat_tool' }
+>;
+
+export function isChatSearchTarget(target: SearchTarget): target is ChatSearchTarget {
+  return target.kind === 'chat'
+    || target.kind === 'chat_message'
+    || target.kind === 'chat_tool';
 }
 
 function addCause(params: Record<string, string>, causedBy?: EventCause | null): void {
@@ -28,15 +91,15 @@ export function searchNavigationIntent(
 ): SearchNavigationIntent {
   switch (target.kind) {
     case 'chat':
-      return { pathname: '/(tabs)/chat', params: { session: target.session_id } };
+      return { pathname: '/chat', params: { session: target.session_id } };
     case 'chat_message':
       return {
-        pathname: '/(tabs)/chat',
+        pathname: '/chat',
         params: { session: target.session_id, message: target.message_id },
       };
     case 'chat_tool':
       return {
-        pathname: '/(tabs)/chat',
+        pathname: '/chat',
         params: {
           session: target.session_id,
           message: target.message_id,

@@ -17,6 +17,7 @@ import { useCallback, useEffect, useLayoutEffect } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
 import { colors } from '../../../theme';
 import { RunDetailView } from '../../../components/RunDetailView';
+import SessionDetailsDrawerShell from '../../../components/SessionDetailsDrawer';
 import {
   useHeaderInset,
   HeaderRight,
@@ -45,7 +46,6 @@ export default function RunDetailScreen() {
   const connConfig = useConnection((s) => s.config);
   const setRunTarget = useSessionDetailsDrawer((state) => state.setRunTarget);
   const clearRunTarget = useSessionDetailsDrawer((state) => state.clearRunTarget);
-  const closeSessionDetails = useSessionDetailsDrawer((state) => state.requestClose);
   const runKind: SessionDetailsRunKind = kind === 'workflow'
     ? 'workflow'
     : kind === 'event'
@@ -57,10 +57,10 @@ export default function RunDetailScreen() {
     if (connConfig.sidecarPort) setBaseUrl('127.0.0.1', connConfig.sidecarPort);
   }, [connConfig]);
 
-  // The right drawer sits outside the expo-router tree, so publish the focused
-  // run's real route identity through the tiny drawer bridge. Focus-scoping is
-  // important: drawer-root stacks remain mounted/frozen when another section
-  // is opened and must not leave a stale run selected behind the chat screen.
+  // The right drawer is nested inside this route while its header is owned by
+  // Expo Router, so publish the focused run identity through the tiny drawer
+  // bridge. Focus-scoping is important: drawer-root stacks remain mounted /
+  // frozen when another section opens and must not leave a stale run selected.
   useFocusEffect(useCallback(() => {
     if (!id) return undefined;
     setRunTarget({
@@ -72,9 +72,8 @@ export default function RunDetailScreen() {
     });
     return () => {
       clearRunTarget(id);
-      closeSessionDetails();
     };
-  }, [clearRunTarget, closeSessionDetails, id, name, parentId, runKind, session, setRunTarget]));
+  }, [clearRunTarget, id, name, parentId, runKind, session, setRunTarget]));
 
   useLayoutEffect(() => {
     // Screen-name title by run kind (homogeneous; not the parent's name).
@@ -97,28 +96,30 @@ export default function RunDetailScreen() {
   const ready = connConfig && id;
 
   return (
-    <View style={[styles.screen, { paddingTop: headerInset }]}>
-      {/* Wait for the connection to resume before mounting the content:
-          a fresh window's REST base URL isn't set until ``_openWebsocket``
-          runs (it calls setBaseUrl right before populating ``config``), and
-          the content fetches on mount. */}
-      {ready ? (
-        <RunDetailView
-          kind={kind === 'workflow' ? 'workflow' : kind === 'event' ? 'event' : 'task'}
-          parentId={parentId || ''}
-          runId={id}
-          name={name}
-          traceStepId={traceStep}
-          messageId={message}
-          toolInvocationId={toolInvocation}
-          targetSessionId={session}
-        />
-      ) : (
-        <View style={styles.statusPane}>
-          <ActivityIndicator size="small" color={colors.textMuted} />
-        </View>
-      )}
-    </View>
+    <SessionDetailsDrawerShell topInset={headerInset}>
+      <View style={[styles.screen, { paddingTop: headerInset }]}>
+        {/* Wait for the connection to resume before mounting the content:
+            a fresh window's REST base URL isn't set until ``_openWebsocket``
+            runs (it calls setBaseUrl right before populating ``config``), and
+            the content fetches on mount. */}
+        {ready ? (
+          <RunDetailView
+            kind={kind === 'workflow' ? 'workflow' : kind === 'event' ? 'event' : 'task'}
+            parentId={parentId || ''}
+            runId={id}
+            name={name}
+            traceStepId={traceStep}
+            messageId={message}
+            toolInvocationId={toolInvocation}
+            targetSessionId={session}
+          />
+        ) : (
+          <View style={styles.statusPane}>
+            <ActivityIndicator size="small" color={colors.textMuted} />
+          </View>
+        )}
+      </View>
+    </SessionDetailsDrawerShell>
   );
 }
 
