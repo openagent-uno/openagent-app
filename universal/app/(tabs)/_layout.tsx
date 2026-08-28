@@ -18,11 +18,16 @@
 import { createDrawerNavigator } from '@react-navigation/drawer';
 import { useRouter, withLayoutContext } from 'expo-router';
 import { useCallback, useEffect } from 'react';
-import { Platform } from 'react-native';
+import { Platform, View } from 'react-native';
 import Sidebar from '../../components/Sidebar';
 import GlobalSearchOverlay from '../../components/search/GlobalSearchOverlay';
 import { HeaderMenu, themedHeader } from '../../components/screenHeader';
 import { useLayout } from '../../hooks/useLayout';
+import {
+  useReducedMotion,
+  useWebInert,
+  webDrawerWidthTransition,
+} from '../../hooks/useDrawerMotion';
 import { useConnection } from '../../stores/connection';
 import { useChat } from '../../stores/chat';
 import { globalSearchAvailable, useSearch } from '../../stores/search';
@@ -33,6 +38,7 @@ import type { SearchOpenMetadata } from '../../../common/search-navigation';
 import { sessionEntryFromActivity } from '../../services/api';
 import type { EventCause, SearchTarget } from '../../../common/unified-history';
 import { colors } from '../../theme';
+import { drawerMotionDuration, resolvedDrawerWidth } from '../../../common/drawer-motion';
 
 const { Navigator } = createDrawerNavigator();
 const Drawer = withLayoutContext(Navigator);
@@ -51,10 +57,14 @@ export default function AppDrawerLayout() {
   const accountId = useConnection((state) => state.activeAccountId);
   const ws = useConnection((state) => state.ws);
   const wideSidebarOpen = useNavigationSidebar((state) => state.isOpen);
+  const reducedMotion = useReducedMotion();
   // Two widths, one toggleable drawer. Wide layouts start open; phones start
   // closed. There is no collapsed icon-only middle stage.
   const permanent = !layout.isPhone;
-  const width = permanent ? (wideSidebarOpen ? 244 : 0) : 296;
+  const expandedWidth = permanent ? 244 : 296;
+  const width = resolvedDrawerWidth(expandedWidth, !permanent, wideSidebarOpen);
+  const motionDuration = drawerMotionDuration(reducedMotion);
+  const sidebarInertRef = useWebInert(!wideSidebarOpen);
 
   // Top-level screens get the sidebar button at every width; pushed screens
   // pair it with Back so a closed desktop sidebar is never a dead end.
@@ -139,11 +149,25 @@ export default function AppDrawerLayout() {
           backBehavior="history"
           defaultStatus={permanent ? 'open' : 'closed'}
           drawerContent={(props: any) => (
-            permanent && !wideSidebarOpen
-              ? null
+            permanent
+              ? (
+                  <View
+                    ref={sidebarInertRef}
+                    testID="navigation-drawer-content"
+                    pointerEvents={wideSidebarOpen ? 'auto' : 'none'}
+                    accessibilityElementsHidden={!wideSidebarOpen}
+                    importantForAccessibility={wideSidebarOpen ? 'auto' : 'no-hide-descendants'}
+                    style={{ width: expandedWidth, flex: 1 }}
+                    {...(Platform.OS === 'web'
+                      ? ({ 'aria-hidden': !wideSidebarOpen } as any)
+                      : {})}
+                  >
+                    <Sidebar />
+                  </View>
+                )
               : (
                   <Sidebar
-                    onNavigate={permanent ? undefined : () => props.navigation.closeDrawer()}
+                    onNavigate={() => props.navigation.closeDrawer()}
                   />
                 )
           )}
@@ -161,6 +185,7 @@ export default function AppDrawerLayout() {
               overflow: 'hidden',
               backgroundColor: 'transparent',
               borderRightWidth: 0,
+              ...(permanent ? webDrawerWidthTransition(motionDuration) : undefined),
             },
             overlayColor: 'transparent',
             swipeEnabled: !permanent,

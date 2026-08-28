@@ -17,6 +17,10 @@ import { useNavigation, useRouter } from 'expo-router';
 import { DrawerActions } from '@react-navigation/native';
 import { useHeaderHeight } from '@react-navigation/elements';
 import { useLayout } from '../hooks/useLayout';
+import {
+  configureNextDrawerLayout,
+  useReducedMotion,
+} from '../hooks/useDrawerMotion';
 import { goBack } from '../services/windows';
 import { useNavHistory } from '../stores/navHistory';
 import { useNavigationSidebar } from '../stores/navigationSidebar';
@@ -102,13 +106,17 @@ export function useHeaderInset(): number {
 export function HeaderMenu() {
   const navigation = useNavigation();
   const { isPhone } = useLayout();
+  const reducedMotion = useReducedMotion();
   const wideSidebarOpen = useNavigationSidebar((state) => state.isOpen);
   const toggleWideSidebar = useNavigationSidebar((state) => state.toggle);
   return (
     <Pressable
       onPress={() => {
         if (isPhone) navigation.dispatch(DrawerActions.toggleDrawer());
-        else toggleWideSidebar();
+        else {
+          configureNextDrawerLayout(reducedMotion);
+          toggleWideSidebar();
+        }
       }}
       hitSlop={8}
       style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center', marginLeft: 6, borderRadius: radius.md, ...NO_DRAG }}
@@ -126,11 +134,16 @@ export function HeaderMenu() {
 /** Right session-details drawer toggle. Mirroring the left sidebar glyph and
  *  button geometry makes the two workspace edges read as one control pair. */
 export function HeaderSessionDetails() {
+  const { isPhone } = useLayout();
+  const reducedMotion = useReducedMotion();
   const requestToggle = useSessionDetailsDrawer((state) => state.requestToggle);
   const isOpen = useSessionDetailsDrawer((state) => state.isOpen);
   return (
     <Pressable
-      onPress={requestToggle}
+      onPress={() => {
+        if (!isPhone) configureNextDrawerLayout(reducedMotion);
+        requestToggle();
+      }}
       hitSlop={8}
       style={{
         width: 36,

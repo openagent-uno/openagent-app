@@ -82,7 +82,19 @@ import {
 } from '../stores/sessionDetailsDrawer';
 import { colors, font, radius, spacing } from '../theme';
 import { useLayout } from '../hooks/useLayout';
+import {
+  configureNextDrawerLayout,
+  useReducedMotion,
+  useRetainedPresence,
+  useWebInert,
+  webDrawerWidthTransition,
+} from '../hooks/useDrawerMotion';
 import ContextPanel from './ContextPanel';
+import {
+  drawerContentRetentionDuration,
+  drawerMotionDuration,
+  resolvedDrawerWidth,
+} from '../../common/drawer-motion';
 
 const DETAILS_WIDTH = 344;
 const RightDrawer = createDrawerNavigator();
@@ -1682,26 +1694,46 @@ function RunDetailsContent({
   );
 }
 
-function DrawerContent({ topInset }: { topInset: number }) {
+function DrawerContent({
+  topInset,
+  present,
+}: {
+  topInset: number;
+  present: boolean;
+}) {
   const isOpen = useSessionDetailsDrawer((state) => state.isOpen);
   const runTarget = useSessionDetailsDrawer((state) => state.runTarget);
   const requestClose = useSessionDetailsDrawer((state) => state.requestClose);
   const { isPhone } = useLayout();
+  const reducedMotion = useReducedMotion();
   const insets = useSafeAreaInsets();
   const onNavigate = isPhone ? requestClose : undefined;
+  const onClose = useCallback(() => {
+    if (!isPhone) configureNextDrawerLayout(reducedMotion);
+    requestClose();
+  }, [isPhone, reducedMotion, requestClose]);
   const resolvedTopInset = Math.max(topInset, isPhone ? insets.top : 0);
+  const inertRef = useWebInert(!isOpen);
   return (
     <View
+      ref={inertRef}
+      testID="session-details-drawer-content"
+      pointerEvents={isOpen ? 'auto' : 'none'}
+      accessibilityElementsHidden={!isOpen}
+      importantForAccessibility={isOpen ? 'auto' : 'no-hide-descendants'}
       style={[
         styles.drawerSurface,
         { paddingTop: resolvedTopInset },
         isPhone && { paddingBottom: insets.bottom },
       ]}
+      {...(Platform.OS === 'web'
+        ? ({ 'aria-hidden': !isOpen } as any)
+        : {})}
     >
-      {isOpen ? (
+      {present ? (
         runTarget
-          ? <RunDetailsContent target={runTarget} onNavigate={onNavigate} onClose={requestClose} />
-          : <SessionDetailsContent onNavigate={onNavigate} onClose={requestClose} />
+          ? <RunDetailsContent target={runTarget} onNavigate={onNavigate} onClose={onClose} />
+          : <SessionDetailsContent onNavigate={onNavigate} onClose={onClose} />
       ) : null}
     </View>
   );
@@ -1716,6 +1748,9 @@ function WorkspaceScreen() {
   const toggleRequested = useSessionDetailsDrawer((state) => state.toggleRequested);
   const closeRequested = useSessionDetailsDrawer((state) => state.closeRequested);
   const setOpen = useSessionDetailsDrawer((state) => state.setOpen);
+  const isOpen = useSessionDetailsDrawer((state) => state.isOpen);
+  const reducedMotion = useReducedMotion();
+  const { isPhone } = useLayout();
   const lastToggle = useRef(toggleRequested);
   const lastClose = useRef(closeRequested);
 
@@ -1732,8 +1767,11 @@ function WorkspaceScreen() {
   }, [closeRequested, navigation]);
 
   useEffect(() => {
-    setOpen(drawerStatus === 'open');
-  }, [drawerStatus, setOpen]);
+    const nextOpen = drawerStatus === 'open';
+    if (nextOpen === isOpen) return;
+    if (!isPhone) configureNextDrawerLayout(reducedMotion);
+    setOpen(nextOpen);
+  }, [drawerStatus, isOpen, isPhone, reducedMotion, setOpen]);
 
   return <View style={styles.workspace}>{children}</View>;
 }
@@ -1750,22 +1788,35 @@ export default function SessionDetailsDrawerShell({
 }) {
   const layout = useLayout();
   const isOpen = useSessionDetailsDrawer((state) => state.isOpen);
-  const width = Math.min(DETAILS_WIDTH, Math.max(280, layout.width * 0.88));
+  const reducedMotion = useReducedMotion();
+  const expandedWidth = Math.min(DETAILS_WIDTH, Math.max(280, layout.width * 0.88));
+  const motionDuration = drawerMotionDuration(reducedMotion);
+  const width = resolvedDrawerWidth(expandedWidth, layout.isPhone, isOpen);
+  const contentPresent = useRetainedPresence(
+    isOpen,
+    drawerContentRetentionDuration(layout.isPhone, reducedMotion),
+  );
   return (
     <ShellContent.Provider value={children}>
       <NavigationIndependentTree>
         <NavigationContainer documentTitle={{ enabled: false }}>
           <RightDrawer.Navigator
             defaultStatus={isOpen ? 'open' : 'closed'}
-            drawerContent={() => <DrawerContent topInset={topInset} />}
+            drawerContent={() => (
+              <DrawerContent topInset={topInset} present={contentPresent} />
+            )}
             screenOptions={{
               headerShown: false,
               drawerPosition: 'right',
-              drawerType: layout.isPhone || !isOpen ? 'front' : 'permanent',
+              drawerType: layout.isPhone ? 'front' : 'permanent',
               drawerStyle: {
                 width,
+                overflow: 'hidden',
                 backgroundColor: 'transparent',
                 borderLeftWidth: 0,
+                ...(!layout.isPhone
+                  ? webDrawerWidthTransition(motionDuration)
+                  : undefined),
               },
               sceneStyle: { backgroundColor: colors.bg },
               overlayColor: layout.isPhone ? 'rgba(0, 0, 0, 0.30)' : 'transparent',
