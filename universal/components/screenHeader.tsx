@@ -3,8 +3,9 @@
  *
  * EVERY screen — top-level tabs AND pushed sub-screens (editors, run
  * history, note views) — uses the real navigator header, never a custom
- * in-content title bar. Top-level screens get `HeaderMenu` (the phone
- * drawer toggle) as `headerLeft`; pushed sub-screens get `HeaderBack`.
+ * in-content title bar. Top-level screens get `HeaderMenu`; pushed workspace
+ * screens pair `HeaderMenu` and `HeaderBack` so both navigation axes remain
+ * reachable at every breakpoint.
  * Right-side actions use `HeaderAction` (labelled button) or
  * `HeaderIconButton` (icon-only). All controls are `no-drag` so the rest
  * of the header still drags the window. See DragRegion.
@@ -18,6 +19,8 @@ import { useHeaderHeight } from '@react-navigation/elements';
 import { useLayout } from '../hooks/useLayout';
 import { goBack } from '../services/windows';
 import { useNavHistory } from '../stores/navHistory';
+import { useNavigationSidebar } from '../stores/navigationSidebar';
+import { useSessionDetailsDrawer } from '../stores/sessionDetailsDrawer';
 import DragRegion, { NO_DRAG } from './DragRegion';
 import { colors, font, radius, glassSurface } from '../theme';
 
@@ -94,23 +97,65 @@ export function useHeaderInset(): number {
   return useHeaderHeight();
 }
 
-/** Phone-only hamburger for `headerLeft` on top-level screens — toggles
- *  the drawer. Renders nothing on tablet/desktop (sidebar is permanent). */
+/** Left navigation-drawer toggle. It stays available at every breakpoint:
+ *  desktop starts open, but the user can reclaim the full content width. */
 export function HeaderMenu() {
   const navigation = useNavigation();
   const { isPhone } = useLayout();
-  if (!isPhone) return null;
+  const wideSidebarOpen = useNavigationSidebar((state) => state.isOpen);
+  const toggleWideSidebar = useNavigationSidebar((state) => state.toggle);
   return (
     <Pressable
-      onPress={() => navigation.dispatch(DrawerActions.toggleDrawer())}
+      onPress={() => {
+        if (isPhone) navigation.dispatch(DrawerActions.toggleDrawer());
+        else toggleWideSidebar();
+      }}
       hitSlop={8}
       style={{ width: 36, height: 36, alignItems: 'center', justifyContent: 'center', marginLeft: 6, borderRadius: radius.md, ...NO_DRAG }}
       accessibilityRole="button"
-      accessibilityLabel="Open menu"
+      accessibilityState={{ expanded: isPhone ? undefined : wideSidebarOpen }}
+      accessibilityLabel="Toggle navigation sidebar"
       // @ts-ignore web hover
       {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
     >
-      <Feather name="menu" size={18} color={colors.textSecondary} />
+      <Feather name="sidebar" size={18} color={colors.textSecondary} />
+    </Pressable>
+  );
+}
+
+/** Right session-details drawer toggle. Mirroring the left sidebar glyph and
+ *  button geometry makes the two workspace edges read as one control pair. */
+export function HeaderSessionDetails() {
+  const requestToggle = useSessionDetailsDrawer((state) => state.requestToggle);
+  const isOpen = useSessionDetailsDrawer((state) => state.isOpen);
+  return (
+    <Pressable
+      onPress={requestToggle}
+      hitSlop={8}
+      style={{
+        width: 36,
+        height: 36,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginRight: 6,
+        borderRadius: radius.md,
+        borderWidth: 1,
+        borderColor: isOpen ? colors.border : 'transparent',
+        backgroundColor: isOpen ? colors.primaryLight : 'transparent',
+        ...NO_DRAG,
+      }}
+      accessibilityRole="button"
+      accessibilityState={{ expanded: isOpen }}
+      accessibilityLabel="Toggle session details"
+      // @ts-ignore web hover
+      {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
+    >
+      <Feather
+        name="sidebar"
+        size={18}
+        color={isOpen ? colors.accent : colors.textSecondary}
+        style={{ transform: [{ scaleX: -1 }] }}
+      />
     </Pressable>
   );
 }
@@ -152,6 +197,25 @@ export function HeaderBack({ onPress, label, fallback }: { onPress?: () => void;
   );
 }
 
+/** Desktop/mobile-safe left header pair for a pushed screen. The navigation
+ *  sidebar must remain reachable even while a Back action owns this slot. */
+export function HeaderMenuAndBack({
+  onPress,
+  label,
+  fallback,
+}: {
+  onPress?: () => void;
+  label?: string;
+  fallback?: string;
+}) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+      <HeaderMenu />
+      <HeaderBack onPress={onPress} label={label} fallback={fallback} />
+    </View>
+  );
+}
+
 /**
  * Header-left for a screen that is the ROOT of its own stack yet is reached
  * by a push from elsewhere — the single-run detail (`runs/[id]`), opened
@@ -165,7 +229,7 @@ export function HeaderBackOrMenu({ fallback }: { fallback?: string }) {
   // pushed from elsewhere); the drawer toggle when opened cold from a deep
   // link. Subscribes to the trail so it updates as navigation changes.
   const canBack = useNavHistory((s) => s.trail.length > 1);
-  return canBack ? <HeaderBack fallback={fallback} /> : <HeaderMenu />;
+  return canBack ? <HeaderMenuAndBack fallback={fallback} /> : <HeaderMenu />;
 }
 
 /** Right-side header action — the unified "create / add new / save" control. */

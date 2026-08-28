@@ -1,5 +1,5 @@
 import { Stack } from 'expo-router';
-import { HeaderBack, HeaderMenu, themedHeader } from '../../../components/screenHeader';
+import { HeaderMenuAndBack, HeaderMenu, themedHeader } from '../../../components/screenHeader';
 
 export const unstable_settings = { initialRouteName: 'index' };
 
@@ -8,7 +8,7 @@ export default function ViewsStackLayout() {
     <Stack
       screenOptions={{
         ...themedHeader,
-        headerLeft: () => <HeaderBack fallback="/(tabs)/views" />,
+        headerLeft: () => <HeaderMenuAndBack fallback="/(tabs)/views" />,
         animation: 'slide_from_right',
       }}
     >

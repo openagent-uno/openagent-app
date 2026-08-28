@@ -18,7 +18,7 @@
  */
 
 import { Stack } from 'expo-router';
-import { themedHeader, HeaderMenu, HeaderBack } from '../../../components/screenHeader';
+import { themedHeader, HeaderMenu, HeaderMenuAndBack } from '../../../components/screenHeader';
 
 // Anchor the stack at ``index`` so the connector edit / install sub-screens
 // always have the grid beneath them — back pops to the grid in-section
@@ -32,7 +32,7 @@ export default function MCPsStackLayout() {
         ...themedHeader,
         // Section fallback: a cold-loaded (reloaded/deep-linked) sub-screen
         // with no trail history backs out to the section dashboard, not chat.
-        headerLeft: () => <HeaderBack fallback="/(tabs)/mcps" />,
+        headerLeft: () => <HeaderMenuAndBack fallback="/(tabs)/mcps" />,
         animation: 'slide_from_right',
       }}
     >

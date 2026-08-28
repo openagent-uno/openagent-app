@@ -21,15 +21,20 @@ import { runRoutePath, type RunLaunchTarget, type MemoryTarget } from '../../../
 import { attachmentsForSend } from '../../../common/attachments';
 import { useConnection } from '../../stores/connection';
 import { useChat } from '../../stores/chat';
-import { useUI } from '../../stores/ui';
 import { useEvents } from '../../stores/events';
 import { useSearch } from '../../stores/search';
+import { useSessionDetailsDrawer } from '../../stores/sessionDetailsDrawer';
 import { fetchChildSessions, fetchSessions } from '../../services/api';
 import MessageComposer, { type PendingFile, type SlashCommand } from '../../components/MessageComposer';
 import MessageList from '../../components/MessageList';
-import ContextPanel from '../../components/ContextPanel';
 import BrandLogo from '../../components/BrandLogo';
-import { useHeaderInset, HeaderBack, HeaderMenu, HeaderRight } from '../../components/screenHeader';
+import {
+  useHeaderInset,
+  HeaderMenuAndBack,
+  HeaderMenu,
+  HeaderRight,
+  HeaderSessionDetails,
+} from '../../components/screenHeader';
 import PopupMenu from '../../components/PopupMenu';
 import Notice from '../../components/Notice';
 import { NO_DRAG } from '../../components/DragRegion';
@@ -104,8 +109,6 @@ export default function ChatScreen() {
   const sessions = useChat((s) => s.sessions);
   const activeSessionId = useChat((s) => s.activeSessionId);
   const sessionsHydrated = useChat((s) => s.sessionsHydrated);
-  const contextPanelVisible = useUI((s) => s.contextPanelVisible);
-  const toggleContextPanel = useUI((s) => s.toggleContextPanel);
   const createSession = useChat((s) => s.createSession);
   const setActiveSession = useChat((s) => s.setActiveSession);
   const removeSession = useChat((s) => s.removeSession);
@@ -115,6 +118,7 @@ export default function ChatScreen() {
   const setDraftInput = useChat((s) => s.setDraftInput);
   const setLlmPin = useChat((s) => s.setLlmPin);
   const setSystemPrompt = useChat((s) => s.setSystemPrompt);
+  const closeSessionDetails = useSessionDetailsDrawer((s) => s.requestClose);
   const hydrateFromServer = useChat((s) => s.hydrateFromServer);
   const mergeMessageWindow = useChat((s) => s.mergeMessageWindow);
   const loadEarlierMessages = useChat((s) => s.loadEarlierMessages);
@@ -293,6 +297,13 @@ export default function ChatScreen() {
     enabled: !voiceConfig.chatAlwaysListen,
   });
 
+  // The inspector belongs to Chat and the shared Run detail route. Close it
+  // when this screen loses focus so unrelated workspace sections never retain
+  // a stale session panel with no matching header control.
+  useFocusEffect(useCallback(() => (
+    () => closeSessionDetails()
+  ), [closeSessionDetails]));
+
   // TTS-availability check on focus
   useFocusEffect(
     useCallback(() => {
@@ -459,7 +470,7 @@ export default function ChatScreen() {
     navigation.setOptions({
       headerLeft: () =>
         isChildSession ? (
-          <HeaderBack
+          <HeaderMenuAndBack
             onPress={() => {
               // If this child was drilled into from a NON-chat screen (e.g. a
               // run detail's sub-agent card), return to that screen via the
@@ -475,37 +486,35 @@ export default function ChatScreen() {
         ) : (
           <HeaderMenu />
         ),
-      // Overflow menu for the open chat. Every session (incl. sub-agent / run
-      // views) gets the context-panel toggle; only a top-level manual chat is
-      // deletable, so the Delete row is appended just for those.
+      // Session details live in the right navigation drawer. The overflow menu
+      // remains only for destructive chat actions, while the drawer button is
+      // always available for every open session (including child/run sessions).
       headerRight: () =>
         activeSession ? (
           <HeaderRight>
-            <PopupMenu
-              triggerIcon="more-vertical"
-              triggerSize={18}
-              triggerColor={colors.textSecondary}
-              triggerStyle={[styles.headerMenuBtn, NO_DRAG]}
-              accessibilityLabel="Chat options"
-              items={[
-                {
-                  label: contextPanelVisible ? 'Hide context panel' : 'Show context panel',
-                  icon: 'pie-chart',
-                  onPress: toggleContextPanel,
-                },
-                ...(!isChildSession ? [{
-                  label: 'Delete chat',
-                  icon: 'trash-2' as const,
-                  destructive: true,
-                  onPress: () => confirmAndRemove(activeSession),
-                }] : []),
-              ]}
-            />
+            {!isChildSession ? (
+              <PopupMenu
+                triggerIcon="more-vertical"
+                triggerSize={18}
+                triggerColor={colors.textSecondary}
+                triggerStyle={[styles.headerMenuBtn, NO_DRAG]}
+                accessibilityLabel="Chat options"
+                items={[
+                  {
+                    label: 'Delete chat',
+                    icon: 'trash-2' as const,
+                    destructive: true,
+                    onPress: () => confirmAndRemove(activeSession),
+                  },
+                ]}
+              />
+            ) : null}
+            <HeaderSessionDetails />
           </HeaderRight>
         ) : null,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigation, isChildSession, parentSession?.id, activeSession?.id, activeSession?.title, contextPanelVisible, toggleContextPanel]);
+  }, [navigation, isChildSession, parentSession?.id, activeSession?.id, activeSession?.title]);
 
   // A freshly-spawned child session fires a resource_event. V2 normally gets
   // its exact summary from history_changed; gateways without that realtime
@@ -1450,15 +1459,6 @@ export default function ChatScreen() {
             </View>
           </View>
         )}
-        {/* Context-window gauge, pinned top-right. Bound to the active session
-            so it also serves sub-agent / scheduled-firing / workflow-AI-node
-            sessions opened on this same screen. Honours the header menu's
-            show/hide: the flag was read (to label the menu item) and persisted,
-            but never consulted here, so "Hide context panel" changed the menu
-            wording and nothing else. */}
-        {activeSession && contextPanelVisible ? (
-          <ContextPanel context={activeSession.contextUsage} topInset={headerInset} />
-        ) : null}
         {activeSession ? (
           <>
             {/* TTS banner */}

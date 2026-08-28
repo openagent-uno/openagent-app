@@ -12,16 +12,21 @@
  * connection before the content fetches.
  */
 
-import { useLocalSearchParams, useNavigation } from 'expo-router';
-import { useEffect, useLayoutEffect } from 'react';
+import { useFocusEffect, useLocalSearchParams, useNavigation } from 'expo-router';
+import { useCallback, useEffect, useLayoutEffect } from 'react';
 import { ActivityIndicator, StyleSheet, View } from 'react-native';
-import { colors, radius } from '../../../theme';
+import { colors } from '../../../theme';
 import { RunDetailView } from '../../../components/RunDetailView';
-import { useHeaderInset, HeaderRight } from '../../../components/screenHeader';
-import PopupMenu from '../../../components/PopupMenu';
-import { NO_DRAG } from '../../../components/DragRegion';
+import {
+  useHeaderInset,
+  HeaderRight,
+  HeaderSessionDetails,
+} from '../../../components/screenHeader';
 import { useConnection } from '../../../stores/connection';
-import { useUI } from '../../../stores/ui';
+import {
+  useSessionDetailsDrawer,
+  type SessionDetailsRunKind,
+} from '../../../stores/sessionDetailsDrawer';
 import { setBaseUrl } from '../../../services/api';
 
 export default function RunDetailScreen() {
@@ -38,13 +43,38 @@ export default function RunDetailScreen() {
   const navigation = useNavigation();
   const headerInset = useHeaderInset();
   const connConfig = useConnection((s) => s.config);
-  const contextPanelVisible = useUI((s) => s.contextPanelVisible);
-  const toggleContextPanel = useUI((s) => s.toggleContextPanel);
+  const setRunTarget = useSessionDetailsDrawer((state) => state.setRunTarget);
+  const clearRunTarget = useSessionDetailsDrawer((state) => state.clearRunTarget);
+  const closeSessionDetails = useSessionDetailsDrawer((state) => state.requestClose);
+  const runKind: SessionDetailsRunKind = kind === 'workflow'
+    ? 'workflow'
+    : kind === 'event'
+      ? 'event'
+      : 'task';
 
   useEffect(() => {
     if (!connConfig) return;
     if (connConfig.sidecarPort) setBaseUrl('127.0.0.1', connConfig.sidecarPort);
   }, [connConfig]);
+
+  // The right drawer sits outside the expo-router tree, so publish the focused
+  // run's real route identity through the tiny drawer bridge. Focus-scoping is
+  // important: drawer-root stacks remain mounted/frozen when another section
+  // is opened and must not leave a stale run selected behind the chat screen.
+  useFocusEffect(useCallback(() => {
+    if (!id) return undefined;
+    setRunTarget({
+      kind: runKind,
+      runId: id,
+      parentId: parentId || undefined,
+      name: name || undefined,
+      sessionId: session || undefined,
+    });
+    return () => {
+      clearRunTarget(id);
+      closeSessionDetails();
+    };
+  }, [clearRunTarget, closeSessionDetails, id, name, parentId, runKind, session, setRunTarget]));
 
   useLayoutEffect(() => {
     // Screen-name title by run kind (homogeneous; not the parent's name).
@@ -53,38 +83,18 @@ export default function RunDetailScreen() {
         kind === 'workflow' ? 'Workflow run'
           : kind === 'event' ? 'Event delivery'
             : 'Scheduled run',
-      // A scheduled firing renders its session's context panel (RunDetailView
-      // → TaskBody); expose the same show/hide toggle as the chat header so it
-      // can be dismissed here too. Workflow runs surface the panel only once a
-      // node's session is opened (on the chat screen, which has its own toggle).
-      headerRight:
-        kind === 'workflow'
-          ? undefined
-          : () => (
-              <HeaderRight>
-                <PopupMenu
-                  triggerIcon="more-vertical"
-                  triggerSize={18}
-                  triggerColor={colors.textSecondary}
-                  // NO_DRAG is required: the desktop header is a window-drag
-                  // region that otherwise swallows the click (why the button
-                  // wasn't tappable). Mirrors the chat screen's trigger.
-                  triggerStyle={[styles.headerMenuBtn, NO_DRAG]}
-                  accessibilityLabel="Run options"
-                  items={[
-                    {
-                      label: contextPanelVisible ? 'Hide context panel' : 'Show context panel',
-                      icon: 'pie-chart',
-                      onPress: toggleContextPanel,
-                    },
-                  ]}
-                />
-              </HeaderRight>
-            ),
+      headerRight: () => (
+        <HeaderRight>
+          <HeaderSessionDetails />
+        </HeaderRight>
+      ),
     });
-  }, [navigation, kind, contextPanelVisible, toggleContextPanel]);
+  }, [navigation, kind]);
 
-  const ready = connConfig && id && (kind === 'event' || parentId);
+  // Every detail resolver is keyed by the opaque run id. ``parentId`` is a
+  // navigation hint, not a loading prerequisite: event-downstream links and
+  // older deep links may omit it, and the resolved record supplies it later.
+  const ready = connConfig && id;
 
   return (
     <View style={[styles.screen, { paddingTop: headerInset }]}>
@@ -115,9 +125,4 @@ export default function RunDetailScreen() {
 const styles = StyleSheet.create({
   screen: { flex: 1 },
   statusPane: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  headerMenuBtn: {
-    width: 34, height: 34,
-    alignItems: 'center', justifyContent: 'center',
-    borderRadius: radius.md,
-  },
 });

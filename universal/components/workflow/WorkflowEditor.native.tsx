@@ -39,6 +39,7 @@ import BlockPaletteNative from './BlockPaletteNative';
 import NativeCanvas from './NativeCanvas';
 import PropertiesPanelNative from './PropertiesPanelNative';
 import { openDetached } from '../../services/windows';
+import { HeaderMenu } from '../screenHeader';
 import { NODE_META } from './nodes-native/nodeMeta';
 
 type NodeStatus = 'idle' | 'running' | 'success' | 'failed';
@@ -308,6 +309,7 @@ export default function WorkflowEditorNative({
   return (
     <View style={styles.container}>
       <View style={styles.topBar}>
+        <HeaderMenu />
         <TouchableOpacity onPress={onBack} style={styles.iconBtn}>
           <Feather name="arrow-left" size={18} color={colors.textSecondary} />
         </TouchableOpacity>

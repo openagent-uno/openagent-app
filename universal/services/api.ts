@@ -32,6 +32,8 @@ import type {
   SearchRequest,
   SessionMessagePage,
   SessionMessagesQuery,
+  SessionDescendantsPage,
+  SessionRelatedRunsPage,
   ToolInvocationDetail,
   WorkflowRunDetail,
 } from '../../common/unified-history';
@@ -1351,6 +1353,46 @@ export async function listUnifiedHistory(
   return get<HistoryPage>(`/api/history${suffix ? `?${suffix}` : ''}`, signal);
 }
 
+/** Causal automation runs launched from one session's normalized tool
+ * invocations. Unlike the global activity parent, this relation follows the
+ * caller session and therefore remains complete across workflow/task/event
+ * definition kinds. */
+export async function listSessionRelatedRuns(
+  sessionId: string,
+  query: { limit?: number; cursor?: string; includeDescendants?: boolean } = {},
+  signal?: AbortSignal,
+): Promise<SessionRelatedRunsPage> {
+  const params = new URLSearchParams();
+  const limit = Math.max(1, Math.min(100, Math.floor(query.limit ?? 100)));
+  params.set('limit', String(limit));
+  if (query.cursor) params.set('cursor', query.cursor);
+  if (query.includeDescendants != null) {
+    params.set('include_descendants', query.includeDescendants ? 'true' : 'false');
+  }
+  return get<SessionRelatedRunsPage>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/related-runs?${params.toString()}`,
+    signal,
+  );
+}
+
+/** ACL-filtered, cycle-safe session subtree. The server snapshots the whole
+ * normalized lineage, while this client follows it one bounded page at a
+ * time so a large delegation tree never blocks opening the drawer. */
+export async function listSessionDescendants(
+  sessionId: string,
+  query: { limit?: number; cursor?: string } = {},
+  signal?: AbortSignal,
+): Promise<SessionDescendantsPage> {
+  const params = new URLSearchParams();
+  const limit = Math.max(1, Math.min(100, Math.floor(query.limit ?? 100)));
+  params.set('limit', String(limit));
+  if (query.cursor) params.set('cursor', query.cursor);
+  return get<SessionDescendantsPage>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/descendants?${params.toString()}`,
+    signal,
+  );
+}
+
 export async function searchOperationalHistory(
   request: SearchRequest,
   signal?: AbortSignal,
@@ -1421,9 +1463,13 @@ export async function fetchSessions(): Promise<SessionEntry[]> {
 /** List just the children a session spawned (delegated sub-agents, or the AI
  *  node / firing sessions under a workflow-run / scheduled-task root). Powers
  *  the parent transcript's delegation cards and the run screen. */
-export async function fetchChildSessions(parentSessionId: string): Promise<SessionEntry[]> {
+export async function fetchChildSessions(
+  parentSessionId: string,
+  limit: number = 200,
+): Promise<SessionEntry[]> {
+  const boundedLimit = Math.max(1, Math.min(200, Math.floor(limit)));
   const data = await get<SessionListResponse>(
-    `/api/sessions?parent=${encodeURIComponent(parentSessionId)}`,
+    `/api/sessions?parent=${encodeURIComponent(parentSessionId)}&limit=${boundedLimit}`,
   );
   return data.sessions;
 }

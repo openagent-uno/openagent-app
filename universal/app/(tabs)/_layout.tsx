@@ -2,8 +2,8 @@
  * Authenticated app shell — a react-navigation Drawer.
  *
  * One navigator drives both form factors (no collapsed middle stage):
- *   - tablet / desktop (≥768): `drawerType: 'permanent'` — the full Sidebar
- *     is a fixed column beside the content.
+ *   - tablet / desktop (≥768): the full Sidebar starts open beside the
+ *     content, but remains toggleable from the symmetric header button.
  *   - phone (<768): `drawerType: 'back'` — the same full Sidebar rides in a
  *     drawer; the content slides right to reveal it (Claude-style), toggled
  *     by the menu button in each screen's header.
@@ -11,8 +11,8 @@
  * The Sidebar is the drawer content. Navigation is plain expo-router
  * (`router.push` from the Sidebar); each route renders the real
  * react-navigation header with its own title + actions (see the per-tab
- * stacks and `components/screenHeader.tsx`). Detached editors / run
- * history / terminals are ordinary pushed routes inside their stacks.
+ * stacks and `components/screenHeader.tsx`). Pushed workspace screens pair
+ * Back with the sidebar toggle; detached terminals can keep Back alone.
  */
 
 import { createDrawerNavigator } from '@react-navigation/drawer';
@@ -20,12 +20,14 @@ import { useRouter, withLayoutContext } from 'expo-router';
 import { useCallback, useEffect } from 'react';
 import { Platform } from 'react-native';
 import Sidebar from '../../components/Sidebar';
+import SessionDetailsDrawerShell from '../../components/SessionDetailsDrawer';
 import GlobalSearchOverlay from '../../components/search/GlobalSearchOverlay';
 import { HeaderMenu, themedHeader } from '../../components/screenHeader';
 import { useLayout } from '../../hooks/useLayout';
 import { useConnection } from '../../stores/connection';
 import { useChat } from '../../stores/chat';
 import { globalSearchAvailable, useSearch } from '../../stores/search';
+import { useNavigationSidebar } from '../../stores/navigationSidebar';
 import { useUIViews } from '../../stores/uiViews';
 import { openSearchTarget } from '../../services/searchNavigation';
 import { sessionEntryFromActivity } from '../../services/api';
@@ -48,13 +50,14 @@ export default function AppDrawerLayout() {
   const router = useRouter();
   const accountId = useConnection((state) => state.activeAccountId);
   const ws = useConnection((state) => state.ws);
-  // Two states only: a permanent full column on tablet+ , a toggleable full
-  // drawer on phones. No collapsed icon-only middle stage.
+  const wideSidebarOpen = useNavigationSidebar((state) => state.isOpen);
+  // Two widths, one toggleable drawer. Wide layouts start open; phones start
+  // closed. There is no collapsed icon-only middle stage.
   const permanent = !layout.isPhone;
-  const width = permanent ? 244 : 296;
+  const width = permanent ? (wideSidebarOpen ? 244 : 0) : 296;
 
-  // Top-level (drawer-root) screens get the menu button as headerLeft on
-  // phones; stack sub-screens keep their native back button.
+  // Top-level screens get the sidebar button at every width; pushed screens
+  // pair it with Back so a closed desktop sidebar is never a dead end.
   const leaf = (title: string) => ({
     ...themedHeader,
     title,
@@ -121,64 +124,76 @@ export default function AppDrawerLayout() {
 
   return (
     <>
-      <Drawer
-      // The Drawer is the cross-section "back" boundary. react-navigation's
-      // default backBehavior is 'firstRoute', which REBUILDS the drawer
-      // history to [firstRoute(chat), current] on every section switch — so
-      // any back that bubbles out of a section stack lands on chat (the
-      // first route) instead of the section you came from. 'history' keeps a
-      // real visited-section trail, so a back that bubbles into the Drawer
-      // returns to the previously focused section (and canGoBack reflects it).
-      backBehavior="history"
-      drawerContent={(props: any) => (
-        <Sidebar
-          onNavigate={permanent ? undefined : () => props.navigation.closeDrawer()}
-        />
-      )}
-      screenOptions={{
-        headerShown: false,
-        // Freeze a screen's React tree while it's not the focused route, so
-        // a backgrounded tab (e.g. Chat) stops re-rendering on every store
-        // mutation — the chat delta storm and any per-screen effects pause
-        // until the user returns. The global store still receives updates;
-        // the screen just defers rendering them until it's focused again.
-        freezeOnBlur: true,
-        drawerType: permanent ? 'permanent' : 'back',
-        drawerStyle: { width, backgroundColor: 'transparent', borderRightWidth: 0 },
-        overlayColor: 'transparent',
-        swipeEnabled: !permanent,
-        // The divider lives on the content's left edge (not the sidebar's
-        // right) so it always sits at the true sidebar↔content boundary,
-        // regardless of the drawer width.
-        sceneStyle: {
-          backgroundColor: colors.bg,
-          borderLeftWidth: 1,
-          borderLeftColor: colors.borderLight,
-        },
-      }}
-    >
-      {/* Leaf screens render the drawer header directly. */}
-      <Drawer.Screen name="chat" options={leaf('Chat')} />
-      <Drawer.Screen name="model" options={leaf('Model')} />
-      <Drawer.Screen name="system" options={leaf('System')} />
-      <Drawer.Screen name="logs" options={leaf('Logs')} />
-      <Drawer.Screen name="settings" options={leaf('Settings')} />
-      {/* Stacks own their own headers (per-screen titles + back). */}
-      <Drawer.Screen name="memory" options={{ headerShown: false }} />
-      <Drawer.Screen name="mcps" options={{ headerShown: false }} />
-      <Drawer.Screen name="skills" options={{ headerShown: false }} />
-      <Drawer.Screen name="workflows" options={{ headerShown: false }} />
-      <Drawer.Screen name="tasks" options={{ headerShown: false }} />
-      <Drawer.Screen name="events" options={{ headerShown: false }} />
-      <Drawer.Screen name="views" options={{ headerShown: false }} />
-      {/* Hidden / legacy routes — reachable by link, never listed. */}
-      {/* Single-run detail (from the sidebar's Recent feed) — a drawer-root
-          stack so opening a run never highlights a workspace tab. */}
-      <Drawer.Screen name="runs" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
-      <Drawer.Screen name="terminal" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
-      <Drawer.Screen name="automations" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
-      <Drawer.Screen name="members" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
-      </Drawer>
+      <SessionDetailsDrawerShell>
+        <Drawer
+          // The Drawer is the cross-section "back" boundary. react-navigation's
+          // default backBehavior is 'firstRoute', which REBUILDS the drawer
+          // history to [firstRoute(chat), current] on every section switch — so
+          // any back that bubbles out of a section stack lands on chat (the
+          // first route) instead of the section you came from. 'history' keeps a
+          // real visited-section trail, so a back that bubbles into the Drawer
+          // returns to the previously focused section (and canGoBack reflects it).
+          backBehavior="history"
+          defaultStatus={permanent ? 'open' : 'closed'}
+          drawerContent={(props: any) => (
+            permanent && !wideSidebarOpen
+              ? null
+              : (
+                  <Sidebar
+                    onNavigate={permanent ? undefined : () => props.navigation.closeDrawer()}
+                  />
+                )
+          )}
+          screenOptions={{
+            headerShown: false,
+            // Freeze a screen's React tree while it's not the focused route, so
+            // a backgrounded tab (e.g. Chat) stops re-rendering on every store
+            // mutation — the chat delta storm and any per-screen effects pause
+            // until the user returns. The global store still receives updates;
+            // the screen just defers rendering them until it's focused again.
+            freezeOnBlur: true,
+            drawerType: permanent ? 'permanent' : 'back',
+            drawerStyle: {
+              width,
+              overflow: 'hidden',
+              backgroundColor: 'transparent',
+              borderRightWidth: 0,
+            },
+            overlayColor: 'transparent',
+            swipeEnabled: !permanent,
+            // The divider lives on the content's left edge (not the sidebar's
+            // right) so it always sits at the true sidebar↔content boundary,
+            // regardless of the drawer width.
+            sceneStyle: {
+              backgroundColor: colors.bg,
+              borderLeftWidth: permanent && !wideSidebarOpen ? 0 : 1,
+              borderLeftColor: colors.borderLight,
+            },
+          }}
+        >
+          {/* Leaf screens render the drawer header directly. */}
+          <Drawer.Screen name="chat" options={leaf('Chat')} />
+          <Drawer.Screen name="model" options={leaf('Model')} />
+          <Drawer.Screen name="system" options={leaf('System')} />
+          <Drawer.Screen name="logs" options={leaf('Logs')} />
+          <Drawer.Screen name="settings" options={leaf('Settings')} />
+          {/* Stacks own their own headers (per-screen titles + back). */}
+          <Drawer.Screen name="memory" options={{ headerShown: false }} />
+          <Drawer.Screen name="mcps" options={{ headerShown: false }} />
+          <Drawer.Screen name="skills" options={{ headerShown: false }} />
+          <Drawer.Screen name="workflows" options={{ headerShown: false }} />
+          <Drawer.Screen name="tasks" options={{ headerShown: false }} />
+          <Drawer.Screen name="events" options={{ headerShown: false }} />
+          <Drawer.Screen name="views" options={{ headerShown: false }} />
+          {/* Hidden / legacy routes — reachable by link, never listed. */}
+          {/* Single-run detail (from the sidebar's Recent feed) — a drawer-root
+              stack so opening a run never highlights a workspace tab. */}
+          <Drawer.Screen name="runs" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
+          <Drawer.Screen name="terminal" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
+          <Drawer.Screen name="automations" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
+          <Drawer.Screen name="members" options={{ headerShown: false, drawerItemStyle: { display: 'none' } }} />
+        </Drawer>
+      </SessionDetailsDrawerShell>
       <GlobalSearchOverlay onOpenTarget={handleOpenTarget} />
     </>
   );

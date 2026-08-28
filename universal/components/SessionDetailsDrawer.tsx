@@ -43,6 +43,7 @@ import type {
   SessionRelatedRunItem,
   WorkflowRunDetail,
 } from '../../common/unified-history';
+import { normalizeRunTimestamp } from '../../common/run-date-normalization';
 import {
   runRoutePath,
   runTargetForChildSession,
@@ -126,6 +127,11 @@ function dateLabel(value?: number | null): string | null {
   const ms = toMs(value);
   if (!ms || !Number.isFinite(ms)) return null;
   return new Date(ms).toLocaleString();
+}
+
+function runDateLabel(value?: string | number | null): string | null {
+  const normalized = normalizeRunTimestamp(value);
+  return normalized ? new Date(normalized.iso).toLocaleString() : null;
 }
 
 function originLabel(origin?: string | null): string {
@@ -1227,6 +1233,8 @@ function RunDetailsContent({
     ? (detail as EventDeliveryDetail | null)?.occurred_at
     : (detail as WorkflowRunDetail | ScheduledRunDetail | null)?.started_at;
   const finishedAt = detail?.finished_at;
+  const startedLabel = runDateLabel(startedAt);
+  const finishedLabel = runDateLabel(finishedAt);
   const eventDownstream = target.kind === 'event'
     ? (detail as EventDeliveryDetail | null)?.downstream_target
     : null;
@@ -1352,8 +1360,8 @@ function RunDetailsContent({
             <MetaRow label="Trigger" value={detail.trigger} />
           ) : null}
           {detail && 'source' in detail ? <MetaRow label="Source" value={detail.source} /> : null}
-          {startedAt ? <MetaRow label="Started" value={new Date(startedAt).toLocaleString()} /> : null}
-          {finishedAt ? <MetaRow label="Finished" value={new Date(finishedAt).toLocaleString()} /> : null}
+          {startedLabel ? <MetaRow label="Started" value={startedLabel} /> : null}
+          {finishedLabel ? <MetaRow label="Finished" value={finishedLabel} /> : null}
           {detail?.completeness ? <MetaRow label="Record" value={detail.completeness} /> : null}
           <MetaRow label="Run ID" value={target.runId} mono />
           {parentId ? (

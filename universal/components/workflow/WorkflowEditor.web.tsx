@@ -50,6 +50,7 @@ import { colors, font, radius } from '../../theme';
 import BlockPalette from './BlockPalette';
 import PropertiesPanel from './PropertiesPanel';
 import { openDetached } from '../../services/windows';
+import { HeaderMenu } from '../screenHeader';
 import { nodeTypes } from './nodes/nodeTypes';
 
 interface Props {
@@ -422,6 +423,7 @@ function EditorInner({ workflow, onBack, onWorkflowUpdated, initialNodeId, initi
   return (
     <div style={styles.container}>
       <div style={styles.topBar}>
+        <HeaderMenu />
         <button onClick={onBack} style={styles.iconBtn as any} title="Back">
           <Feather name="arrow-left" size={14} color={colors.textSecondary} />
         </button>

@@ -32,7 +32,7 @@ import {
   fetchSessionRuns, runMsgToChat, getSessionContext,
   listSessionMessages, getToolInvocationDetail,
 } from '../services/api';
-import { runRoutePath, type SessionContext } from '../../common/types';
+import { runRoutePath } from '../../common/types';
 import {
   normalizeLegacyRunDates,
   type WithNormalizedRunDates,
@@ -43,7 +43,6 @@ import { useConnection } from '../stores/connection';
 import { useAutoScroll } from '../hooks/useAutoScroll';
 import Markdown from './Markdown';
 import MessageList from './MessageList';
-import ContextPanel from './ContextPanel';
 import MessageComposer from './MessageComposer';
 import type {
   BlockType,
@@ -217,42 +216,6 @@ export function SessionTranscript({ sessionId, live, messageId, toolInvocationId
   );
 }
 
-/** The context-window panel for a run's owning session, floated top-right of
- *  the run screen — the SAME placement and ContextPanel component as the chat
- *  screen. Fetches the report directly (not via the chat store): a run session
- *  (``scheduler:{task}:{run}``) usually isn't a row in the chat store, so the
- *  store-scoped ``refreshContext`` would drop it. Polls while the run is live
- *  so the panel grows with the firing, mirroring SessionTranscript. */
-function RunContextPanel({ sessionId, live }: { sessionId?: string; live?: boolean }) {
-  const [context, setContext] = useState<SessionContext | null>(null);
-  useEffect(() => {
-    if (!sessionId) { setContext(null); return; }
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let attempts = 0;
-    const tick = async () => {
-      try {
-        const rep = await getSessionContext(sessionId);
-        if (cancelled) return;
-        // A valid report has a real window; ignore the empty pre-first-turn
-        // shape so we keep the last good state rather than blanking.
-        if (rep && rep.context_window) setContext(rep);
-      } catch { /* ignore transient fetch errors */ }
-      attempts += 1;
-      if (live && attempts < LIVE_POLL_MAX && !cancelled) {
-        timer = setTimeout(tick, POLL_MS);
-      }
-    };
-    tick();
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [sessionId, live]);
-  if (!sessionId || !context) return null;
-  // ``topInset={0}``: RunDetailView already sits below the navigator header
-  // (the run screen applies the header inset as padding), so top:0 floats the
-  // panel just under the header — same visual position as the chat screen.
-  return <ContextPanel context={context} variant="floating" topInset={0} />;
-}
-
 type IconName = keyof typeof Feather.glyphMap;
 type RunKind = 'workflow' | 'task' | 'event';
 type NormalizedEventDelivery = WithNormalizedRunDates<EventDelivery>;
@@ -404,7 +367,11 @@ export function RunDetailView({
     event: 'events',
   };
   const openParent = () => {
-    const id = kind === 'event' ? (delivery?.event_id || parentId) : parentId;
+    const id = kind === 'event'
+      ? (delivery?.event_id || parentId)
+      : kind === 'workflow'
+        ? (wfRun?.workflow_id || parentId)
+        : (taskRun?.task_id || parentId);
     if (!id) return;
     openDetached(router, `${PARENT_SECTION[kind]}/${id}`);
   };
@@ -557,7 +524,9 @@ export function RunDetailView({
     task: { icon: 'clock', label: 'Scheduled task' },
     event: { icon: 'zap', label: 'Event' },
   };
-  // The session that owns this run — drives the floating context panel.
+  // The session that owns this run. Its context and related-session metadata
+  // live in the shared right navigation drawer; the transcript/composer still
+  // use this id directly.
   const ownerSessionId =
     targetSessionId
     ?? taskRun?.session_id
@@ -631,12 +600,6 @@ export function RunDetailView({
           <Feather name="chevron-down" size={14} color={colors.text} />
         </TouchableOpacity>
       )}
-      {/* Floating context panel, top-right — same placement as the chat screen.
-          A scheduled firing has one owning session; workflow runs surface it per
-          AI node instead (open the node to see that session's panel). */}
-      {ownerSessionId ? (
-        <RunContextPanel sessionId={ownerSessionId} live={ownerLive} />
-      ) : null}
       {ownerSessionId ? (
         <RunSessionComposer sessionId={ownerSessionId} live={ownerLive} />
       ) : null}
@@ -897,8 +860,8 @@ function WorkflowBody({ run, traceStepId, toolInvocationId, onAnchorLayout }: {
         // An ai-prompt node ran as its own durable child session → render it
         // through the same StepRow shell as every other node (AiNodeCard), so
         // it reads as part of the same family — but tapping it deep-links into
-        // that node's full conversation (where the reused ContextPanel shows
-        // its context-window usage) instead of expanding inline. Every other
+        // that node's full conversation (where the session-details drawer
+        // shows its context-window usage) instead of expanding inline. Every other
         // node type has no session to open, so it stays a StepCard.
         run.trace.map((entry, i) => {
           const stableId = entry.id || entry.trace_step_id || `${entry.node_id}-${i}`;
