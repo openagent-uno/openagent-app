@@ -598,8 +598,15 @@ const ToolCard = memo(function ToolCard({
   const phase = toolPhase(info);
   const isRunning = phase === 'running';
   const isError = phase === 'error';
-  const statusColor = isError ? colors.error : isRunning ? colors.warning : colors.success;
-  const statusLabel = isRunning ? 'running' : isError ? 'error' : 'done';
+  const isStopped = phase === 'stopped';
+  const statusColor = isError
+    ? colors.error
+    : isRunning
+      ? colors.warning
+      : isStopped
+        ? colors.textMuted
+        : colors.success;
+  const statusLabel = isRunning ? 'running' : isError ? 'error' : isStopped ? 'stopped' : 'done';
   // On error frames the message rides in ``result`` (the durable
   // carrier — stored ToolExecution rows don't keep the error text).
   const errorText = isError && typeof info.result === 'string'

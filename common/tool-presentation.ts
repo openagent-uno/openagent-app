@@ -32,11 +32,18 @@ type PresentationInput = {
   tool_call_id?: string | null;
   tool_server?: string | null;
   tool_name: string;
+  effective_tool_server?: string | null;
+  effective_tool_name?: string | null;
   status: string;
   child_run_id?: string | null;
   child_session_id?: string | null;
   child_session_title?: string | null;
   child_model?: string | null;
+  run_target?: {
+    kind: 'task' | 'workflow' | 'event';
+    run_id: string;
+    parent_id?: string | null;
+  } | null;
   completeness?: string;
   args_safe?: SafeJsonValue;
   result_safe?: SafeJsonValue;
@@ -48,19 +55,21 @@ function toolInfoFromInput(input: PresentationInput, invocationId?: string): Too
   if (!toolName) return undefined;
 
   const status = String(input.status || '').toLowerCase();
+  const stopped = status === 'cancelled' || status === 'interrupted';
   const failed = status === 'error'
     || status === 'failed'
-    || status === 'cancelled'
-    || status === 'interrupted'
     || status === 'timed_out';
-  const finished = failed
+  const finished = stopped
+    || failed
     || status === 'success'
     || status === 'complete'
     || status === 'completed';
   const resultPreview = safeJsonText(input.result_safe);
-  const result = failed
+  const result = stopped
+    ? (input.error_safe?.trim() || resultPreview || 'Tool execution stopped')
+    : failed
     ? (input.error_safe?.trim() || resultPreview || (
-        status === 'cancelled' ? 'Tool execution cancelled' : 'Tool execution failed'
+        status === 'timed_out' ? 'Tool execution timed out' : 'Tool execution failed'
       ))
     : finished
       // ToolInfo's established presentation contract uses a non-null result
@@ -71,6 +80,8 @@ function toolInfoFromInput(input: PresentationInput, invocationId?: string): Too
 
   return {
     tool_name: toolName,
+    effective_tool_name: input.effective_tool_name || undefined,
+    effective_tool_server: input.effective_tool_server || undefined,
     tool_call_id: input.tool_call_id || undefined,
     tool_invocation_id: input.id || invocationId || undefined,
     tool_server: input.tool_server || undefined,
@@ -83,6 +94,7 @@ function toolInfoFromInput(input: PresentationInput, invocationId?: string): Too
     child_session_id: input.child_session_id || undefined,
     child_session_title: input.child_session_title || undefined,
     child_model: input.child_model || undefined,
+    run_target: input.run_target || undefined,
     completeness: input.completeness,
   };
 }

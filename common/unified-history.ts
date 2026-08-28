@@ -155,6 +155,21 @@ export interface SessionMessagesFeature {
   max_page_size: number;
 }
 
+export interface SessionRelatedRunsFeature {
+  version: 1 | 2;
+  kinds: SessionRelatedRunKind[];
+  include_descendants?: boolean;
+  snapshot_pagination: true;
+  max_page_size: number;
+}
+
+export interface SessionDescendantsFeature {
+  version: 1;
+  max_depth: number;
+  snapshot_pagination: true;
+  max_page_size: number;
+}
+
 export interface DetailResolversFeature {
   version: 1;
   tool_invocation: boolean;
@@ -171,6 +186,8 @@ export interface CapabilitiesResponse {
     history?: HistoryFeature;
     global_search?: GlobalSearchFeature;
     session_messages?: SessionMessagesFeature;
+    session_related_runs?: SessionRelatedRunsFeature;
+    session_descendants?: SessionDescendantsFeature;
     detail_resolvers?: DetailResolversFeature;
   };
   storage: {
@@ -204,6 +221,11 @@ export interface ActivityItem {
   updated_at: IsoDateTime;
   parent?: ActivityParent | null;
   session_id?: OpaqueId | null;
+  downstream?: {
+    session_id?: OpaqueId | null;
+    workflow_run_id?: OpaqueId | null;
+    scheduled_run_id?: OpaqueId | null;
+  } | null;
   live: boolean;
   completeness: Completeness;
 }
@@ -223,6 +245,82 @@ export interface HistoryQuery {
 
 export interface HistoryPage {
   items: ActivityItem[];
+  next_cursor: OpaqueCursor | null;
+  has_more: boolean;
+  revision: Revision;
+  snapshot: {
+    snapshot_id: OpaqueId;
+    revision: Revision;
+    expires_at: IsoDateTime;
+  };
+}
+
+export type SessionRelatedRunKind = 'workflow_run' | 'scheduled_run' | 'event_delivery';
+
+/** Compact causal run edge resolved from normalized tool invocations. The
+ * server may add downstream ids for event deliveries; clients intentionally
+ * ignore unknown additive fields. */
+export interface SessionRelatedRunItem {
+  id: OpaqueId;
+  kind: SessionRelatedRunKind;
+  resource_id: OpaqueId;
+  title: string;
+  status?: RunStatus | null;
+  origin?: string | null;
+  started_at: IsoDateTime;
+  finished_at?: IsoDateTime | null;
+  updated_at: IsoDateTime;
+  parent?: ActivityParent | null;
+  session_id?: OpaqueId | null;
+  live: boolean;
+  caused_by: {
+    tool_invocation_id: OpaqueId;
+    session_id?: OpaqueId;
+    session_depth?: number;
+    tool_call_id?: OpaqueId | null;
+    tool_server?: string | null;
+    tool_name: string;
+    status: string;
+    created_at: IsoDateTime;
+    count: number;
+  };
+}
+
+export interface SessionRelatedRunsPage {
+  session_id: OpaqueId;
+  include_descendants?: boolean;
+  items: SessionRelatedRunItem[];
+  next_cursor: OpaqueCursor | null;
+  has_more: boolean;
+  revision: Revision;
+  snapshot: {
+    snapshot_id: OpaqueId;
+    revision: Revision;
+    expires_at: IsoDateTime;
+  };
+}
+
+export interface SessionDescendantItem {
+  session_id: OpaqueId;
+  parent_session_id?: OpaqueId | null;
+  lineage_redacted: boolean;
+  depth: number;
+  title?: string | null;
+  session_type: string;
+  kind: string;
+  origin?: string | null;
+  model?: string | null;
+  framework?: string | null;
+  status: string;
+  completeness: Completeness;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+  last_active_at: IsoDateTime;
+}
+
+export interface SessionDescendantsPage {
+  session_id: OpaqueId;
+  items: SessionDescendantItem[];
   next_cursor: OpaqueCursor | null;
   has_more: boolean;
   revision: Revision;
@@ -432,9 +530,29 @@ export interface ToolInvocationSummary {
   tool_call_id?: OpaqueId | null;
   tool_server?: string | null;
   tool_name: string;
-  status: 'pending' | 'running' | 'success' | 'error' | 'cancelled';
+  /** Safe inner identity when ``tool_name`` is the deferred dispatcher.
+   * Invocation arguments/results remain on the authorized detail endpoint. */
+  effective_tool_server?: string | null;
+  effective_tool_name?: string | null;
+  status:
+    | 'pending'
+    | 'running'
+    | 'success'
+    | 'completed'
+    | 'error'
+    | 'failed'
+    | 'cancelled'
+    | 'interrupted'
+    | 'timed_out';
   child_run_id?: OpaqueId | null;
   child_session_id?: OpaqueId | null;
+  /** ACL-checked canonical run link for historical launcher cards. This is
+   * deliberately identifier-only: tool arguments/results remain private. */
+  run_target?: {
+    kind: 'task' | 'workflow' | 'event';
+    run_id: OpaqueId;
+    parent_id?: OpaqueId | null;
+  } | null;
   completeness?: Completeness;
 }
 

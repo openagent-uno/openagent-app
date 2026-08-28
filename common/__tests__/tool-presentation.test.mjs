@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { toolPhase } from '../types.ts';
+import { effectiveTool, isMemoryTool, runLaunchTarget, toolPhase } from '../types.ts';
 import {
   compactToolFallback,
   legacyToolInfoFromText,
@@ -45,6 +45,67 @@ test('summary preserves child run and session links used by specialized cards', 
   assert.equal(info.child_session_id, 'session-child');
 });
 
+test('authorized normalized run target reopens launcher cards without result JSON', () => {
+  for (const [kind, runId, parentId] of [
+    ['task', 'task-run-1', 'task-1'],
+    ['workflow', 'workflow-run-1', 'workflow-1'],
+    ['event', 'event-delivery-1', 'event-1'],
+  ]) {
+    const info = toolInfoFromSummary({
+      id: `tool-${kind}`,
+      tool_name: 'tool_search_call_tool',
+      effective_tool_name: kind === 'task'
+        ? 'scheduler_run_scheduled_task_now'
+        : kind === 'workflow'
+          ? 'workflow_manager_run_workflow'
+          : 'events_manager_trigger_event',
+      status: 'success',
+      run_target: {
+        kind,
+        run_id: runId,
+        parent_id: parentId,
+      },
+    });
+
+    assert.ok(info);
+    assert.deepEqual(info.tool_args, {});
+    assert.equal(info.result, '');
+    assert.deepEqual(runLaunchTarget(info), {
+      kind,
+      runId,
+      parentId,
+      status: 'success',
+    });
+  }
+});
+
+test('deferred summary preserves only the inner identity for friendly specialized cards', () => {
+  const info = toolInfoFromSummary({
+    id: 'tool-deferred',
+    tool_server: 'tool-search',
+    tool_name: 'tool_search_call_tool',
+    effective_tool_server: 'vault',
+    effective_tool_name: 'read_note',
+    status: 'success',
+  });
+
+  assert.ok(info);
+  assert.equal(info.effective_tool_server, 'vault');
+  assert.equal(info.effective_tool_name, 'read_note');
+  assert.deepEqual(info.tool_args, {});
+  assert.deepEqual(effectiveTool(info), {
+    tool_name: 'read_note',
+    server: 'vault',
+    tool_args: {},
+    result: '',
+    tool_call_error: false,
+    child_session_id: undefined,
+    child_session_title: undefined,
+    child_model: undefined,
+  });
+  assert.equal(isMemoryTool(info), true);
+});
+
 test('summary lifecycle maps running and failed tools without using message text', () => {
   const running = toolInfoFromSummary({
     id: 'tool-running',
@@ -62,6 +123,20 @@ test('summary lifecycle maps running and failed tools without using message text
   assert.equal(toolPhase(running), 'running');
   assert.equal(toolPhase(failed), 'error');
   assert.equal(failed.result, 'Tool execution failed');
+});
+
+test('cancelled and interrupted summaries are stopped, not errors', () => {
+  for (const status of ['cancelled', 'interrupted']) {
+    const info = toolInfoFromSummary({
+      id: `tool-${status}`,
+      tool_name: 'fetch_data',
+      status,
+    });
+    assert.ok(info);
+    assert.equal(toolPhase(info), 'stopped');
+    assert.equal(info.tool_call_error, false);
+    assert.equal(info.result, 'Tool execution stopped');
+  }
 });
 
 test('authorized detail uses the same card adapter and bounds a large result preview', () => {

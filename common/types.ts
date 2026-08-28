@@ -365,6 +365,10 @@ export interface TerminalInfo {
 // another wire change.
 export interface ToolInfo {
   tool_name: string;
+  /** Compact normalized history can identify the real tool behind
+   * ``tool_search_call_tool`` without re-exposing its arguments/result. */
+  effective_tool_name?: string;
+  effective_tool_server?: string;
   tool_call_id?: string;
   tool_args?: Record<string, any>;
   tool_call_error?: boolean | null;
@@ -376,6 +380,12 @@ export interface ToolInfo {
   child_session_id?: string;
   child_session_title?: string;
   child_model?: string;
+  /** Minimal ACL-checked link supplied by normalized transcript history. */
+  run_target?: {
+    kind: 'task' | 'workflow' | 'event';
+    run_id: string;
+    parent_id?: string | null;
+  };
   [key: string]: any;
 }
 
@@ -384,7 +394,9 @@ export interface ToolInfo {
 // in error frames — that's how live ``ToolCallErrorEvent`` rides
 // through), otherwise a populated ``result`` flips the chip to
 // "completed".
-export function toolPhase(t: ToolInfo): 'running' | 'completed' | 'error' {
+export function toolPhase(t: ToolInfo): 'running' | 'completed' | 'stopped' | 'error' {
+  const status = String(t.status || '').toLowerCase();
+  if (status === 'cancelled' || status === 'interrupted') return 'stopped';
   if (t.tool_call_error) return 'error';
   if (t.result !== undefined && t.result !== null) return 'completed';
   return 'running';
@@ -508,7 +520,8 @@ export function effectiveTool(t?: ToolInfo): EffectiveTool | undefined {
   const name = String(t.tool_name || '');
   if (name === TOOL_SEARCH_DISPATCHER) {
     const outer = t.tool_args || {};
-    const innerName = String(outer.tool || '');
+    const innerName = String(t.effective_tool_name || outer.tool || '');
+    const innerServer = String(t.effective_tool_server || outer.server || '');
     const innerArgs =
       outer.args && typeof outer.args === 'object'
         ? (outer.args as Record<string, any>)
@@ -516,7 +529,7 @@ export function effectiveTool(t?: ToolInfo): EffectiveTool | undefined {
     const res = parseToolResult(t.result);
     return {
       tool_name: innerName || name,
-      server: typeof outer.server === 'string' ? outer.server : undefined,
+      server: innerServer || undefined,
       tool_args: innerArgs,
       result: t.result,
       tool_call_error: t.tool_call_error,
@@ -619,6 +632,26 @@ export function runRoutePath(target: RunLaunchTarget): string | undefined {
  *  still running (it arrives in the result), so the card renders as a
  *  non-clickable "running" card until then, mirroring DelegationCard. */
 export function runLaunchTarget(t?: ToolInfo): RunLaunchTarget | undefined {
+  // Reopened normalized transcripts do not expose tool args/results. The
+  // server resolves those historical envelopes once, validates the target
+  // against canonical run tables and the current ACL, then sends only this
+  // identifier-only link. Prefer it over every legacy inference path.
+  const canonical = t?.run_target;
+  if (
+    canonical
+    && (canonical.kind === 'task' || canonical.kind === 'workflow' || canonical.kind === 'event')
+    && typeof canonical.run_id === 'string'
+    && canonical.run_id.length > 0
+  ) {
+    return {
+      kind: canonical.kind,
+      runId: canonical.run_id,
+      parentId: typeof canonical.parent_id === 'string' && canonical.parent_id
+        ? canonical.parent_id
+        : undefined,
+      status: t?.status ? String(t.status) : undefined,
+    };
+  }
   // Unwrap the deferred-tool dispatcher so a run-now invoked via
   // ``tool_search_call_tool`` is matched by its REAL tool name, exactly like a
   // direct call — the run card then appears on every screen regardless of how
@@ -956,6 +989,15 @@ export interface ChatSession {
   title: string;
   messages: ChatMessage[];
   isProcessing: boolean;
+  /** Persisted session creation time (epoch seconds). Present after the
+   *  authorized session summary has been hydrated; a brand-new local draft
+   *  has no server timestamp yet. */
+  createdAt?: number;
+  /** Provider metadata exposed by ``GET /api/sessions``. These are display
+   *  hints only; ``contextUsage.model`` remains authoritative for the model
+   *  that actually served the current context window. */
+  model?: string;
+  framework?: string;
   statusText?: string;
   /** Driven by the transient ``reasoning`` wire frame: true while the agent
    *  is thinking with no visible output yet. Swaps the static status row for

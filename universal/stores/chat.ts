@@ -363,6 +363,8 @@ function appendOrPatchTool(messages: ChatMessage[], toolInfo: ToolInfo): ChatMes
       ? (d.detail ? `${d.title} ${d.detail}` : d.title)
       : phase === 'error'
         ? `✗ ${toolInfo.tool_name} failed`
+        : phase === 'stopped'
+          ? `${toolInfo.tool_name} stopped`
         : `✓ ${toolInfo.tool_name} done`,
     timestamp: Date.now(),
     toolInfo,
