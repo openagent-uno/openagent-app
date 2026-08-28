@@ -549,21 +549,25 @@ function feedKeyExtractor(item: FeedItem): string {
 
 function renderFeedItem({ item }: { item: FeedItem }) {
   return (
-    <Pressable
-      onPress={item.onPress}
+    <View
       // @ts-ignore web hover + entrance
       {...(Platform.OS === 'web' ? { className: 'oa-side-row oa-fade-in' } : {})}
       style={[styles.feedRow, item.active && styles.feedRowActive]}
-      accessibilityRole="button"
-      accessibilityState={{ selected: !!item.active }}
-      accessibilityLabel={item.label}
     >
-      <Feather name={item.icon} size={13} color={item.active ? colors.accent : colors.textMuted} />
-      <Text style={[styles.feedText, item.active && styles.feedTextActive]} numberOfLines={1}>
-        {item.label}
-      </Text>
-      {item.ts ? <Text style={styles.feedMeta}>{relTime(item.ts)}</Text> : null}
-      {item.dotColor ? <View style={[styles.feedDot, { backgroundColor: item.dotColor }]} /> : null}
+      <Pressable
+        onPress={item.onPress}
+        style={styles.feedRowMain}
+        accessibilityRole="button"
+        accessibilityState={{ selected: !!item.active }}
+        accessibilityLabel={item.label}
+      >
+        <Feather name={item.icon} size={13} color={item.active ? colors.accent : colors.textMuted} />
+        <Text style={[styles.feedText, item.active && styles.feedTextActive]} numberOfLines={1}>
+          {item.label}
+        </Text>
+        {item.ts ? <Text style={styles.feedMeta}>{relTime(item.ts)}</Text> : null}
+        {item.dotColor ? <View style={[styles.feedDot, { backgroundColor: item.dotColor }]} /> : null}
+      </Pressable>
       {item.onDelete ? (
         <PopupMenu
           triggerIcon="more-horizontal"
@@ -576,7 +580,7 @@ function renderFeedItem({ item }: { item: FeedItem }) {
           ]}
         />
       ) : null}
-    </Pressable>
+    </View>
   );
 }
 
@@ -801,12 +805,19 @@ const styles = StyleSheet.create({
   feedRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: 'transparent',
+  },
+  feedRowMain: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingLeft: spacing.sm,
+    paddingRight: spacing.xs,
+    paddingVertical: 4,
   },
   feedRowActive: { backgroundColor: colors.surface, borderColor: colors.border },
   feedText: { flex: 1, minWidth: 0, fontFamily: font.sans, fontSize: 12.5, color: colors.textSecondary },
@@ -814,7 +825,7 @@ const styles = StyleSheet.create({
   feedMeta: { fontFamily: font.mono, fontSize: 9.5, color: colors.textMuted },
   feedDot: { width: 6, height: 6, borderRadius: radius.pill },
   feedMenuBtn: {
-    width: 22, height: 22, marginLeft: 2,
+    width: 22, height: 22, marginLeft: 2, marginRight: spacing.xs,
     alignItems: 'center', justifyContent: 'center',
     borderRadius: radius.sm,
   },
