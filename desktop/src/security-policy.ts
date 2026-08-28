@@ -1,5 +1,27 @@
 /** Pure Electron renderer security policy, isolated for unit testing. */
 
+export const DEFAULT_DEV_SERVER_PORT = 8081;
+
+/**
+ * Resolve the optional development renderer port without allowing the
+ * environment to influence the protocol, hostname, path, or credentials.
+ * Invalid overrides fail closed instead of silently loading an unexpected
+ * origin.
+ */
+export function resolveDevServerUrl(rawPort: string | undefined): string {
+  if (rawPort === undefined) {
+    return `http://localhost:${DEFAULT_DEV_SERVER_PORT}`;
+  }
+  if (!/^[0-9]+$/.test(rawPort)) {
+    throw new Error('OPENAGENT_DEV_SERVER_PORT must be an integer between 1 and 65535');
+  }
+  const port = Number(rawPort);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) {
+    throw new Error('OPENAGENT_DEV_SERVER_PORT must be an integer between 1 and 65535');
+  }
+  return `http://localhost:${port}`;
+}
+
 export const PRODUCTION_CSP = [
   "default-src 'self'",
   // Expo's exported bundle is self-hosted. Blob is required by the existing

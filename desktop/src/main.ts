@@ -42,6 +42,7 @@ import {
   isAllowedExternalUrl,
   isAllowedRendererNavigation,
   PRODUCTION_CSP,
+  resolveDevServerUrl,
 } from './security-policy';
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.heic', '.tiff']);
@@ -328,7 +329,7 @@ function createWindow(opts: CreateWindowOptions = {}): BrowserWindow {
 
   const baseUrl = runtimePolicy.useStaticRenderer
     ? `http://127.0.0.1:${staticPort}`
-    : 'http://localhost:8081';
+    : resolveDevServerUrl(process.env.OPENAGENT_DEV_SERVER_PORT);
   // Build the URL through the URL API so query params compose safely even
   // when the route already carries one (e.g. ``terminal/<id>?cwd=…``).
   const target = new URL(route ? `${baseUrl}/${route}` : baseUrl);
