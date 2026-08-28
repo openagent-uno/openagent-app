@@ -35,5 +35,18 @@ test('accepts beta trace_step_id and builds a canonical-only fallback', () => {
 
   assert.equal(merged.trace[0].id, 'step-beta');
   assert.equal(merged.trace[0].status, 'failed');
-  assert.equal(merged.trace[0].started_at, Date.parse('2026-08-26T10:00:00Z'));
+  assert.equal(merged.trace[0].started_at, Date.parse('2026-08-26T10:00:00Z') / 1000);
+});
+
+test('normalizes legacy-only ISO and millisecond trace dates to epoch seconds', () => {
+  const started = '2026-08-26T10:00:00Z';
+  const finishedMs = Date.parse('2026-08-26T10:00:01Z');
+  const merged = mergeCanonicalWorkflowTrace(run([
+    { node_id: 'n1', type: 'wait', status: 'success', started_at: started,
+      finished_at: finishedMs },
+  ], undefined));
+
+  assert.equal(merged.trace[0].started_at, Date.parse(started) / 1000);
+  assert.equal(merged.trace[0].finished_at, finishedMs / 1000);
+  assert.equal(merged.trace[0].finished_at - merged.trace[0].started_at, 1);
 });

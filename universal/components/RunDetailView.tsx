@@ -33,6 +33,10 @@ import {
   listSessionMessages, getToolInvocationDetail,
 } from '../services/api';
 import { runRoutePath, type SessionContext } from '../../common/types';
+import {
+  normalizeLegacyRunDates,
+  type WithNormalizedRunDates,
+} from '../../common/run-date-normalization';
 import { openDetached } from '../services/windows';
 import { useChat } from '../stores/chat';
 import { useConnection } from '../stores/connection';
@@ -251,6 +255,7 @@ function RunContextPanel({ sessionId, live }: { sessionId?: string; live?: boole
 
 type IconName = keyof typeof Feather.glyphMap;
 type RunKind = 'workflow' | 'task' | 'event';
+type NormalizedEventDelivery = WithNormalizedRunDates<EventDelivery>;
 
 const STATUS_COLOR: Record<string, string> = {
   running: colors.warning,
@@ -386,7 +391,7 @@ export function RunDetailView({
 }) {
   const [wfRun, setWfRun] = useState<WorkflowRun | null>(null);
   const [taskRun, setTaskRun] = useState<TaskRun | null>(null);
-  const [delivery, setDelivery] = useState<EventDelivery | null>(null);
+  const [delivery, setDelivery] = useState<NormalizedEventDelivery | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
@@ -423,7 +428,7 @@ export function RunDetailView({
       try {
         let status: string | undefined;
         if (kind === 'workflow') {
-          const run = await getWorkflowRun(runId);
+          const run = normalizeLegacyRunDates(await getWorkflowRun(runId));
           if (cancelled) return;
           setWfRun(run);
           gotData = !!run;
@@ -432,7 +437,7 @@ export function RunDetailView({
           // An event delivery IS the run: one inbound trigger, its payload,
           // and the unit of work it produced (a child session for a chat
           // prompt; a workflow / task run otherwise).
-          const d = await getEventDelivery(runId);
+          const d = normalizeLegacyRunDates(await getEventDelivery(runId));
           if (cancelled) return;
           setDelivery(d);
           gotData = !!d;
@@ -443,18 +448,22 @@ export function RunDetailView({
           // it falls outside the parent's recent-run window.
           const detail = await getScheduledRunDetail(runId);
           if (cancelled) return;
+          // Some compatibility gateways include *_iso mirrors on this
+          // canonical response too. Passing the complete wire object lets the
+          // shared boundary prefer them without widening the public type.
+          const dates = normalizeLegacyRunDates(detail);
           const found: TaskRun = {
             id: detail.id,
             task_id: detail.task_id,
             trigger: detail.trigger || 'schedule',
             status: detail.status === 'success'
               ? 'success' : detail.status === 'running' ? 'running' : 'failed',
-            started_at: Date.parse(detail.started_at),
-            finished_at: detail.finished_at ? Date.parse(detail.finished_at) : null,
+            started_at: dates.started_at,
+            finished_at: dates.finished_at,
             output: detail.output_summary_safe || null,
             error: detail.error_safe || null,
-            started_at_iso: detail.started_at,
-            finished_at_iso: detail.finished_at || null,
+            started_at_iso: dates.started_at_iso,
+            finished_at_iso: dates.finished_at_iso,
             session_id: detail.session_id || null,
           };
           setTaskRun(found);
@@ -579,7 +588,7 @@ export function RunDetailView({
             kindLabel={KIND_META[kind].label}
             status={run.status}
             trigger={triggerText}
-            startedIso={(run as TaskRun).started_at_iso}
+            startedIso={run.started_at_iso}
             startedAt={run.started_at}
             finishedAt={run.finished_at ?? null}
             onPress={openParent}

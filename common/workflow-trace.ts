@@ -1,4 +1,5 @@
 import type { BlockType, WorkflowRun, WorkflowTraceEntry } from './types';
+import { normalizeRunTimestamp } from './run-date-normalization.ts';
 
 /** Canonical additive trace shape returned by v2 gateways. During the beta,
  * some server builds used `trace_step_id` while the published contract uses
@@ -22,10 +23,7 @@ export type WorkflowRunWithCanonicalTrace = WorkflowRun & {
 };
 
 function epoch(value: string | number | null | undefined, fallback: number | null): number | null {
-  if (value == null) return fallback;
-  if (typeof value === 'number') return Number.isFinite(value) ? value : fallback;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  return normalizeRunTimestamp(value)?.epochSeconds ?? fallback;
 }
 
 function legacyStatus(status: string): WorkflowTraceEntry['status'] {
@@ -40,9 +38,13 @@ export function mergeCanonicalWorkflowTrace(
   run: WorkflowRunWithCanonicalTrace,
 ): WorkflowRun {
   const steps = run.trace_steps;
-  if (!steps?.length) return run;
+  const legacy = (run.trace ?? []).map((entry): WorkflowTraceEntry => ({
+    ...entry,
+    started_at: epoch(entry.started_at, 0) ?? 0,
+    finished_at: epoch(entry.finished_at, null),
+  }));
+  if (!steps?.length) return { ...run, trace: legacy };
 
-  const legacy = run.trace ?? [];
   const used = new Set<number>();
   const merged = steps.map((step, canonicalIndex): WorkflowTraceEntry => {
     let legacyIndex = legacy.findIndex(
