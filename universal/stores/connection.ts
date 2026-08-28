@@ -181,6 +181,9 @@ function humanizeLoginError(raw: string | undefined | null): string {
   if (lower.includes('econnrefused') || lower.includes('connection refused')) {
     return 'Can’t reach the agent server. Make sure it’s running and reachable.';
   }
+  if (lower.includes('secure tunnel') && (lower.includes('timed out') || lower.includes('timeout'))) {
+    return 'The previous secure tunnel is still shutting down. Wait a moment and try again.';
+  }
   if (lower.includes('timed out') || lower.includes('timeout')) {
     return 'The agent didn’t respond in time. Check that the server is running and try again.';
   }
@@ -671,7 +674,22 @@ export const useConnection = create<ConnectionState>((set, get) => {
     // Explicit password entry must perform a real coordinator login before
     // main stores the credential. Reusing a stale same-account loopback
     // would accept (and remember) an unverified replacement password.
-    try { await d.stopLoopback({ accountId }); } catch { /* ignore */ }
+    try {
+      await d.stopLoopback({ accountId });
+    } catch (error: any) {
+      // Main keeps the real teardown behind its per-account barrier even when
+      // the IPC deadline expires. Do not issue a start that would only wait on
+      // the same stuck barrier; return control to the form so retry is possible
+      // once native cleanup eventually finishes.
+      if (attempt.isCurrent()) {
+        set({
+          isConnecting: false,
+          isRestoringSession: false,
+          error: humanizeLoginError(error?.message || String(error)),
+        });
+      }
+      return;
+    }
     if (!attempt.isCurrent()) return;
 
     let started: LoopbackStartResult;

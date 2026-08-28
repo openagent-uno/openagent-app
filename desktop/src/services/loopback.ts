@@ -32,6 +32,7 @@ import {
 import { createAccountStartCoordinator } from './account-start-coordinator';
 import { createAccountStopBarrier } from './account-stop-barrier';
 import { createLoopbackConsumerRegistry } from './loopback-consumer-registry';
+import { withDeadline } from './promise-deadline';
 
 interface LoopbackHandle {
   id: string;
@@ -59,6 +60,19 @@ const accountStops = createAccountStopBarrier();
 const credentialPreferences = createCredentialPreferenceCoordinator();
 const consumers = createLoopbackConsumerRegistry();
 const observedRenderers = new Set<number>();
+
+/**
+ * Teardown includes native iroh shutdown, which has no AbortSignal and can
+ * occasionally stay pending. Keep the real promise in accountStops so a new
+ * runtime cannot overlap it, but never leave an IPC caller waiting forever.
+ * SessionDialer already gives in-flight dials 20 seconds, so 25 seconds leaves
+ * room for that budget plus proxy/runtime cleanup.
+ */
+const LOOPBACK_TEARDOWN_DEADLINE_MS = 25_000;
+
+function awaitLoopbackLifecycle<T>(operation: Promise<T>, label: string): Promise<T> {
+  return withDeadline(operation, LOOPBACK_TEARDOWN_DEADLINE_MS, label);
+}
 
 function claimLoopback(accountId: string, rendererId: number, attemptToken?: number): void {
   consumers.claim(accountId, rendererId, attemptToken);
@@ -89,6 +103,21 @@ async function releaseLoopbackClaim(
   if (isUnclaimed) await stopLoopbackIfUnclaimed(accountId);
 }
 
+function releaseLoopbackClaimWithDeferredCleanup(
+  accountId: string,
+  rendererId: number,
+  attemptToken?: number,
+): void {
+  const isUnclaimed = consumers.release(accountId, rendererId, attemptToken);
+  if (!isUnclaimed) return;
+  // The claim mutation above is synchronous. Do not make an already-timed-out
+  // start spend a second full deadline waiting for the same native teardown;
+  // its barrier is still tracked and this cleanup remains observed.
+  void stopLoopbackIfUnclaimed(accountId).catch((error) => {
+    console.warn('[loopback] deferred cleanup after failed start:', error);
+  });
+}
+
 function observeRenderer(contents: WebContents): void {
   const rendererId = contents.id;
   if (observedRenderers.has(rendererId)) return;
@@ -96,7 +125,10 @@ function observeRenderer(contents: WebContents): void {
   contents.once('destroyed', () => {
     observedRenderers.delete(rendererId);
     const unclaimedAccountIds = consumers.releaseRenderer(rendererId);
-    void Promise.all(unclaimedAccountIds.map(stopLoopbackIfUnclaimed));
+    // Native teardown is deadline-bound and may reject while continuing behind
+    // its barrier. Renderer destruction is fire-and-forget, so observe every
+    // result rather than leaking a process-level unhandled rejection.
+    void Promise.allSettled(unclaimedAccountIds.map(stopLoopbackIfUnclaimed));
   });
 }
 
@@ -204,7 +236,10 @@ export async function startLoopback(args: InternalStartLoopbackArgs): Promise<St
 
   // A prior handle is deleted before its async teardown completes. Never
   // create/reuse this account until that teardown's barrier has settled.
-  await accountStops.wait(args.accountId);
+  await awaitLoopbackLifecycle(
+    accountStops.wait(args.accountId),
+    'secure tunnel shutdown',
+  );
   const existing = handles.get(args.accountId);
   if (existing) {
     if (
@@ -298,7 +333,7 @@ export function stopLoopback(accountId: string): Promise<void> {
   // Drop ownership synchronously, then publish the stop promise before its
   // async body runs so any immediately-following A restart observes it.
   consumers.clearAccount(accountId);
-  return accountStops.run(accountId, async () => {
+  const teardown = accountStops.run(accountId, async () => {
     const h = handles.get(accountId);
     if (!h) return;
     handles.delete(accountId);
@@ -308,11 +343,18 @@ export function stopLoopback(accountId: string): Promise<void> {
       console.warn(`[loopback ${accountId}] stop error:`, err);
     }
   });
+  // `teardown` remains registered in accountStops after this wrapper times
+  // out. A later start therefore fails boundedly instead of overlapping the
+  // still-running native cleanup.
+  return awaitLoopbackLifecycle(teardown, 'secure tunnel teardown');
 }
 
 export async function stopAllLoopbacks(): Promise<void> {
   const ids = Array.from(handles.keys());
-  await Promise.all(ids.map((id) => stopLoopback(id)));
+  // App shutdown is best effort. A native cleanup that misses its deadline
+  // must not produce an unhandled rejection from Electron's fire-and-forget
+  // before-quit hook.
+  await Promise.allSettled(ids.map((id) => stopLoopback(id)));
 }
 
 export function registerLoopbackHandlers(): void {
@@ -334,7 +376,11 @@ export function registerLoopbackHandlers(): void {
         target: publicRememberedCredentialTarget(started.credentialTarget),
       } satisfies LoopbackStartResult;
     } catch (error) {
-      await releaseLoopbackClaim(args.accountId, event.sender.id, args.attemptToken);
+      releaseLoopbackClaimWithDeferredCleanup(
+        args.accountId,
+        event.sender.id,
+        args.attemptToken,
+      );
       if (isCredentialRejection(error)) {
         removeRememberedCredential(args.accountId);
       }
@@ -387,7 +433,11 @@ export function registerLoopbackHandlers(): void {
       await stopLoopbackIfUnclaimed(args.accountId);
       return { status: 'started', port: started.port, target: publicTarget };
     } catch (error) {
-      await releaseLoopbackClaim(args.accountId, event.sender.id, args.attemptToken);
+      releaseLoopbackClaimWithDeferredCleanup(
+        args.accountId,
+        event.sender.id,
+        args.attemptToken,
+      );
       const message = error instanceof Error ? error.message : String(error);
       if (
         isCredentialRejection(error) ||
