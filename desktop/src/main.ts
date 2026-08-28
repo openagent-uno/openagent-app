@@ -15,7 +15,11 @@ import * as fs from 'fs';
 import * as http from 'http';
 import { registerStorageHandlers } from './services/storage';
 import { registerCredentialHandlers } from './services/credentials';
-import { registerLoopbackHandlers, stopAllLoopbacks } from './services/loopback';
+import {
+  registerLoopbackHandlers,
+  stopAllLoopbacks,
+  transferLoopbackAttempt,
+} from './services/loopback';
 import { decodeTicket } from './network/ticket';
 import {
   applyLocalE2EProfile,
@@ -592,11 +596,20 @@ ipcMain.handle('window:open', (_event, route: string) => {
 // full app window bound to a specific account that opens its OWN
 // connection (its own loopback + WS), independent of the primary. This is
 // what powers "open another agent in a new window" from the switcher.
-ipcMain.handle('window:openAgent', (_event, accountId: string) => {
+ipcMain.handle('window:openAgent', (event, accountId: string, attemptToken?: number) => {
   if (typeof accountId !== 'string' || !accountId) {
     throw new Error('window:openAgent requires a non-empty accountId string');
   }
+  if (
+    attemptToken !== undefined &&
+    (!Number.isSafeInteger(attemptToken) || attemptToken <= 0)
+  ) {
+    throw new Error('window:openAgent attemptToken must be a positive safe integer');
+  }
   const win = createWindow({ connectAccountId: accountId });
+  if (attemptToken !== undefined) {
+    transferLoopbackAttempt(accountId, event.sender.id, attemptToken, win.webContents);
+  }
   rebuildMenu();
   return win.webContents.id;
 });

@@ -15,6 +15,8 @@ import {
   isSafeStorageBackendUsable,
   type CredentialBackend,
   type CredentialCipher,
+  type RememberedCredentialRecord,
+  type RememberedCredentialTarget,
 } from './credentials-core';
 
 let encryptedStore: Store<Record<string, string>> | null = null;
@@ -59,12 +61,16 @@ export function rememberedCredentialsAvailable(): boolean {
   return vault.isAvailable();
 }
 
-export function loadRememberedCredential(accountId: string): string | null {
+export function loadRememberedCredential(accountId: string): RememberedCredentialRecord | null {
   return vault.load(accountId);
 }
 
-export function saveRememberedCredential(accountId: string, password: string): boolean {
-  return vault.save(accountId, password);
+export function saveRememberedCredential(
+  accountId: string,
+  password: string,
+  target: RememberedCredentialTarget,
+): boolean {
+  return vault.save(accountId, password, target);
 }
 
 export function removeRememberedCredential(accountId: string): void {

@@ -98,8 +98,8 @@ contextBridge.exposeInMainWorld('desktop', {
   // Open a *standalone* agent window bound to ``accountId`` — a full app
   // window with its OWN connection (own loopback + WS), independent of this
   // one. Powers "open another agent in a new window" from the switcher.
-  openAgentWindow: (accountId: string): Promise<void> =>
-    ipcRenderer.invoke('window:openAgent', accountId),
+  openAgentWindow: (accountId: string, attemptToken?: number): Promise<void> =>
+    ipcRenderer.invoke('window:openAgent', accountId, attemptToken),
 
   // Close all sub-windows (called on agent switch or main window close).
   closeAllChildren: (): Promise<void> => ipcRenderer.invoke('window:closeAllChildren'),
@@ -143,7 +143,11 @@ contextBridge.exposeInMainWorld('desktop', {
     network?: string;
     agent?: string;
     remember?: boolean;
-  }): Promise<number> => ipcRenderer.invoke('loopback:start', args),
+    attemptToken?: number;
+  }): Promise<{
+    port: number;
+    target: { network: string; handle: string; agentHandle: string };
+  }> => ipcRenderer.invoke('loopback:start', args),
 
   // Remembered passwords are encrypted/decrypted in the main process. There
   // is deliberately no IPC getter that can return plaintext to the renderer.
@@ -159,12 +163,25 @@ contextBridge.exposeInMainWorld('desktop', {
     handle?: string;
     network?: string;
     agent?: string;
+    attemptToken?: number;
   }): Promise<
-    | { status: 'started'; port: number }
+    | {
+        status: 'started'; port: number;
+        target: { network: string; handle: string; agentHandle: string };
+      }
     | { status: 'missing' }
-    | { status: 'invalid'; error: string }
-    | { status: 'retryable_error'; error: string }
+    | {
+        status: 'invalid'; error: string;
+        target?: { network: string; handle: string; agentHandle: string };
+      }
+    | {
+        status: 'retryable_error'; error: string;
+        target?: { network: string; handle: string; agentHandle: string };
+      }
   > => ipcRenderer.invoke('loopback:startRemembered', args),
+
+  releaseLoopbackAttempt: (args: { accountId: string; attemptToken: number }): Promise<void> =>
+    ipcRenderer.invoke('loopback:releaseAttempt', args),
 
   stopLoopback: (args: { accountId: string }): Promise<void> =>
     ipcRenderer.invoke('loopback:stop', args),

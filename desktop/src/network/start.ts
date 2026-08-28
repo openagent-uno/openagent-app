@@ -42,6 +42,7 @@ import {
 } from './network-store.js';
 import type { IrohEndpoint, IrohNodeAddr } from './iroh-types.js';
 import { nodeDiscoveryMode } from './discovery-config.js';
+import { selectAgentForConnection, type DiscoverableAgent } from './agent-selection.js';
 
 export interface StartLoopbackArgs {
   password: string;
@@ -51,6 +52,18 @@ export interface StartLoopbackArgs {
   network?: string;
   /** When omitted, we connect to the first registered agent. */
   agent?: string;
+  /** Main-process-only constraint for a decrypted remembered credential.
+   * Renderer IPC is sanitized before this type is constructed. */
+  expectedTarget?: VerifiedLoopbackTarget;
+}
+
+export interface VerifiedLoopbackTarget {
+  networkName: string;
+  networkId: string;
+  handle: string;
+  coordinatorNodeId: string;
+  agentHandle: string;
+  agentNodeId: string;
 }
 
 export interface RunningLoopback {
@@ -59,6 +72,8 @@ export interface RunningLoopback {
   wsUrl: string;
   agentNodeId: string;
   agentHandle: string;
+  /** Coordinator-authenticated destination used to bind remembered secrets. */
+  verifiedTarget: VerifiedLoopbackTarget;
   /** Idempotent. Tears down proxy, closes iroh, and releases all sockets. */
   stop(): Promise<void>;
 }
@@ -170,6 +185,21 @@ export async function startNativeLoopback(
   // into the re-login path and reject the new handle.
   let net: StoredNetwork | null =
     networkName ? find(store, networkName, handle) : null;
+
+  // Remembered credentials never use ticket input: main reconstructs the
+  // request from this encrypted target and pins the trusted local network row
+  // before the password participates in SRP.
+  if (args.expectedTarget) {
+    if (
+      !net ||
+      normalizedTargetValue(net.name) !== args.expectedTarget.networkName ||
+      normalizedTargetValue(net.networkId) !== args.expectedTarget.networkId ||
+      normalizedTargetValue(net.handle) !== args.expectedTarget.handle ||
+      normalizedTargetValue(net.coordinatorNodeId) !== args.expectedTarget.coordinatorNodeId
+    ) {
+      throw new LoginError('remembered credential target no longer matches this network');
+    }
+  }
 
   const identity = await loadOrCreateIdentity(userIdentityPath());
   const runtime = await startIrohNode(identity.secret);
@@ -295,11 +325,23 @@ export async function startNativeLoopback(
     if (agents.length === 0) {
       throw new LoginError('no agents registered in network');
     }
-    const chosen = args.agent
-      ? agents.find((a) => a.handle === args.agent) ?? agents[0]
-      : agents[0];
+    const chosen = selectAgentForConnection(agents, args.agent);
+    if (!chosen) {
+      throw new LoginError(
+        args.expectedTarget
+          ? 'remembered credential agent is no longer available'
+          : `requested agent ${JSON.stringify(args.agent)} is no longer available`,
+      );
+    }
     if (!chosen.nodeId) {
       throw new LoginError('agent record missing node_id');
+    }
+    if (
+      args.expectedTarget &&
+      (normalizedTargetValue(chosen.handle ?? '') !== args.expectedTarget.agentHandle ||
+        normalizedTargetValue(chosen.nodeId) !== args.expectedTarget.agentNodeId)
+    ) {
+      throw new LoginError('remembered credential target no longer matches this agent');
     }
 
     dialer = new SessionDialer(runtime.endpoint, loginResult.certWire);
@@ -312,6 +354,14 @@ export async function startNativeLoopback(
       wsUrl: proxy.wsUrl,
       agentNodeId: chosen.nodeId,
       agentHandle: chosen.handle ?? '',
+      verifiedTarget: {
+        networkName: normalizedTargetValue(resolvedNet.name),
+        networkId: normalizedTargetValue(resolvedNet.networkId),
+        handle: normalizedTargetValue(resolvedNet.handle),
+        coordinatorNodeId: normalizedTargetValue(resolvedNet.coordinatorNodeId),
+        agentHandle: normalizedTargetValue(chosen.handle ?? ''),
+        agentNodeId: normalizedTargetValue(chosen.nodeId),
+      },
       stop: teardown,
     };
   } catch (e) {
@@ -320,10 +370,11 @@ export async function startNativeLoopback(
   }
 }
 
-interface AgentRow {
-  handle?: string;
-  nodeId?: string;
+function normalizedTargetValue(value: string): string {
+  return value.trim().toLowerCase();
 }
+
+type AgentRow = DiscoverableAgent;
 
 async function listAgents(
   endpoint: IrohEndpoint,

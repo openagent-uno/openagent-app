@@ -59,6 +59,7 @@ export default function AgentAccountPanel({
     connectAccount,
     connectRememberedAccount,
     joinNetwork,
+    joinNetworkInNewWindow,
     removeAccount,
     openAccountWindow,
   } = useConnection();
@@ -83,6 +84,7 @@ export default function AgentAccountPanel({
   } | null>(null);
 
   const transition = useRef(new Animated.Value(1)).current;
+  const uiAttempt = useRef(0);
 
   useEffect(() => {
     void AccessibilityInfo.isReduceMotionEnabled().then(setReduceMotion);
@@ -163,6 +165,7 @@ export default function AgentAccountPanel({
   };
 
   const beginRemembered = async (accountId: string) => {
+    const attemptToken = mode === 'connect' ? ++uiAttempt.current : 0;
     setAdding(false);
     setSignInId(accountId);
     setPassword('');
@@ -174,7 +177,7 @@ export default function AgentAccountPanel({
 
     if (mode === 'open-window') {
       const result = await openAccountWindow(accountId);
-      setBusyId(null);
+      setBusyId((current) => current === accountId ? null : current);
       if (result.ok) {
         onComplete?.();
       } else if (result.retryable) {
@@ -189,25 +192,28 @@ export default function AgentAccountPanel({
 
     setAttempted(true);
     const result = await connectRememberedAccount(accountId);
-    setBusyId(null);
+    if (attemptToken !== uiAttempt.current) return;
+    setBusyId((current) => current === accountId ? null : current);
     if (result.status === 'retryable_error') setRetryId(accountId);
     if (result.status === 'missing' || result.status === 'invalid') setPasswordId(accountId);
   };
 
   const submitPassword = async () => {
     if (!signInId || !password) return;
+    const attemptToken = mode === 'connect' ? ++uiAttempt.current : 0;
+    const submittedPassword = password;
+    setPassword('');
     setLocalError(null);
     setBusyId(signInId);
     onAttempt?.();
     if (mode === 'open-window') {
       const result = await openAccountWindow(
         signInId,
-        password,
+        submittedPassword,
         credentialStorageAvailable && remember,
       );
-      setBusyId(null);
+      setBusyId((current) => current === signInId ? null : current);
       if (result.ok) {
-        setPassword('');
         onComplete?.();
       } else {
         setLocalError(result.error ?? 'Could not open that agent.');
@@ -216,9 +222,9 @@ export default function AgentAccountPanel({
     }
 
     setAttempted(true);
-    await connectAccount(signInId, password, credentialStorageAvailable && remember);
-    setBusyId(null);
-    setPassword('');
+    await connectAccount(signInId, submittedPassword, credentialStorageAvailable && remember);
+    if (attemptToken !== uiAttempt.current) return;
+    setBusyId((current) => current === signInId ? null : current);
   };
 
   const retryRemembered = () => {
@@ -229,16 +235,26 @@ export default function AgentAccountPanel({
     const normalizedTicket = ticket.trim();
     const normalizedHandle = handle.trim().toLowerCase();
     if (!normalizedTicket.startsWith('oa1') || !normalizedHandle || !joinPassword) return;
-    setAttempted(true);
+    const attemptToken = ++uiAttempt.current;
+    const submittedPassword = joinPassword;
+    setJoinPassword('');
     onAttempt?.();
-    await joinNetwork({
+    const joinArgs = {
       ticket: normalizedTicket,
       handle: normalizedHandle,
-      password: joinPassword,
+      password: submittedPassword,
       remember: credentialStorageAvailable && remember,
       isLocal: false,
-    });
-    setJoinPassword('');
+    };
+    if (mode === 'open-window') {
+      const opened = await joinNetworkInNewWindow(joinArgs);
+      if (attemptToken !== uiAttempt.current) return;
+      if (opened) onComplete?.();
+      return;
+    }
+    setAttempted(true);
+    await joinNetwork(joinArgs);
+    if (attemptToken !== uiAttempt.current) return;
   };
 
   const confirmRemove = async (accountId: string, name: string) => {
@@ -331,6 +347,7 @@ export default function AgentAccountPanel({
                     size="sm"
                     icon="arrow-left"
                     onPress={() => setAdding(false)}
+                    disabled={isConnecting}
                   />
                 ) : <View />}
                 <Button

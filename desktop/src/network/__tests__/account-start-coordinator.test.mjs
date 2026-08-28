@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createAccountStartCoordinator } from '../../../dist/services/account-start-coordinator.js';
+import { createCredentialPreferenceCoordinator } from '../../../dist/services/credentials-core.js';
 
 test('concurrent account starts persist only the credential that owned authentication', async () => {
   const coordinator = createAccountStartCoordinator();
@@ -42,4 +43,36 @@ test('concurrent account starts persist only the credential that owned authentic
   );
   assert.equal(later, 5151);
   assert.deepEqual(persisted, ['authenticated-password', 'later-verified-password']);
+});
+
+test('a later multi-window preference prevents an older owner from restoring a secret', async () => {
+  const coordinator = createAccountStartCoordinator();
+  const preferences = createCredentialPreferenceCoordinator();
+  let resolveStart;
+  const gate = new Promise((resolve) => { resolveStart = resolve; });
+  const persisted = [];
+
+  const ownerPreference = preferences.begin('account-1', true);
+  const owner = coordinator.run(
+    'account-1',
+    async () => {
+      await gate;
+      return 4242;
+    },
+    () => {
+      if (ownerPreference.shouldSaveAuthenticatedOwner()) persisted.push('owner-password');
+    },
+  );
+
+  const laterRememberOff = preferences.begin('account-1', false);
+  assert.equal(laterRememberOff.forgetImmediately, true);
+  const waiter = coordinator.run(
+    'account-1',
+    async () => 9999,
+    () => { persisted.push('unverified-waiter-password'); },
+  );
+
+  resolveStart();
+  assert.deepEqual(await Promise.all([owner, waiter]), [4242, 4242]);
+  assert.deepEqual(persisted, []);
 });

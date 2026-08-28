@@ -8,19 +8,30 @@
  * shape is unchanged: the renderer still calls ``loopback:start`` /
  * ``loopback:stop`` and gets a port back.
  */
-import { ipcMain } from 'electron';
+import { ipcMain, type WebContents } from 'electron';
 import {
   startNativeLoopback,
   type RunningLoopback,
   type StartLoopbackArgs as NativeStartArgs,
+  type VerifiedLoopbackTarget,
 } from '../network/start.js';
-import { isCredentialRejection } from './credentials-core';
+import {
+  createCredentialPreferenceCoordinator,
+  isCredentialRejection,
+  isRememberedCredentialTargetRejection,
+  publicRememberedCredentialTarget,
+  rememberedCredentialMatchesRequest,
+  type PublicRememberedCredentialTarget,
+  type RememberedCredentialTarget,
+} from './credentials-core';
 import {
   loadRememberedCredential,
   removeRememberedCredential,
   saveRememberedCredential,
 } from './credentials';
 import { createAccountStartCoordinator } from './account-start-coordinator';
+import { createAccountStopBarrier } from './account-stop-barrier';
+import { createLoopbackConsumerRegistry } from './loopback-consumer-registry';
 
 interface LoopbackHandle {
   id: string;
@@ -29,7 +40,80 @@ interface LoopbackHandle {
 }
 
 const handles = new Map<string, LoopbackHandle>();
-const accountStarts = createAccountStartCoordinator<number>();
+export interface StartedLoopback {
+  port: number;
+  credentialTarget: RememberedCredentialTarget;
+}
+
+export interface LoopbackStartResult {
+  port: number;
+  target: PublicRememberedCredentialTarget;
+}
+
+interface InternalStartLoopbackArgs extends StartLoopbackArgs {
+  expectedTarget?: VerifiedLoopbackTarget;
+}
+
+const accountStarts = createAccountStartCoordinator<StartedLoopback>();
+const accountStops = createAccountStopBarrier();
+const credentialPreferences = createCredentialPreferenceCoordinator();
+const consumers = createLoopbackConsumerRegistry();
+const observedRenderers = new Set<number>();
+
+function claimLoopback(accountId: string, rendererId: number, attemptToken?: number): void {
+  consumers.claim(accountId, rendererId, attemptToken);
+}
+
+function verifiedTargetsEqual(
+  actual: VerifiedLoopbackTarget,
+  expected: VerifiedLoopbackTarget,
+): boolean {
+  return actual.networkName === expected.networkName &&
+    actual.networkId === expected.networkId &&
+    actual.handle === expected.handle &&
+    actual.coordinatorNodeId === expected.coordinatorNodeId &&
+    actual.agentHandle === expected.agentHandle &&
+    actual.agentNodeId === expected.agentNodeId;
+}
+
+async function stopLoopbackIfUnclaimed(accountId: string): Promise<void> {
+  if (!consumers.hasConsumers(accountId)) await stopLoopback(accountId);
+}
+
+async function releaseLoopbackClaim(
+  accountId: string,
+  rendererId: number,
+  attemptToken?: number,
+): Promise<void> {
+  const isUnclaimed = consumers.release(accountId, rendererId, attemptToken);
+  if (isUnclaimed) await stopLoopbackIfUnclaimed(accountId);
+}
+
+function observeRenderer(contents: WebContents): void {
+  const rendererId = contents.id;
+  if (observedRenderers.has(rendererId)) return;
+  observedRenderers.add(rendererId);
+  contents.once('destroyed', () => {
+    observedRenderers.delete(rendererId);
+    const unclaimedAccountIds = consumers.releaseRenderer(rendererId);
+    void Promise.all(unclaimedAccountIds.map(stopLoopbackIfUnclaimed));
+  });
+}
+
+/** Atomically hands a newly-started loopback reservation to the standalone
+ * window that will consume it. The destination claim is installed before the
+ * source attempt is released, so the sidecar cannot be reaped in the small
+ * gap between BrowserWindow creation and its first renderer IPC call. */
+export function transferLoopbackAttempt(
+  accountId: string,
+  sourceRendererId: number,
+  attemptToken: number,
+  destination: WebContents,
+): void {
+  observeRenderer(destination);
+  claimLoopback(accountId, destination.id);
+  consumers.release(accountId, sourceRendererId, attemptToken);
+}
 
 /** Hard cap on the whole sidecar bring-up: iroh dial + SRP login +
  *  list_agents + proxy bind. iroh-js exposes no AbortSignal, so we can't
@@ -50,13 +134,15 @@ export interface StartLoopbackArgs {
   /** Renderer opt-in. The handler persists only after coordinator login
    * succeeds; omitted means leave the current preference untouched. */
   remember?: boolean;
+  /** Renderer-local latest-attempt token; scoped by webContents.id in main. */
+  attemptToken?: number;
 }
 
 export type RememberedLoopbackResult =
-  | { status: 'started'; port: number }
+  | { status: 'started'; port: number; target: PublicRememberedCredentialTarget }
   | { status: 'missing' }
-  | { status: 'invalid'; error: string }
-  | { status: 'retryable_error'; error: string };
+  | { status: 'invalid'; error: string; target?: PublicRememberedCredentialTarget }
+  | { status: 'retryable_error'; error: string; target?: PublicRememberedCredentialTarget };
 
 type RememberedLoopbackArgs = Omit<StartLoopbackArgs, 'password'>;
 
@@ -76,7 +162,7 @@ function validateStartArgs(
   const hasHandleNet =
     typeof args.handle === 'string' && args.handle.length > 0 &&
     typeof args.network === 'string' && args.network.length > 0;
-  if (!hasTicket && !hasHandleNet) {
+  if (requiresPassword && !hasTicket && !hasHandleNet) {
     throw new Error(`${channel}: pass either ticket, or handle + network`);
   }
   for (const key of ['ticket', 'handle', 'network', 'agent'] as const) {
@@ -88,42 +174,81 @@ function validateStartArgs(
   if (args.remember !== undefined && typeof args.remember !== 'boolean') {
     throw new Error(`${channel}: remember must be a boolean when present`);
   }
-  return args as StartLoopbackArgs | RememberedLoopbackArgs;
+  if (
+    args.attemptToken !== undefined &&
+    (!Number.isSafeInteger(args.attemptToken) || args.attemptToken <= 0)
+  ) {
+    throw new Error(`${channel}: attemptToken must be a positive safe integer when present`);
+  }
+  // Return a new object instead of the renderer-owned value. In particular,
+  // this strips main-only fields such as `expectedTarget` if hostile JS adds
+  // them to the IPC payload.
+  const validated: Partial<StartLoopbackArgs> = { accountId: args.accountId };
+  if (requiresPassword) validated.password = args.password as string;
+  for (const key of ['ticket', 'handle', 'network', 'agent'] as const) {
+    if (args[key] !== undefined) validated[key] = args[key];
+  }
+  if (args.remember !== undefined) validated.remember = args.remember;
+  if (args.attemptToken !== undefined) validated.attemptToken = args.attemptToken;
+  return validated as StartLoopbackArgs | RememberedLoopbackArgs;
 }
 
-export async function startLoopback(args: StartLoopbackArgs): Promise<number> {
+export async function startLoopback(args: InternalStartLoopbackArgs): Promise<StartedLoopback> {
+  // Privacy preference is not conditional on starting a fresh loopback.
+  // Remember=false must forget immediately even when another window keeps an
+  // existing handle alive or this caller joins an in-flight start.
+  const credentialPreference = credentialPreferences.begin(args.accountId, args.remember);
+  if (credentialPreference.forgetImmediately) {
+    try { removeRememberedCredential(args.accountId); } catch { /* best effort */ }
+  }
+
+  // A prior handle is deleted before its async teardown completes. Never
+  // create/reuse this account until that teardown's barrier has settled.
+  await accountStops.wait(args.accountId);
   const existing = handles.get(args.accountId);
   if (existing) {
-    return existing.loopback.port;
+    if (
+      args.expectedTarget &&
+      !verifiedTargetsEqual(existing.loopback.verifiedTarget, args.expectedTarget)
+    ) {
+      throw new Error('remembered credential target does not match the running loopback');
+    }
+    return {
+      port: existing.loopback.port,
+      credentialTarget: {
+        accountId: args.accountId,
+        ...existing.loopback.verifiedTarget,
+      },
+    };
   }
-  return accountStarts.run(
+  const started = await accountStarts.run(
     args.accountId,
     () => startLoopbackFresh(args),
-    () => {
+    (owned) => {
       // Only the call that created this in-flight start may persist its
       // password. Waiters with the same accountId share the port but must not
       // overwrite the keychain with credentials that were never authenticated.
       // Persistence remains best-effort and never falls back to plaintext.
       try {
-        if (args.remember === true) {
-          saveRememberedCredential(args.accountId, args.password);
-        } else if (args.remember === false) {
-          removeRememberedCredential(args.accountId);
+        if (credentialPreference.shouldSaveAuthenticatedOwner()) {
+          saveRememberedCredential(args.accountId, args.password, owned.credentialTarget);
         }
       } catch {
         // A keychain failure must not turn a valid login into a failed one.
       }
     },
   );
+  return started;
 }
 
-async function startLoopbackFresh(args: StartLoopbackArgs): Promise<number> {
+async function startLoopbackFresh(args: InternalStartLoopbackArgs): Promise<StartedLoopback> {
   const nativeArgs: NativeStartArgs = {
     password: args.password,
     ticket: args.ticket,
     handle: args.handle,
     network: args.network,
     agent: args.agent,
+    expectedTarget: args.expectedTarget,
   };
 
   const startPromise = startNativeLoopback(nativeArgs);
@@ -160,18 +285,29 @@ async function startLoopbackFresh(args: StartLoopbackArgs): Promise<number> {
     loopback,
     startedAt: Date.now(),
   });
-  return loopback.port;
+  return {
+    port: loopback.port,
+    credentialTarget: {
+      accountId: args.accountId,
+      ...loopback.verifiedTarget,
+    },
+  };
 }
 
-export async function stopLoopback(accountId: string): Promise<void> {
-  const h = handles.get(accountId);
-  if (!h) return;
-  handles.delete(accountId);
-  try {
-    await h.loopback.stop();
-  } catch (err) {
-    console.warn(`[loopback ${accountId}] stop error:`, err);
-  }
+export function stopLoopback(accountId: string): Promise<void> {
+  // Drop ownership synchronously, then publish the stop promise before its
+  // async body runs so any immediately-following A restart observes it.
+  consumers.clearAccount(accountId);
+  return accountStops.run(accountId, async () => {
+    const h = handles.get(accountId);
+    if (!h) return;
+    handles.delete(accountId);
+    try {
+      await h.loopback.stop();
+    } catch (err) {
+      console.warn(`[loopback ${accountId}] stop error:`, err);
+    }
+  });
 }
 
 export async function stopAllLoopbacks(): Promise<void> {
@@ -180,11 +316,25 @@ export async function stopAllLoopbacks(): Promise<void> {
 }
 
 export function registerLoopbackHandlers(): void {
-  ipcMain.handle('loopback:start', async (_event, raw: unknown) => {
+  ipcMain.handle('loopback:start', async (event, raw: unknown) => {
     const args = validateStartArgs(raw, 'loopback:start', true) as StartLoopbackArgs;
+    observeRenderer(event.sender);
+    // Reserve ownership before awaiting the per-account single-flight. A
+    // newer same-account attempt is then already visible when an older waiter
+    // resolves stale and releases its own token.
+    claimLoopback(args.accountId, event.sender.id, args.attemptToken);
     try {
-      return await startLoopback(args);
+      const started = await startLoopback(args);
+      // A renderer may disappear while native startup is in flight. Its
+      // destroyed handler removes the reservation; reap a newly-created
+      // handle when no sibling renderer or newer attempt owns it.
+      await stopLoopbackIfUnclaimed(args.accountId);
+      return {
+        port: started.port,
+        target: publicRememberedCredentialTarget(started.credentialTarget),
+      } satisfies LoopbackStartResult;
     } catch (error) {
+      await releaseLoopbackClaim(args.accountId, event.sender.id, args.attemptToken);
       if (isCredentialRejection(error)) {
         removeRememberedCredential(args.accountId);
       }
@@ -195,43 +345,92 @@ export function registerLoopbackHandlers(): void {
   // The renderer supplies account metadata only. Password decryption and
   // loopback startup both happen in this trusted process, so a remembered
   // plaintext credential never crosses the contextBridge back into JS UI.
-  ipcMain.handle('loopback:startRemembered', async (_event, raw: unknown): Promise<RememberedLoopbackResult> => {
+  ipcMain.handle('loopback:startRemembered', async (event, raw: unknown): Promise<RememberedLoopbackResult> => {
     const args = validateStartArgs(
       raw,
       'loopback:startRemembered',
       false,
     ) as RememberedLoopbackArgs;
-    const password = loadRememberedCredential(args.accountId);
-    if (password == null) return { status: 'missing' };
+    observeRenderer(event.sender);
+    const credential = loadRememberedCredential(args.accountId);
+    if (credential == null) return { status: 'missing' };
+    if (!rememberedCredentialMatchesRequest(credential, args)) {
+      // Includes legacy/tampered renderer metadata and every ticket-bearing
+      // request. Fail closed and force one fresh explicit authentication.
+      removeRememberedCredential(args.accountId);
+      return {
+        status: 'invalid',
+        error: 'Saved credential no longer matches this account. Enter the password again.',
+      };
+    }
 
+    const publicTarget = publicRememberedCredentialTarget(credential.target);
+    claimLoopback(args.accountId, event.sender.id, args.attemptToken);
     try {
-      const port = await startLoopback({ ...args, password });
-      return { status: 'started', port };
+      const target = credential.target;
+      const started = await startLoopback({
+        accountId: args.accountId,
+        password: credential.password,
+        handle: target.handle,
+        network: target.networkName,
+        agent: target.agentHandle,
+        attemptToken: args.attemptToken,
+        expectedTarget: {
+          networkName: target.networkName,
+          networkId: target.networkId,
+          handle: target.handle,
+          coordinatorNodeId: target.coordinatorNodeId,
+          agentHandle: target.agentHandle,
+          agentNodeId: target.agentNodeId,
+        },
+      });
+      await stopLoopbackIfUnclaimed(args.accountId);
+      return { status: 'started', port: started.port, target: publicTarget };
     } catch (error) {
+      await releaseLoopbackClaim(args.accountId, event.sender.id, args.attemptToken);
       const message = error instanceof Error ? error.message : String(error);
-      if (isCredentialRejection(error)) {
+      if (
+        isCredentialRejection(error) ||
+        isRememberedCredentialTargetRejection(error)
+      ) {
         removeRememberedCredential(args.accountId);
-        return { status: 'invalid', error: message };
+        return { status: 'invalid', error: message, target: publicTarget };
       }
       // Connectivity/timeouts do not prove the password is wrong. Keep the
       // ciphertext so the renderer can offer a passwordless retry.
-      return { status: 'retryable_error', error: message };
+      return { status: 'retryable_error', error: message, target: publicTarget };
     }
   });
 
-  ipcMain.handle('loopback:stop', async (_event, raw: unknown) => {
+  ipcMain.handle('loopback:stop', async (event, raw: unknown) => {
     const args = raw as { accountId: string };
     if (!args || typeof args.accountId !== 'string') {
       throw new Error('loopback:stop: accountId required');
     }
-    await stopLoopback(args.accountId);
+    await releaseLoopbackClaim(args.accountId, event.sender.id);
   });
 
-  ipcMain.handle('loopback:getPort', async (_event, accountId: string) => {
+  ipcMain.handle('loopback:releaseAttempt', async (event, raw: unknown) => {
+    const args = raw as { accountId?: unknown; attemptToken?: unknown } | null;
+    if (
+      !args || typeof args.accountId !== 'string' ||
+      typeof args.attemptToken !== 'number' ||
+      !Number.isSafeInteger(args.attemptToken) || args.attemptToken <= 0
+    ) {
+      throw new Error('loopback:releaseAttempt: accountId + positive attemptToken required');
+    }
+    await releaseLoopbackClaim(args.accountId, event.sender.id, args.attemptToken);
+  });
+
+  ipcMain.handle('loopback:getPort', async (event, accountId: string) => {
     if (typeof accountId !== 'string' || !accountId) {
       throw new Error('loopback:getPort: accountId required');
     }
     const h = handles.get(accountId);
+    if (h) {
+      observeRenderer(event.sender);
+      claimLoopback(accountId, event.sender.id);
+    }
     return h ? h.loopback.port : null;
   });
 }
