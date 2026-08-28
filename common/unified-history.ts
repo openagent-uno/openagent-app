@@ -424,6 +424,20 @@ export type SessionMessagesQuery =
   | { cursor: OpaqueCursor; direction: 'before' | 'after'; limit?: number }
   | { limit?: number };
 
+/** Compact invocation metadata embedded in a normalized transcript page.
+ * Arguments and results intentionally remain behind the authorized detail
+ * resolver so opening a chat never duplicates or renders a large tool blob. */
+export interface ToolInvocationSummary {
+  id: OpaqueId;
+  tool_call_id?: OpaqueId | null;
+  tool_server?: string | null;
+  tool_name: string;
+  status: 'pending' | 'running' | 'success' | 'error' | 'cancelled';
+  child_run_id?: OpaqueId | null;
+  child_session_id?: OpaqueId | null;
+  completeness?: Completeness;
+}
+
 export interface SessionMessage {
   id: OpaqueId;
   session_id: OpaqueId;
@@ -440,6 +454,7 @@ export interface SessionMessage {
   text: string;
   visible_reasoning?: string | null;
   tool_invocation_id?: OpaqueId | null;
+  tool_summary?: ToolInvocationSummary | null;
   attachments?: {
     artifact_id: OpaqueId;
     artifact_link_id?: OpaqueId;

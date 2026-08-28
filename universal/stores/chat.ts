@@ -24,6 +24,10 @@ import type { SessionMessage, SessionMessagePage, ToolInvocationDetail } from '.
 import { normalizeAttachmentRefs, normalizeMessageContent } from '../../common/ui-views';
 import { attachmentKey } from '../../common/attachments';
 import {
+  toolInfoFromInvocationDetail,
+  toolInfoFromSummary,
+} from '../../common/tool-presentation';
+import {
   deleteSession as deleteSessionApi,
   fetchSessionRuns,
   getSessionContext,
@@ -39,12 +43,6 @@ const earlierPageLoads = new Map<string, Promise<void>>();
 let nextMsgId = 1;
 const genId = () => `msg-${nextMsgId++}-${Date.now()}`;
 
-function safeJsonText(value: ToolInvocationDetail['result_safe']): string | null {
-  if (value == null) return null;
-  if (typeof value === 'string') return value;
-  try { return JSON.stringify(value); } catch { return String(value); }
-}
-
 function canonicalMessageToChat(message: SessionMessage): ChatMessage {
   // Feed the server payload straight through the canonical normalizer so
   // additive CAS metadata is never lost while projecting history into chat.
@@ -58,6 +56,9 @@ function canonicalMessageToChat(message: SessionMessage): ChatMessage {
     durableStatus: message.status,
     completeness: message.completeness,
     toolInvocationId: message.tool_invocation_id || undefined,
+    toolInfo: message.role === 'tool'
+      ? toolInfoFromSummary(message.tool_summary, message.tool_invocation_id || undefined)
+      : undefined,
     streaming: message.status === 'streaming',
     author: {
       kind: message.author.kind === 'user' ? 'human' : 'agent',
@@ -116,21 +117,6 @@ function transcriptPatch(
       hasMoreBefore: loaded.page.has_more_before,
       hasMoreAfter: loaded.page.has_more_after,
     },
-  };
-}
-
-function toolInfoFromDetail(detail: ToolInvocationDetail): ToolInfo {
-  const args = detail.args_safe && typeof detail.args_safe === 'object' && !Array.isArray(detail.args_safe)
-    ? detail.args_safe as Record<string, any>
-    : { value: detail.args_safe };
-  return {
-    tool_name: detail.tool_name,
-    tool_call_id: detail.tool_call_id || undefined,
-    tool_invocation_id: detail.id,
-    tool_args: args,
-    tool_call_error: detail.status === 'error',
-    result: detail.error_safe || safeJsonText(detail.result_safe),
-    child_session_id: detail.child_session_id || undefined,
   };
 }
 
@@ -230,6 +216,9 @@ function sessionMetaFromEntry(e: SessionEntry): Partial<ChatSession> {
     parentSessionId: e.parent_session_id || undefined,
     origin,
     originLabel: e.kind || undefined,
+    createdAt: e.created_at ?? undefined,
+    model: e.model ?? undefined,
+    framework: e.framework ?? undefined,
   };
 }
 
@@ -853,7 +842,7 @@ export const useChat = create<ChatState>((set, get) => ({
           ...message,
           role: 'tool',
           toolInvocationId: tool.id,
-          toolInfo: toolInfoFromDetail(tool),
+          toolInfo: toolInfoFromInvocationDetail(tool),
         };
       }
     }

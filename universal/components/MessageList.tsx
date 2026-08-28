@@ -11,7 +11,7 @@
  * tail-shows the last few turns); omit for the full transcript.
  */
 
-import { memo, useEffect, useState, useMemo, type ReactNode } from 'react';
+import { Fragment, memo, useEffect, useState, useMemo, type ReactNode } from 'react';
 import Feather from '@expo/vector-icons/Feather';
 import { ActivityIndicator, View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import {
@@ -34,6 +34,7 @@ import {
 } from '../../common/types';
 import type { MessagePart } from '../../common/ui-views';
 import { attachmentKey } from '../../common/attachments';
+import { compactToolFallback, legacyToolInfoFromText } from '../../common/tool-presentation';
 import AttachmentBlock from './Attachments';
 import Markdown from './Markdown';
 import DelegationCard from './DelegationCard';
@@ -106,6 +107,14 @@ function MessageListBase({
     [messages, capped, maxItems, shown],
   );
   const hiddenCount = capped ? 0 : Math.max(0, messages.length - visible.length);
+  const resolvedAnchorMessageId = useMemo(() => {
+    if (anchorMessageId) return anchorMessageId;
+    if (!anchorToolInvocationId) return undefined;
+    return messages.find((message) => (
+      message.toolInvocationId === anchorToolInvocationId
+      || message.toolInfo?.tool_invocation_id === anchorToolInvocationId
+    ))?.id;
+  }, [anchorMessageId, anchorToolInvocationId, messages]);
   const [loadingEarlier, setLoadingEarlier] = useState(false);
   const canLoadEarlier = !capped && (hiddenCount > 0 || (!!hasMoreBefore && !!onLoadEarlier));
   const loadEarlier = async () => {
@@ -124,21 +133,21 @@ function MessageListBase({
     }
   };
   useEffect(() => {
-    if (!anchorMessageId || capped) return;
-    const index = messages.findIndex((message) => message.id === anchorMessageId);
+    if (!resolvedAnchorMessageId || capped) return;
+    const index = messages.findIndex((message) => message.id === resolvedAnchorMessageId);
     if (index < 0) return;
     setShown((current) => Math.max(current, messages.length - index));
-  }, [anchorMessageId, capped, messages]);
+  }, [resolvedAnchorMessageId, capped, messages]);
 
   useEffect(() => {
-    if (Platform.OS !== 'web' || !anchorMessageId || typeof document === 'undefined') return;
+    if (Platform.OS !== 'web' || !resolvedAnchorMessageId || typeof document === 'undefined') return;
     const timer = setTimeout(() => {
-      const element = document.getElementById(`message-anchor-${encodeURIComponent(anchorMessageId)}`);
+      const element = document.getElementById(`message-anchor-${encodeURIComponent(resolvedAnchorMessageId)}`);
       element?.scrollIntoView({ block: 'center', behavior: 'smooth' });
       element?.focus({ preventScroll: true });
     }, 0);
     return () => clearTimeout(timer);
-  }, [anchorMessageId, visible]);
+  }, [resolvedAnchorMessageId, visible]);
   // Identify the last assistant message — Regenerate only attaches to
   // it, not to every assistant bubble in the transcript.
   const lastAssistantId = useMemo(() => {
@@ -149,22 +158,28 @@ function MessageListBase({
     return null;
   }, [visible]);
   const renderMessage = (msg: ChatMessage) => {
-    const isAnchor = msg.id === anchorMessageId;
-    const wrap = (node: ReactNode) => (
-      <View
-        key={msg.id}
-        nativeID={`message-anchor-${encodeURIComponent(msg.id)}`}
-        style={isAnchor ? styles.anchorMessage : undefined}
-        onLayout={isAnchor && onAnchorLayout
-          ? (event) => onAnchorLayout(event.nativeEvent.layout.y)
-          : undefined}
-        accessible={isAnchor || undefined}
-        accessibilityLabel={isAnchor ? 'Search result message' : undefined}
-        {...(Platform.OS === 'web' ? ({ tabIndex: -1 } as any) : {})}
-      >
-        {node}
-      </View>
-    );
+    const isAnchor = msg.id === resolvedAnchorMessageId;
+    const wrap = (node: ReactNode) => {
+      // Search highlighting needs one measurable wrapper, but wrapping every
+      // ordinary row changed the stable chat layout and web DOM. Keep normal
+      // messages structurally identical to main.
+      if (!isAnchor) return <Fragment key={msg.id}>{node}</Fragment>;
+      return (
+        <View
+          key={msg.id}
+          nativeID={`message-anchor-${encodeURIComponent(msg.id)}`}
+          style={styles.anchorMessage}
+          onLayout={onAnchorLayout
+            ? (event) => onAnchorLayout(event.nativeEvent.layout.y)
+            : undefined}
+          accessible
+          accessibilityLabel="Search result message"
+          {...(Platform.OS === 'web' ? ({ tabIndex: -1 } as any) : {})}
+        >
+          {node}
+        </View>
+      );
+    };
     if (msg.role === 'compaction') {
       // In-place compaction (vision §2) renders as a tool-style card:
       // a live "Compacting…" spinner that resolves to "Compacted
@@ -201,10 +216,8 @@ function MessageListBase({
           toolInfo={msg.toolInfo}
           fallbackText={msg.text}
           onOpenMemory={onOpenMemory}
-          forceExpanded={!!anchorToolInvocationId && (
-            msg.toolInvocationId === anchorToolInvocationId
-            || msg.toolInfo?.tool_invocation_id === anchorToolInvocationId
-          )}
+          toolInvocationId={msg.toolInvocationId}
+          durableStatus={msg.durableStatus}
         />,
       );
     }
@@ -451,7 +464,7 @@ const OrderedParts = memo(function OrderedParts({
   assistant: boolean;
 }) {
   return (
-    <View style={styles.parts}>
+    <Fragment>
       {parts.map((part, index) => {
         if (part.kind === 'text') {
           return assistant
@@ -476,7 +489,7 @@ const OrderedParts = memo(function OrderedParts({
           />
         );
       })}
-    </View>
+    </Fragment>
   );
 });
 
@@ -535,34 +548,45 @@ const SelfPromptBlock = memo(function SelfPromptBlock({
 });
 
 const ToolCard = memo(function ToolCard({
-  toolInfo, fallbackText, onOpenMemory, forceExpanded,
+  toolInfo, fallbackText, onOpenMemory, toolInvocationId, durableStatus,
 }: {
   toolInfo?: ToolInfo;
   fallbackText: string;
   onOpenMemory?: (target: MemoryTarget) => void;
-  forceExpanded?: boolean;
+  toolInvocationId?: string;
+  durableStatus?: ChatMessage['durableStatus'];
 }) {
-  const [expanded, setExpanded] = useState(!!forceExpanded);
-  useEffect(() => {
-    if (forceExpanded) setExpanded(true);
-  }, [forceExpanded]);
+  const [expanded, setExpanded] = useState(false);
   const parsed = useMemo<ToolInfo | undefined>(() => {
     if (toolInfo) return toolInfo;
-    try {
-      const j = JSON.parse(fallbackText);
-      if (j && j.tool_name) return j as ToolInfo;
-    } catch { /* not JSON */ }
-    return undefined;
+    return legacyToolInfoFromText(fallbackText);
   }, [toolInfo, fallbackText]);
 
   const info = parsed;
 
   if (!info) {
+    const isRunning = durableStatus === 'streaming';
+    const isError = durableStatus === 'failed';
+    const isStopped = durableStatus === 'cancelled' || durableStatus === 'interrupted';
+    const statusColor = isError ? colors.error : isRunning ? colors.warning : isStopped ? colors.textMuted : colors.success;
+    const statusLabel = isRunning ? 'running' : isError ? 'error' : isStopped ? 'stopped' : 'done';
     return (
-      <View style={styles.toolRow}>
-        <View style={styles.toolIndicator} />
-        <Feather name="tool" size={10} color={colors.textMuted} />
-        <Text style={styles.toolRowText}>{fallbackText}</Text>
+      <View
+        style={[styles.toolCard, isError && styles.toolCardError]}
+        accessibilityLabel={toolInvocationId ? `Tool usage ${statusLabel}` : undefined}
+        // @ts-ignore — web animation class only
+        {...(Platform.OS === 'web' ? { className: 'oa-msg-in' } : {})}
+      >
+        <View style={styles.toolCardHeader}>
+          <View style={[styles.toolStatusDot, { backgroundColor: statusColor }]} />
+          <Feather name="tool" size={12} color={colors.textMuted} />
+          <View style={styles.toolCardTitleWrap}>
+            <Text style={styles.toolCardName} numberOfLines={1}>
+              {compactToolFallback(fallbackText)}
+            </Text>
+          </View>
+          <Text style={[styles.toolStatusText, { color: statusColor }]}>{statusLabel}</Text>
+        </View>
       </View>
     );
   }
@@ -593,11 +617,14 @@ const ToolCard = memo(function ToolCard({
   const eff = effectiveTool(info);
   const rawName = eff?.tool_name || info.tool_name;
   const dispatched = info.tool_name === 'tool_search_call_tool';
+  const hasArgs = !!(info.tool_args && Object.keys(info.tool_args).length > 0);
+  const hasResult = !isError && info.result != null && info.result !== '';
+  const canExpand = hasArgs || hasResult || !!errorText;
 
   return (
     <TouchableOpacity
-      activeOpacity={0.85}
-      onPress={() => setExpanded(!expanded)}
+      activeOpacity={canExpand ? 0.85 : 1}
+      onPress={() => { if (canExpand) setExpanded(!expanded); }}
       style={[
         styles.toolCard,
         display.isMemory && styles.toolCardMemory,
@@ -646,10 +673,12 @@ const ToolCard = memo(function ToolCard({
           </TouchableOpacity>
         )}
         <Text style={[styles.toolStatusText, { color: statusColor }]}>{statusLabel}</Text>
-        <Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={12} color={colors.textMuted} />
+        {canExpand && (
+          <Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={12} color={colors.textMuted} />
+        )}
       </View>
 
-      {expanded && (
+      {expanded && canExpand && (
         <View style={styles.toolCardBody}>
           <Text style={styles.toolSectionTitle}>Tool</Text>
           <View style={styles.toolCodeBlock}>
@@ -662,11 +691,11 @@ const ToolCard = memo(function ToolCard({
               )}
             </Text>
           </View>
-          {info.tool_args && Object.keys(info.tool_args).length > 0 && (
+          {hasArgs && (
             <>
               <Text style={styles.toolSectionTitle}>Parameters</Text>
               <View style={styles.toolCodeBlock}>
-                {Object.entries(info.tool_args).map(([k, v]) => (
+                {Object.entries(info.tool_args || {}).map(([k, v]) => (
                   <Text key={k} style={styles.toolCodeText}>
                     <Text style={{ color: colors.primary }}>{k}</Text>
                     <Text style={{ color: colors.textMuted }}>: </Text>
@@ -676,7 +705,7 @@ const ToolCard = memo(function ToolCard({
               </View>
             </>
           )}
-          {!isError && info.result != null && (
+          {hasResult && (
             <>
               <Text style={styles.toolSectionTitle}>Result</Text>
               <View style={styles.toolCodeBlock}>
@@ -820,8 +849,6 @@ const styles = StyleSheet.create({
     fontSize: 14, lineHeight: 22, color: colors.text,
     fontWeight: '400',
   },
-  parts: { width: '100%', gap: 7 },
-
   // Agent-self seed prompt (Mission / Role / Task) — an accent-ruled quote.
   selfPromptBlock: {
     flexDirection: 'row', alignItems: 'stretch',
