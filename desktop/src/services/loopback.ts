@@ -14,6 +14,13 @@ import {
   type RunningLoopback,
   type StartLoopbackArgs as NativeStartArgs,
 } from '../network/start.js';
+import { isCredentialRejection } from './credentials-core';
+import {
+  loadRememberedCredential,
+  removeRememberedCredential,
+  saveRememberedCredential,
+} from './credentials';
+import { createAccountStartCoordinator } from './account-start-coordinator';
 
 interface LoopbackHandle {
   id: string;
@@ -22,6 +29,7 @@ interface LoopbackHandle {
 }
 
 const handles = new Map<string, LoopbackHandle>();
+const accountStarts = createAccountStartCoordinator<number>();
 
 /** Hard cap on the whole sidecar bring-up: iroh dial + SRP login +
  *  list_agents + proxy bind. iroh-js exposes no AbortSignal, so we can't
@@ -39,6 +47,48 @@ export interface StartLoopbackArgs {
   ticket?: string;
   handle?: string;
   network?: string;
+  /** Renderer opt-in. The handler persists only after coordinator login
+   * succeeds; omitted means leave the current preference untouched. */
+  remember?: boolean;
+}
+
+export type RememberedLoopbackResult =
+  | { status: 'started'; port: number }
+  | { status: 'missing' }
+  | { status: 'invalid'; error: string }
+  | { status: 'retryable_error'; error: string };
+
+type RememberedLoopbackArgs = Omit<StartLoopbackArgs, 'password'>;
+
+function validateStartArgs(
+  raw: unknown,
+  channel: 'loopback:start' | 'loopback:startRemembered',
+  requiresPassword: boolean,
+): StartLoopbackArgs | RememberedLoopbackArgs {
+  const args = raw as Partial<StartLoopbackArgs> | null;
+  if (!args || typeof args.accountId !== 'string') {
+    throw new Error(`${channel}: accountId is required`);
+  }
+  if (requiresPassword && typeof args.password !== 'string') {
+    throw new Error(`${channel}: password is required`);
+  }
+  const hasTicket = typeof args.ticket === 'string' && args.ticket.length > 0;
+  const hasHandleNet =
+    typeof args.handle === 'string' && args.handle.length > 0 &&
+    typeof args.network === 'string' && args.network.length > 0;
+  if (!hasTicket && !hasHandleNet) {
+    throw new Error(`${channel}: pass either ticket, or handle + network`);
+  }
+  for (const key of ['ticket', 'handle', 'network', 'agent'] as const) {
+    const value = (args as Record<string, unknown>)[key];
+    if (value !== undefined && typeof value !== 'string') {
+      throw new Error(`${channel}: ${key} must be a string when present`);
+    }
+  }
+  if (args.remember !== undefined && typeof args.remember !== 'boolean') {
+    throw new Error(`${channel}: remember must be a boolean when present`);
+  }
+  return args as StartLoopbackArgs | RememberedLoopbackArgs;
 }
 
 export async function startLoopback(args: StartLoopbackArgs): Promise<number> {
@@ -46,7 +96,28 @@ export async function startLoopback(args: StartLoopbackArgs): Promise<number> {
   if (existing) {
     return existing.loopback.port;
   }
+  return accountStarts.run(
+    args.accountId,
+    () => startLoopbackFresh(args),
+    () => {
+      // Only the call that created this in-flight start may persist its
+      // password. Waiters with the same accountId share the port but must not
+      // overwrite the keychain with credentials that were never authenticated.
+      // Persistence remains best-effort and never falls back to plaintext.
+      try {
+        if (args.remember === true) {
+          saveRememberedCredential(args.accountId, args.password);
+        } else if (args.remember === false) {
+          removeRememberedCredential(args.accountId);
+        }
+      } catch {
+        // A keychain failure must not turn a valid login into a failed one.
+      }
+    },
+  );
+}
 
+async function startLoopbackFresh(args: StartLoopbackArgs): Promise<number> {
   const nativeArgs: NativeStartArgs = {
     password: args.password,
     ticket: args.ticket,
@@ -110,24 +181,42 @@ export async function stopAllLoopbacks(): Promise<void> {
 
 export function registerLoopbackHandlers(): void {
   ipcMain.handle('loopback:start', async (_event, raw: unknown) => {
-    const args = raw as StartLoopbackArgs;
-    if (!args || typeof args.accountId !== 'string' || typeof args.password !== 'string') {
-      throw new Error('loopback:start: accountId + password are required');
-    }
-    const hasTicket = typeof args.ticket === 'string' && args.ticket.length > 0;
-    const hasHandleNet =
-      typeof args.handle === 'string' && args.handle.length > 0 &&
-      typeof args.network === 'string' && args.network.length > 0;
-    if (!hasTicket && !hasHandleNet) {
-      throw new Error('loopback:start: pass either ticket, or handle + network');
-    }
-    for (const k of ['ticket', 'handle', 'network', 'agent'] as const) {
-      const v = (args as unknown as Record<string, unknown>)[k];
-      if (v !== undefined && typeof v !== 'string') {
-        throw new Error(`loopback:start: ${k} must be a string when present`);
+    const args = validateStartArgs(raw, 'loopback:start', true) as StartLoopbackArgs;
+    try {
+      return await startLoopback(args);
+    } catch (error) {
+      if (isCredentialRejection(error)) {
+        removeRememberedCredential(args.accountId);
       }
+      throw error;
     }
-    return await startLoopback(args);
+  });
+
+  // The renderer supplies account metadata only. Password decryption and
+  // loopback startup both happen in this trusted process, so a remembered
+  // plaintext credential never crosses the contextBridge back into JS UI.
+  ipcMain.handle('loopback:startRemembered', async (_event, raw: unknown): Promise<RememberedLoopbackResult> => {
+    const args = validateStartArgs(
+      raw,
+      'loopback:startRemembered',
+      false,
+    ) as RememberedLoopbackArgs;
+    const password = loadRememberedCredential(args.accountId);
+    if (password == null) return { status: 'missing' };
+
+    try {
+      const port = await startLoopback({ ...args, password });
+      return { status: 'started', port };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (isCredentialRejection(error)) {
+        removeRememberedCredential(args.accountId);
+        return { status: 'invalid', error: message };
+      }
+      // Connectivity/timeouts do not prove the password is wrong. Keep the
+      // ciphertext so the renderer can offer a passwordless retry.
+      return { status: 'retryable_error', error: message };
+    }
   });
 
   ipcMain.handle('loopback:stop', async (_event, raw: unknown) => {

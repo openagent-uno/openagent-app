@@ -14,6 +14,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as http from 'http';
 import { registerStorageHandlers } from './services/storage';
+import { registerCredentialHandlers } from './services/credentials';
 import { registerLoopbackHandlers, stopAllLoopbacks } from './services/loopback';
 import { decodeTicket } from './network/ticket';
 import {
@@ -678,6 +679,7 @@ app.whenReady().then(async () => {
   }
 
   registerStorageHandlers();
+  registerCredentialHandlers();
   registerDialogHandlers();
   registerLoopbackHandlers();
 

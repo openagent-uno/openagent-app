@@ -9,9 +9,10 @@
  * and ``WebSocket`` against ``http://127.0.0.1:<sidecarPort>`` exactly
  * like before — auth + transport are below the visible layer.
  *
- * Passwords are never persisted: the user is prompted on every
- * connect (the cert TTL bounds re-prompt frequency to ~30 days when
- * the cached cert is still valid).
+ * Passwords are never written to renderer storage. On Electron, an opted-in
+ * credential is encrypted by safeStorage in the main process (Keychain /
+ * DPAPI / a real Linux secret service). Automatic login asks the main
+ * process to start the loopback without ever returning plaintext to JS UI.
  */
 
 import { create } from 'zustand';
@@ -184,12 +185,34 @@ interface DesktopAPI {
     handle?: string;
     network?: string;
     agent?: string;
+    remember?: boolean;
   }) => Promise<number>;
+  startRememberedLoopback?: (args: {
+    accountId: string;
+    ticket?: string;
+    handle?: string;
+    network?: string;
+    agent?: string;
+  }) => Promise<RememberedLoopbackResult>;
+  credentialsAvailable?: () => Promise<boolean>;
+  forgetCredential?: (accountId: string) => Promise<void>;
   stopLoopback: (args: { accountId: string }) => Promise<void>;
   getLoopbackPort: (accountId: string) => Promise<number | null>;
   /** Open a standalone agent window bound to ``accountId`` (own
    *  connection). Present only in Electron; used for multi-window. */
   openAgentWindow?: (accountId: string) => Promise<void>;
+}
+
+export type RememberedLoopbackResult =
+  | { status: 'started'; port: number }
+  | { status: 'missing' }
+  | { status: 'invalid'; error: string }
+  | { status: 'retryable_error'; error: string };
+
+export interface RememberedCredentialFailure {
+  accountId: string;
+  kind: 'missing' | 'invalid' | 'retryable';
+  error?: string;
 }
 
 function desktop(): DesktopAPI | null {
@@ -244,8 +267,18 @@ export interface JoinNetworkArgs {
   // it from the ticket on its end either way.
   handle: string;
   password: string;
+  remember?: boolean;
   isLocal?: boolean;
   displayName?: string;
+}
+
+function accountLoopbackArgs(account: SavedAccount) {
+  return {
+    accountId: account.id,
+    handle: account.handle,
+    network: account.network,
+    agent: account.agentHandle,
+  };
 }
 
 interface ConnectionState {
@@ -266,14 +299,21 @@ interface ConnectionState {
   agentVersion: string | null;
   error: string | null;
   isLoading: boolean;
+  /** Boot remains visually gated until the live loopback or remembered
+   * credential path reaches a terminal result. */
+  isRestoringSession: boolean;
+  credentialStorageAvailable: boolean;
+  rememberedFailure: RememberedCredentialFailure | null;
 
   // Account management
   loadAccounts: () => Promise<void>;
   removeAccount: (id: string) => Promise<void>;
+  refreshCredentialAvailability: () => Promise<boolean>;
 
   // Onboarding & connection
   joinNetwork: (args: JoinNetworkArgs) => Promise<void>;
-  connectAccount: (accountId: string, password: string) => Promise<void>;
+  connectAccount: (accountId: string, password: string, remember?: boolean) => Promise<void>;
+  connectRememberedAccount: (accountId: string) => Promise<RememberedLoopbackResult>;
   disconnect: () => Promise<void>;
   resumeConnection: () => Promise<void>;
 
@@ -284,7 +324,11 @@ interface ConnectionState {
    *  process to open a window bound to that account — which connects to the
    *  now-running loopback passwordlessly. Returns ``{ ok }`` so the caller
    *  can surface a humanised error inline. */
-  openAccountWindow: (accountId: string, password?: string) => Promise<{ ok: boolean; error?: string }>;
+  openAccountWindow: (
+    accountId: string,
+    password?: string,
+    remember?: boolean,
+  ) => Promise<{ ok: boolean; needsPassword?: boolean; retryable?: boolean; error?: string }>;
   /** Boot path for a standalone window (``?connect=<id>``): connect to the
    *  account's already-running loopback with no password. No-op when the
    *  loopback isn't up (the window falls back to the login screen). */
@@ -303,6 +347,9 @@ export const useConnection = create<ConnectionState>((set, get) => ({
   agentVersion: null,
   error: null,
   isLoading: true,
+  isRestoringSession: true,
+  credentialStorageAvailable: false,
+  rememberedFailure: null,
 
   // ── persistence ──
 
@@ -337,6 +384,27 @@ export const useConnection = create<ConnectionState>((set, get) => ({
     } catch {
       // ignore
     }
+    try {
+      await desktop()?.forgetCredential?.(id);
+    } catch {
+      // ignore
+    }
+  },
+
+  refreshCredentialAvailability: async () => {
+    const d = desktop();
+    if (!d?.credentialsAvailable) {
+      set({ credentialStorageAvailable: false });
+      return false;
+    }
+    try {
+      const available = await d.credentialsAvailable();
+      set({ credentialStorageAvailable: available });
+      return available;
+    } catch {
+      set({ credentialStorageAvailable: false });
+      return false;
+    }
   },
 
   // ── connection ──
@@ -352,7 +420,7 @@ export const useConnection = create<ConnectionState>((set, get) => ({
       set({ error: 'Joining a network requires the desktop app — the loopback sidecar is unavailable here.' });
       return;
     }
-    set({ isConnecting: true, error: null });
+    set({ isConnecting: true, error: null, rememberedFailure: null });
 
     const accountId = genId();
 
@@ -367,6 +435,7 @@ export const useConnection = create<ConnectionState>((set, get) => ({
         password: args.password,
         ticket: args.ticket,
         handle: args.handle,
+        remember: args.remember === true,
       });
     } catch (e: any) {
       set({ isConnecting: false, error: humanizeLoginError(e?.message || String(e)) });
@@ -392,7 +461,7 @@ export const useConnection = create<ConnectionState>((set, get) => ({
     _openWebsocket(get, set, { ...newAccount, sidecarPort: port }, accountId);
   },
 
-  connectAccount: async (accountId, password) => {
+  connectAccount: async (accountId, password, remember = false) => {
     const d = desktop();
     if (!d) {
       set({ error: 'Connecting requires the desktop app — the loopback sidecar is unavailable here.' });
@@ -403,7 +472,7 @@ export const useConnection = create<ConnectionState>((set, get) => ({
       set({ error: 'Account not found' });
       return;
     }
-    set({ isConnecting: true, error: null });
+    set({ isConnecting: true, error: null, rememberedFailure: null });
 
     // Tear down any prior connection first so a switch from A→B
     // doesn't leave A's sidecar running.
@@ -414,6 +483,10 @@ export const useConnection = create<ConnectionState>((set, get) => ({
     if (get().activeAccountId && get().activeAccountId !== accountId) {
       try { await d.stopLoopback({ accountId: get().activeAccountId! }); } catch { /* ignore */ }
     }
+    // Explicit password entry must perform a real coordinator login before
+    // main stores the credential. Reusing a stale same-account loopback
+    // would accept (and remember) an unverified replacement password.
+    try { await d.stopLoopback({ accountId }); } catch { /* ignore */ }
     useChat.getState().clearAll();
 
     let port: number;
@@ -424,6 +497,7 @@ export const useConnection = create<ConnectionState>((set, get) => ({
         handle: account.handle,
         network: account.network,
         agent: account.agentHandle,
+        remember,
       });
     } catch (e: any) {
       set({ isConnecting: false, error: humanizeLoginError(e?.message || String(e)) });
@@ -431,6 +505,72 @@ export const useConnection = create<ConnectionState>((set, get) => ({
     }
 
     _openWebsocket(get, set, { ...account, sidecarPort: port }, accountId);
+  },
+
+  connectRememberedAccount: async (accountId) => {
+    const d = desktop();
+    const account = get().accounts.find((candidate) => candidate.id === accountId);
+    if (!d || !account || !d.startRememberedLoopback) {
+      const result: RememberedLoopbackResult = { status: 'missing' };
+      set({
+        isConnecting: false,
+        isRestoringSession: false,
+        rememberedFailure: { accountId, kind: 'missing' },
+      });
+      return result;
+    }
+
+    set({
+      isConnecting: true,
+      error: null,
+      rememberedFailure: null,
+      activeAccountId: accountId,
+    });
+    let result: RememberedLoopbackResult;
+    try {
+      result = await d.startRememberedLoopback(accountLoopbackArgs(account));
+    } catch (error: any) {
+      result = {
+        status: 'retryable_error',
+        error: error?.message || String(error),
+      };
+    }
+
+    if (result.status === 'started') {
+      const old = get().ws;
+      if (old) old.disconnect();
+      useChat.getState().clearAll();
+      _openWebsocket(
+        get,
+        set,
+        { ...account, sidecarPort: result.port },
+        accountId,
+      );
+      return result;
+    }
+
+    if (result.status === 'missing') {
+      set({
+        isConnecting: false,
+        isRestoringSession: false,
+        rememberedFailure: { accountId, kind: 'missing' },
+        error: null,
+      });
+      return result;
+    }
+
+    const message = humanizeLoginError(result.error);
+    set({
+      isConnecting: false,
+      isRestoringSession: false,
+      rememberedFailure: {
+        accountId,
+        kind: result.status === 'invalid' ? 'invalid' : 'retryable',
+        error: message,
+      },
+      error: message,
+    });
+    return result;
   },
 
   disconnect: async () => {
@@ -451,6 +591,9 @@ export const useConnection = create<ConnectionState>((set, get) => ({
       agentName: null,
       agentVersion: null,
       activeAccountId: null,
+      isRestoringSession: false,
+      rememberedFailure: null,
+      error: null,
     });
     // A standalone agent window neither owns the shared resume slot nor
     // exclusively owns its loopback (a sibling window may be on the same
@@ -469,24 +612,48 @@ export const useConnection = create<ConnectionState>((set, get) => ({
 
   resumeConnection: async () => {
     const d = desktop();
-    if (!d) return;
+    if (!d) {
+      set({ isRestoringSession: false });
+      return;
+    }
+    void get().refreshCredentialAvailability();
     const { activeAccountId, ws: currentWs } = get();
-    if (!activeAccountId || currentWs) return;
+    if (currentWs) return;
+    if (!activeAccountId) {
+      set({ isRestoringSession: false });
+      return;
+    }
     const connRaw = await storage.getItem(ACTIVE_CONNECTION_KEY);
-    if (!connRaw) return;
+    if (!connRaw) {
+      set({ isRestoringSession: false });
+      return;
+    }
     let connInfo: { accountId: string; sidecarPort: number };
-    try { connInfo = JSON.parse(connRaw); } catch { return; }
-    if (connInfo.accountId !== activeAccountId) return;
+    try { connInfo = JSON.parse(connRaw); } catch {
+      set({ isRestoringSession: false });
+      return;
+    }
+    if (connInfo.accountId !== activeAccountId) {
+      set({ isRestoringSession: false });
+      return;
+    }
     const port = await d.getLoopbackPort(activeAccountId);
-    if (!port) return;
     const account = get().accounts.find((a) => a.id === activeAccountId);
-    if (!account) return;
-    _openWebsocket(get, set, { ...account, sidecarPort: port }, activeAccountId);
+    if (!account) {
+      set({ isRestoringSession: false });
+      return;
+    }
+    if (port) {
+      set({ isConnecting: true, error: null });
+      _openWebsocket(get, set, { ...account, sidecarPort: port }, activeAccountId);
+      return;
+    }
+    await get().connectRememberedAccount(activeAccountId);
   },
 
   // ── multi-window (Electron) ──
 
-  openAccountWindow: async (accountId, password) => {
+  openAccountWindow: async (accountId, password, remember = false) => {
     const d = desktop();
     if (!d || typeof d.openAgentWindow !== 'function') {
       return { ok: false, error: 'Opening another agent in its own window requires the desktop app.' };
@@ -504,15 +671,34 @@ export const useConnection = create<ConnectionState>((set, get) => ({
       const existingPort = await d.getLoopbackPort(accountId);
       if (!existingPort) {
         if (!password) {
-          return { ok: false, error: 'Enter the password to open this agent.' };
+          if (!d.startRememberedLoopback) {
+            return { ok: false, needsPassword: true, error: 'Enter the password to open this agent.' };
+          }
+          const remembered = await d.startRememberedLoopback(accountLoopbackArgs(account));
+          if (remembered.status === 'missing') {
+            return { ok: false, needsPassword: true, error: 'Enter the password to open this agent.' };
+          }
+          if (remembered.status === 'invalid') {
+            return {
+              ok: false,
+              needsPassword: true,
+              error: humanizeLoginError(remembered.error),
+            };
+          }
+          if (remembered.status === 'retryable_error') {
+            return {
+              ok: false,
+              retryable: true,
+              error: humanizeLoginError(remembered.error),
+            };
+          }
+        } else {
+          await d.startLoopback({
+            ...accountLoopbackArgs(account),
+            password,
+            remember,
+          });
         }
-        await d.startLoopback({
-          accountId,
-          password,
-          handle: account.handle,
-          network: account.network,
-          agent: account.agentHandle,
-        });
       }
     } catch (e: any) {
       return { ok: false, error: humanizeLoginError(e?.message || String(e)) };
@@ -530,15 +716,27 @@ export const useConnection = create<ConnectionState>((set, get) => ({
 
   connectDirected: async (accountId) => {
     const d = desktop();
-    if (!d) return;
+    if (!d) {
+      set({ isRestoringSession: false });
+      return;
+    }
     // Guard against a double-connect if boot runs this twice.
     if (get().ws) return;
     const port = await d.getLoopbackPort(accountId);
     // No live loopback for this account → can't connect without a password;
     // leave the window on the login screen (index.tsx preselects the account).
-    if (!port) return;
+    if (!port) {
+      // A standalone window can still use the same remembered-credential
+      // path as the primary window. This keeps the password inside main.
+      const result = await get().connectRememberedAccount(accountId);
+      if (result.status === 'started') rememberDirectedAccount(accountId);
+      return;
+    }
     const account = get().accounts.find((a) => a.id === accountId);
-    if (!account) return;
+    if (!account) {
+      set({ isRestoringSession: false });
+      return;
+    }
     set({ isConnecting: true, error: null, activeAccountId: accountId });
     _openWebsocket(
       get, set,
@@ -631,6 +829,8 @@ function _openWebsocket(
         isConnected: true,
         isConnecting: false,
         isReconnecting: false,
+        isRestoringSession: false,
+        rememberedFailure: null,
         // Fall back to persisted agent info or account name for child
         // windows where the synthesized auth_ok has no agent metadata.
         // @ts-ignore
@@ -695,10 +895,17 @@ function _openWebsocket(
     } else if (msg.type === 'auth_error') {
       finalize();
       if (!isCurrent()) return;
+      const authError = humanizeLoginError((msg as any).reason);
+      // An explicit authentication rejection is the one renderer-visible
+      // signal that invalidates a remembered credential. Transport failures
+      // below deliberately keep it and expose a passwordless retry instead.
+      void desktop()?.forgetCredential?.(accountId).catch(() => { /* best effort */ });
       set({
         isConnected: false,
         isConnecting: false,
-        error: humanizeLoginError((msg as any).reason),
+        isRestoringSession: false,
+        rememberedFailure: { accountId, kind: 'invalid', error: authError },
+        error: authError,
       });
     }
   });
@@ -739,7 +946,13 @@ function _openWebsocket(
           isConnected: false,
           isConnecting: false,
           isReconnecting: false,
-          error: 'Connection lost. The secure tunnel to your agent stopped responding — this can happen after your Mac wakes from sleep, changes networks, or when the agent restarts and does not come back. Enter your password to reconnect.',
+          isRestoringSession: false,
+          rememberedFailure: {
+            accountId: acctId,
+            kind: 'retryable',
+            error: 'Connection lost. The secure tunnel stopped responding. Check the network or agent and retry.',
+          },
+          error: 'Connection lost. The secure tunnel stopped responding. Check the network or agent and retry.',
         });
         ws.disconnect();
         return;
@@ -750,12 +963,15 @@ function _openWebsocket(
       finalize();
       if (!isCurrent()) return;
       const detail = info.detail || `WebSocket closed before authentication (code=${info.code})`;
+      const retryError = humanizeLoginError(detail);
 
       set({
         isConnected: false,
         isConnecting: false,
         isReconnecting: false,
-        error: humanizeLoginError(detail),
+        isRestoringSession: false,
+        rememberedFailure: { accountId, kind: 'retryable', error: retryError },
+        error: retryError,
       });
       ws.disconnect();
     }
@@ -774,6 +990,12 @@ function _openWebsocket(
     set({
       isConnected: false,
       isConnecting: false,
+      isRestoringSession: false,
+      rememberedFailure: {
+        accountId,
+        kind: 'retryable',
+        error: 'The agent didn’t respond in time. Check that the server is running and try again.',
+      },
       error: 'The agent didn’t respond in time. Check that the server is running and try again.',
     });
     ws.disconnect();

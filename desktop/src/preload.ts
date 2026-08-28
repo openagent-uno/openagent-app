@@ -142,7 +142,29 @@ contextBridge.exposeInMainWorld('desktop', {
     handle?: string;
     network?: string;
     agent?: string;
+    remember?: boolean;
   }): Promise<number> => ipcRenderer.invoke('loopback:start', args),
+
+  // Remembered passwords are encrypted/decrypted in the main process. There
+  // is deliberately no IPC getter that can return plaintext to the renderer.
+  credentialsAvailable: (): Promise<boolean> =>
+    ipcRenderer.invoke('credentials:isAvailable'),
+
+  forgetCredential: (accountId: string): Promise<void> =>
+    ipcRenderer.invoke('credentials:remove', accountId),
+
+  startRememberedLoopback: (args: {
+    accountId: string;
+    ticket?: string;
+    handle?: string;
+    network?: string;
+    agent?: string;
+  }): Promise<
+    | { status: 'started'; port: number }
+    | { status: 'missing' }
+    | { status: 'invalid'; error: string }
+    | { status: 'retryable_error'; error: string }
+  > => ipcRenderer.invoke('loopback:startRemembered', args),
 
   stopLoopback: (args: { accountId: string }): Promise<void> =>
     ipcRenderer.invoke('loopback:stop', args),
