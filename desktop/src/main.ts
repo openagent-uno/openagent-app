@@ -16,10 +16,13 @@ import * as http from 'http';
 import { registerStorageHandlers } from './services/storage';
 import { registerCredentialHandlers } from './services/credentials';
 import {
+  getVerifiedLoopbackTarget,
   registerLoopbackHandlers,
+  releaseLoopbackReservation,
   stopAllLoopbacks,
   transferLoopbackAttempt,
 } from './services/loopback';
+import { findWindowForVerifiedTarget } from './network/agent-window-routing';
 import { decodeTicket } from './network/ticket';
 import {
   applyLocalE2EProfile,
@@ -33,6 +36,7 @@ import {
   unregisterWindow,
   getPrimaryWindow as getPrimaryFromRegistry,
   getAllWindows,
+  getWindowsByAccount,
   focusWindow,
   closeWindow,
   getWindowCount,
@@ -596,7 +600,12 @@ ipcMain.handle('window:open', (_event, route: string) => {
 // full app window bound to a specific account that opens its OWN
 // connection (its own loopback + WS), independent of the primary. This is
 // what powers "open another agent in a new window" from the switcher.
-ipcMain.handle('window:openAgent', (event, accountId: string, attemptToken?: number) => {
+ipcMain.handle('window:openAgent', async (
+  event,
+  accountId: string,
+  attemptToken?: number,
+  sourceAccountId?: string,
+) => {
   if (typeof accountId !== 'string' || !accountId) {
     throw new Error('window:openAgent requires a non-empty accountId string');
   }
@@ -606,10 +615,44 @@ ipcMain.handle('window:openAgent', (event, accountId: string, attemptToken?: num
   ) {
     throw new Error('window:openAgent attemptToken must be a positive safe integer');
   }
-  const win = createWindow({ connectAccountId: accountId });
-  if (attemptToken !== undefined) {
-    transferLoopbackAttempt(accountId, event.sender.id, attemptToken, win.webContents);
+  if (sourceAccountId !== undefined && (typeof sourceAccountId !== 'string' || !sourceAccountId)) {
+    throw new Error('window:openAgent sourceAccountId must be a non-empty string');
   }
+
+  const requestedTarget = getVerifiedLoopbackTarget(accountId);
+  const targetMatch = findWindowForVerifiedTarget(
+    requestedTarget,
+    getAllWindows()
+      .filter((entry) => !entry.win.isDestroyed())
+      .map((entry) => {
+        const boundAccountId = entry.id === event.sender.id
+          ? sourceAccountId ?? entry.accountId
+          : entry.accountId;
+        return {
+          value: entry,
+          target: boundAccountId ? getVerifiedLoopbackTarget(boundAccountId) : null,
+        };
+      }),
+  );
+  // A target may be temporarily unavailable during an older/manual flow;
+  // retain the pre-existing same-account guard as a conservative fallback.
+  const existing = targetMatch ?? getWindowsByAccount(accountId)[0] ?? null;
+  if (existing) {
+    focusWindow(existing.id);
+    const sourceAlreadyUsesThisAccount = existing.id === event.sender.id
+      && sourceAccountId === accountId;
+    if (!sourceAlreadyUsesThisAccount) {
+      await releaseLoopbackReservation(accountId, event.sender.id, attemptToken);
+    }
+    rebuildMenu();
+    return existing.id;
+  }
+
+  const win = createWindow({ connectAccountId: accountId });
+  // Both remembered/manual opens (session reservation) and background joins
+  // (numbered attempt reservation) hand ownership to the destination. The
+  // source window was only the launcher and must not pin the loopback alive.
+  transferLoopbackAttempt(accountId, event.sender.id, attemptToken, win.webContents);
   rebuildMenu();
   return win.webContents.id;
 });

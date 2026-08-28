@@ -98,8 +98,12 @@ contextBridge.exposeInMainWorld('desktop', {
   // Open a *standalone* agent window bound to ``accountId`` — a full app
   // window with its OWN connection (own loopback + WS), independent of this
   // one. Powers "open another agent in a new window" from the switcher.
-  openAgentWindow: (accountId: string, attemptToken?: number): Promise<void> =>
-    ipcRenderer.invoke('window:openAgent', accountId, attemptToken),
+  openAgentWindow: (
+    accountId: string,
+    attemptToken?: number,
+    sourceAccountId?: string,
+  ): Promise<void> =>
+    ipcRenderer.invoke('window:openAgent', accountId, attemptToken, sourceAccountId),
 
   // Close all sub-windows (called on agent switch or main window close).
   closeAllChildren: (): Promise<void> => ipcRenderer.invoke('window:closeAllChildren'),

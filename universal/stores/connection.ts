@@ -22,6 +22,7 @@ import { sessionDiscoveryStrategy } from '../../common/history-feed-policy';
 import { createLatestAttemptGate } from '../../common/latest-attempt';
 import { persistAccountAdditionWhileCurrent } from '../../common/guarded-account-persistence';
 import {
+  accountLoopbackTarget,
   withVerifiedAccountTarget,
   type PublicAccountTarget,
 } from '../../common/account-target-recovery';
@@ -226,7 +227,11 @@ interface DesktopAPI {
   getLoopbackPort: (accountId: string) => Promise<number | null>;
   /** Open a standalone agent window bound to ``accountId`` (own
    *  connection). Present only in Electron; used for multi-window. */
-  openAgentWindow?: (accountId: string, attemptToken?: number) => Promise<void>;
+  openAgentWindow?: (
+    accountId: string,
+    attemptToken?: number,
+    sourceAccountId?: string,
+  ) => Promise<void>;
 }
 
 export type RememberedLoopbackResult =
@@ -307,15 +312,6 @@ export interface JoinNetworkArgs {
   displayName?: string;
 }
 
-function accountLoopbackArgs(account: SavedAccount) {
-  return {
-    accountId: account.id,
-    handle: account.handle,
-    network: account.network,
-    agent: account.agentHandle,
-  };
-}
-
 interface ConnectionState {
   // Persisted
   accounts: SavedAccount[];
@@ -348,7 +344,12 @@ interface ConnectionState {
   // Onboarding & connection
   joinNetwork: (args: JoinNetworkArgs) => Promise<void>;
   joinNetworkInNewWindow: (args: JoinNetworkArgs) => Promise<boolean>;
-  connectAccount: (accountId: string, password: string, remember?: boolean) => Promise<void>;
+  connectAccount: (
+    accountId: string,
+    password: string,
+    remember?: boolean,
+    selectedAgentHandle?: string,
+  ) => Promise<void>;
   connectRememberedAccount: (accountId: string) => Promise<RememberedConnectionResult>;
   disconnect: () => Promise<void>;
   resumeConnection: () => Promise<void>;
@@ -364,6 +365,7 @@ interface ConnectionState {
     accountId: string,
     password?: string,
     remember?: boolean,
+    selectedAgentHandle?: string,
   ) => Promise<{ ok: boolean; needsPassword?: boolean; retryable?: boolean; error?: string }>;
   /** Boot path for a standalone window (``?connect=<id>``): connect to the
    *  account's already-running loopback with no password. No-op when the
@@ -633,7 +635,7 @@ export const useConnection = create<ConnectionState>((set, get) => {
       // Main transfers this specific startup reservation to the new
       // BrowserWindow before releasing the source renderer, eliminating the
       // race where the sidecar could stop before connectDirected() runs.
-      await d.openAgentWindow(accountId, attempt.token);
+      await d.openAgentWindow(accountId, attempt.token, get().activeAccountId ?? undefined);
       if (attempt.isCurrent()) set({ isConnecting: false, error: null });
       return true;
     } catch (e: any) {
@@ -645,7 +647,12 @@ export const useConnection = create<ConnectionState>((set, get) => {
     }
   },
 
-  connectAccount: async (accountId, password, remember = false) => {
+  connectAccount: async (
+    accountId,
+    password,
+    remember = false,
+    selectedAgentHandle,
+  ) => {
     const previousAccountId = get().activeAccountId;
     const attempt = beginConnectionAttempt(accountId);
     const d = desktop();
@@ -699,7 +706,7 @@ export const useConnection = create<ConnectionState>((set, get) => {
         password,
         handle: account.handle,
         network: account.network,
-        agent: account.agentHandle,
+        agent: accountLoopbackTarget(account, selectedAgentHandle).agent,
         remember,
         attemptToken: attempt.token,
       });
@@ -749,7 +756,7 @@ export const useConnection = create<ConnectionState>((set, get) => {
     let result: RememberedLoopbackResult;
     try {
       result = await d.startRememberedLoopback({
-        ...accountLoopbackArgs(account),
+        ...accountLoopbackTarget(account),
         attemptToken: attempt.token,
       });
     } catch (error: any) {
@@ -898,7 +905,12 @@ export const useConnection = create<ConnectionState>((set, get) => {
 
   // ── multi-window (Electron) ──
 
-  openAccountWindow: async (accountId, password, remember = false) => {
+  openAccountWindow: async (
+    accountId,
+    password,
+    remember = false,
+    selectedAgentHandle,
+  ) => {
     const d = desktop();
     if (!d || typeof d.openAgentWindow !== 'function') {
       return { ok: false, error: 'Opening another agent in its own window requires the desktop app.' };
@@ -919,7 +931,7 @@ export const useConnection = create<ConnectionState>((set, get) => {
           if (!d.startRememberedLoopback) {
             return { ok: false, needsPassword: true, error: 'Enter the password to open this agent.' };
           }
-          const remembered = await d.startRememberedLoopback(accountLoopbackArgs(account));
+          const remembered = await d.startRememberedLoopback(accountLoopbackTarget(account));
           const recoveredTarget = 'target' in remembered ? remembered.target : undefined;
           if (recoveredTarget) {
             await persistVerifiedTarget(accountId, recoveredTarget);
@@ -943,7 +955,7 @@ export const useConnection = create<ConnectionState>((set, get) => {
           }
         } else {
           const started = await d.startLoopback({
-            ...accountLoopbackArgs(account),
+            ...accountLoopbackTarget(account, selectedAgentHandle),
             password,
             remember,
           });
@@ -957,7 +969,7 @@ export const useConnection = create<ConnectionState>((set, get) => {
     // Loopback is up — hand off to the main process, which opens a standalone
     // window at ``/?connect=<accountId>`` that connects passwordlessly.
     try {
-      await d.openAgentWindow(accountId);
+      await d.openAgentWindow(accountId, undefined, get().activeAccountId ?? undefined);
     } catch (e: any) {
       return { ok: false, error: humanizeLoginError(e?.message || String(e)) };
     }

@@ -325,10 +325,21 @@ export async function startNativeLoopback(
     if (agents.length === 0) {
       throw new LoginError('no agents registered in network');
     }
-    const chosen = selectAgentForConnection(agents, args.agent);
+    // A ticket is onboarding: retaining the historical coordinator-preferred
+    // default is intentional. A returning legacy row without ``agentHandle``
+    // is different. If the network now has multiple agents, choosing index 0
+    // would silently connect a row labelled for agent B to agent A.
+    const allowDefaultAgent = Boolean(args.ticket) || agents.length === 1;
+    const chosen = selectAgentForConnection(
+      agents,
+      args.agent,
+      { allowDefault: allowDefaultAgent },
+    );
     if (!chosen) {
       throw new LoginError(
-        args.expectedTarget
+        !args.agent && !allowDefaultAgent
+          ? 'multiple agents are available; enter the agent handle for this saved account'
+          : args.expectedTarget
           ? 'remembered credential agent is no longer available'
           : `requested agent ${JSON.stringify(args.agent)} is no longer available`,
       );

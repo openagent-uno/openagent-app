@@ -16,6 +16,7 @@ import { useConfirm } from './ConfirmDialog';
 import Button from './Button';
 import Input from './Input';
 import ThemedSwitch from './ThemedSwitch';
+import { accountAgentPresentation } from '../../common/account-target-recovery';
 import { colors, font, radius, spacing, tracking, glassSurface } from '../theme';
 
 export type AgentAccountPanelMode = 'connect' | 'open-window';
@@ -26,11 +27,6 @@ interface AgentAccountPanelProps {
   preferredAccountId?: string | null;
   onAttempt?: () => void;
   onComplete?: () => void;
-}
-
-export function extractAgentName(account: { name: string; handle: string }): string {
-  const parts = account.name.split(' — ');
-  return parts.length > 1 ? parts[parts.length - 1] : account.name;
 }
 
 /** Shared account-management surface used by both cold start and the
@@ -68,6 +64,7 @@ export default function AgentAccountPanel({
   const [signInId, setSignInId] = useState<string | null>(preferredAccountId ?? null);
   const [passwordId, setPasswordId] = useState<string | null>(null);
   const [password, setPassword] = useState('');
+  const [selectedAgentHandle, setSelectedAgentHandle] = useState('');
   const [ticket, setTicket] = useState('');
   const [handle, setHandle] = useState('');
   const [joinPassword, setJoinPassword] = useState('');
@@ -169,6 +166,8 @@ export default function AgentAccountPanel({
     setAdding(false);
     setSignInId(accountId);
     setPassword('');
+    const selectedAccount = accounts.find((account) => account.id === accountId);
+    setSelectedAgentHandle(selectedAccount?.agentHandle ?? '');
     setPasswordId(null);
     setRetryId(null);
     setLocalError(null);
@@ -211,6 +210,7 @@ export default function AgentAccountPanel({
         signInId,
         submittedPassword,
         credentialStorageAvailable && remember,
+        selectedAgentHandle.trim() || undefined,
       );
       setBusyId((current) => current === signInId ? null : current);
       if (result.ok) {
@@ -222,7 +222,12 @@ export default function AgentAccountPanel({
     }
 
     setAttempted(true);
-    await connectAccount(signInId, submittedPassword, credentialStorageAvailable && remember);
+    await connectAccount(
+      signInId,
+      submittedPassword,
+      credentialStorageAvailable && remember,
+      selectedAgentHandle.trim() || undefined,
+    );
     if (attemptToken !== uiAttempt.current) return;
     setBusyId((current) => current === signInId ? null : current);
   };
@@ -370,7 +375,8 @@ export default function AgentAccountPanel({
                 ) : accounts.map((account, index) => {
                   const active = account.id === activeAccountId && isConnected;
                   const selected = signInId === account.id;
-                  const label = extractAgentName(account);
+                  const presentation = accountAgentPresentation(account);
+                  const label = presentation.alias ?? presentation.primary;
                   const retrying = selected && retryId === account.id;
                   return (
                     <View key={account.id} style={[styles.rowWrap, index > 0 && styles.rowBorder]}>
@@ -388,7 +394,11 @@ export default function AgentAccountPanel({
                           </View>
                           <View style={styles.rowText}>
                             <Text style={styles.rowName} numberOfLines={1}>{label}</Text>
-                            <Text style={styles.rowSub} numberOfLines={1}>@{account.handle}</Text>
+                            <Text style={styles.rowSub} numberOfLines={1}>
+                              {presentation.verified
+                                ? `Target: ${presentation.primary} · @${account.handle}`
+                                : `Target not verified · @${account.handle}`}
+                            </Text>
                           </View>
                           {busyId === account.id ? (
                             <ActivityIndicator size="small" color={colors.accent} />
@@ -438,6 +448,18 @@ export default function AgentAccountPanel({
                         </Animated.View>
                       ) : selected && showPassword && !active ? (
                         <Animated.View style={[styles.passwordArea, animateStyle]}>
+                          {!account.agentHandle ? (
+                            <Input
+                              label="Agent handle"
+                              value={selectedAgentHandle}
+                              onChangeText={setSelectedAgentHandle}
+                              placeholder="Required when this network has multiple agents"
+                              autoCapitalize="none"
+                              autoCorrect={false}
+                              mono
+                              containerStyle={{ marginTop: 0, marginBottom: spacing.sm }}
+                            />
+                          ) : null}
                           <View style={styles.passwordRow}>
                             <Input
                               value={password}

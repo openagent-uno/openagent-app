@@ -32,6 +32,7 @@ import {
 import { createAccountStartCoordinator } from './account-start-coordinator';
 import { createAccountStopBarrier } from './account-stop-barrier';
 import { createLoopbackConsumerRegistry } from './loopback-consumer-registry';
+import { verifiedLoopbackTargetsEqual } from '../network/agent-window-routing.js';
 import { withDeadline } from './promise-deadline';
 
 interface LoopbackHandle {
@@ -76,18 +77,6 @@ function awaitLoopbackLifecycle<T>(operation: Promise<T>, label: string): Promis
 
 function claimLoopback(accountId: string, rendererId: number, attemptToken?: number): void {
   consumers.claim(accountId, rendererId, attemptToken);
-}
-
-function verifiedTargetsEqual(
-  actual: VerifiedLoopbackTarget,
-  expected: VerifiedLoopbackTarget,
-): boolean {
-  return actual.networkName === expected.networkName &&
-    actual.networkId === expected.networkId &&
-    actual.handle === expected.handle &&
-    actual.coordinatorNodeId === expected.coordinatorNodeId &&
-    actual.agentHandle === expected.agentHandle &&
-    actual.agentNodeId === expected.agentNodeId;
 }
 
 async function stopLoopbackIfUnclaimed(accountId: string): Promise<void> {
@@ -139,12 +128,31 @@ function observeRenderer(contents: WebContents): void {
 export function transferLoopbackAttempt(
   accountId: string,
   sourceRendererId: number,
-  attemptToken: number,
+  attemptToken: number | undefined,
   destination: WebContents,
 ): void {
   observeRenderer(destination);
   claimLoopback(accountId, destination.id);
   consumers.release(accountId, sourceRendererId, attemptToken);
+}
+
+/** Release a renderer's temporary reservation when an existing window already
+ * owns the same verified target. This also reaps the redundant loopback when
+ * nobody else claimed that account id. */
+export async function releaseLoopbackReservation(
+  accountId: string,
+  rendererId: number,
+  attemptToken?: number,
+): Promise<void> {
+  await releaseLoopbackClaim(accountId, rendererId, attemptToken);
+}
+
+/** Main-process-only target lookup used to deduplicate BrowserWindows. */
+export function getVerifiedLoopbackTarget(
+  accountId: string,
+): VerifiedLoopbackTarget | null {
+  const target = handles.get(accountId)?.loopback.verifiedTarget;
+  return target ? { ...target } : null;
 }
 
 /** Hard cap on the whole sidecar bring-up: iroh dial + SRP login +
@@ -244,7 +252,7 @@ export async function startLoopback(args: InternalStartLoopbackArgs): Promise<St
   if (existing) {
     if (
       args.expectedTarget &&
-      !verifiedTargetsEqual(existing.loopback.verifiedTarget, args.expectedTarget)
+      !verifiedLoopbackTargetsEqual(existing.loopback.verifiedTarget, args.expectedTarget)
     ) {
       throw new Error('remembered credential target does not match the running loopback');
     }

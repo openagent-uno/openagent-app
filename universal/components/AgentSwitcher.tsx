@@ -3,7 +3,8 @@ import { useState } from 'react';
 import { Modal, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { useConnection } from '../stores/connection';
-import AgentAccountPanel, { extractAgentName } from './AgentAccountPanel';
+import AgentAccountPanel from './AgentAccountPanel';
+import { accountAgentPresentation } from '../../common/account-target-recovery';
 import { colors, font, radius, spacing, tracking } from '../theme';
 
 type Variant = 'wordmark' | 'compact' | 'icon' | 'menu-row';
@@ -12,7 +13,14 @@ export default function AgentSwitcher({ variant }: { variant: Variant }) {
   const { accounts, activeAccountId, isConnected, isReconnecting, agentName } = useConnection();
   const [open, setOpen] = useState(false);
   const active = accounts.find((account) => account.id === activeAccountId);
-  const activeName = active ? extractAgentName(active) : (agentName || 'Not connected');
+  const activePresentation = active ? accountAgentPresentation(active) : null;
+  // Keep the compact trigger friendly (for example “Friday”). The account
+  // panel carries the coordinator-verified routing handle and labels it
+  // explicitly, so a saved custom name remains useful without being mistaken
+  // for the connection target.
+  const activeName = activePresentation
+    ? activePresentation.alias ?? activePresentation.primary
+    : (agentName || 'Not connected');
   const initial = activeName.slice(0, 1).toUpperCase();
   const isElectron = typeof window !== 'undefined' && (window as any).desktop?.isDesktop === true;
   const statusColor = isReconnecting

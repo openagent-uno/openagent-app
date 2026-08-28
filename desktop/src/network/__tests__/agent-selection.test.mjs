@@ -16,3 +16,17 @@ test('explicit reconnect is exact and never falls back to another agent', () => 
   assert.equal(selectAgentForConnection(agents, 'friday'), agents[1]);
   assert.equal(selectAgentForConnection(agents, 'renamed-or-removed'), undefined);
 });
+
+test('returning legacy account refuses an arbitrary default when multiple agents exist', () => {
+  assert.equal(
+    selectAgentForConnection(agents, undefined, { allowDefault: false }),
+    undefined,
+  );
+});
+
+test('returning legacy account may default when the coordinator exposes one agent', () => {
+  assert.equal(
+    selectAgentForConnection([agents[1]], undefined, { allowDefault: false }),
+    agents[1],
+  );
+});
