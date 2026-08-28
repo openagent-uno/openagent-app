@@ -1179,6 +1179,32 @@ function _openWebsocket(
   // ``onclose`` only logged + scheduled a 3 s reconnect. Now the WS
   // surfaces them through onClose so we clear the loading state.
   ws.onClose(async (info) => {
+    if (info.reason === 'replaced') {
+      // The gateway has already accepted a newer transport for this device.
+      // OpenAgentWS deliberately does not reconnect this superseded socket:
+      // doing so would evict the newer one and start a replacement loop.
+      // If this attempt is stale, the newer renderer-local WS owns the store
+      // and must remain untouched.  Otherwise expose a settled, manually
+      // retryable state without invalidating the remembered credential.
+      finalize();
+      if (!isCurrent()) return;
+      const replacementError = 'This connection was replaced by a newer OpenAgent client on this device.';
+      set({
+        ws: null,
+        config: null,
+        isConnected: false,
+        isConnecting: false,
+        isReconnecting: false,
+        isRestoringSession: false,
+        rememberedFailure: {
+          accountId,
+          kind: 'retryable',
+          error: replacementError,
+        },
+        error: replacementError,
+      });
+      return;
+    }
     if (info.reason === 'post_auth') {
       // Mid-session drop — the WS auto-reconnect kicks in; surface a
       // "Reconnecting…" hint so the user knows why their messages have

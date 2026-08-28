@@ -5,6 +5,7 @@
 
 import type { Attachment, ClientMessage, ServerMessage } from '../../common/types';
 import { attachmentsForSend } from '../../common/attachments';
+import { isConnectionReplacedClose } from '../../common/websocket-close';
 
 export type MessageHandler = (msg: ServerMessage) => void;
 
@@ -13,8 +14,9 @@ export type MessageHandler = (msg: ServerMessage) => void;
  *  "couldn't connect" failure. ``post_auth`` = transient drop in an
  *  already-authed session (auto-reconnect kicks in). ``retries_exhausted``
  *  = capped retry limit hit; the store should give up and surface the
- *  error to the user. */
-export type CloseReason = 'pre_auth' | 'post_auth' | 'retries_exhausted';
+ *  error to the user. ``replaced`` = a newer transport authenticated with the
+ *  same device identity, so this superseded socket must stay closed. */
+export type CloseReason = 'pre_auth' | 'post_auth' | 'retries_exhausted' | 'replaced';
 
 export type CloseHandler = (info: {
   reason: CloseReason;
@@ -113,6 +115,25 @@ export class OpenAgentWS {
       this.openedSessions.clear();
       this.authed = false;
 
+      // A fresh connection carrying this device certificate has already
+      // taken over on the gateway.  Reconnecting this old socket would evict
+      // the fresh one; the two instances would then replace each other every
+      // backoff interval forever.  Stop only this superseded OpenAgentWS.
+      // All normal/abnormal transport closes continue through the existing
+      // bounded reconnect policy below.
+      if (isConnectionReplacedClose(event.code, event.reason)) {
+        this.shouldReconnect = false;
+        if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+        this.pendingOut = [];
+        this.notifyClose({
+          reason: 'replaced',
+          code: event.code,
+          detail: event.reason || undefined,
+        });
+        return;
+      }
+
       // Pre-auth drop on the first connect attempt → surface to the
       // store immediately (prevents the indefinite-loading bug). We
       // still try a few reconnects in case the proxy is racing with us,
@@ -202,6 +223,16 @@ export class OpenAgentWS {
     t.onclose = (info: { code: number; reason: string }) => {
       this.openedSessions.clear();
       this.authed = false;
+      if (isConnectionReplacedClose(info.code, info.reason)) {
+        this.shouldReconnect = false;
+        this.pendingOut = [];
+        this.notifyClose({
+          reason: 'replaced',
+          code: info.code,
+          detail: info.reason || undefined,
+        });
+        return;
+      }
       this.notifyClose({
         reason: this.everAuthed ? 'post_auth' : 'pre_auth',
         code: info.code,
