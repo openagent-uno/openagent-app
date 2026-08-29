@@ -45,6 +45,19 @@ jobs:
         with:
           node-version: "22"
       - uses: dtolnay/rust-toolchain@stable
+      - name: Provision pinned OpenSSL for Windows ARM64
+        if: matrix.platform == 'win32-arm64'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $vcpkgRoot = Join-Path $env:RUNNER_TEMP 'openagent-vcpkg'
+          git clone --filter=blob:none --no-checkout https://github.com/microsoft/vcpkg.git $vcpkgRoot
+          git -C $vcpkgRoot checkout 114d9fe62faf35856b45cf55cb93b57028a45d63
+          & (Join-Path $vcpkgRoot 'bootstrap-vcpkg.bat') -disableMetrics
+          & (Join-Path $vcpkgRoot 'vcpkg.exe') install openssl:arm64-windows-static-md
+          "VCPKG_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "OPENSSL_DIR=$(Join-Path $vcpkgRoot 'installed\arm64-windows-static-md')" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "OPENSSL_STATIC=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Install Linux native dependencies
         if: runner.os == 'Linux'
         run: |
@@ -88,12 +101,12 @@ jobs:
           set -euo pipefail
           scripts/sign_macos_bundle.sh "dist/${{ matrix.platform }}"
           python scripts/build_standalone.py --manifest-only --expect-platform ${{ matrix.platform }}
-      - name: Verify catalogs and signed frozen runtime
+      - name: Verify catalogs and signed frozen runtime with runner TCC grants
         if: runner.os == 'macOS'
         working-directory: host-tools
         run: |
           python scripts/snapshot_sidecar_manifests.py "dist/${{ matrix.platform }}" --check
-          python scripts/smoke_bundle.py "dist/${{ matrix.platform }}" --computer-control expect-denied
+          python scripts/smoke_bundle.py "dist/${{ matrix.platform }}" --computer-control expect-granted
       - name: Verify catalogs and computer-control under Xvfb
         if: runner.os == 'Linux'
         working-directory: host-tools
