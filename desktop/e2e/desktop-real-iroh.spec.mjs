@@ -61,14 +61,17 @@ test('real Electron enrolls and executes client:filesystem over coordinator + Ga
     electronApp.process().stdout?.on('data', (chunk) => mainOutput.push(chunk.toString()));
     electronApp.process().stderr?.on('data', (chunk) => mainOutput.push(chunk.toString()));
 
-    // Preserve the production consent IPC and durable broker grant; replace
-    // only the physical click in Electron's native warning dialog.
-    await electronApp.evaluate(({ dialog }) => {
-      dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false });
-    });
     const page = await electronApp.firstWindow();
     await page.setViewportSize({ width: 1_440, height: 960 });
     await expect(page).toHaveURL(renderer.baseUrl + '/');
+
+    // Retain the first BrowserWindow before evaluating in Electron's main
+    // realm.  Cold macOS CI launches can otherwise collect the pending
+    // Playwright promise.  Preserve production consent IPC and replace only
+    // the physical click in the native warning dialog.
+    await electronApp.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false });
+    });
 
     const enabled = await page.evaluate(() => window.desktop.setCapabilityEnabled(true));
     expect(enabled.consent.enabled).toBe(true);
@@ -102,7 +105,9 @@ test('real Electron enrolls and executes client:filesystem over coordinator + Ga
     await composer.fill('desktop: write and read the Desktop Iroh sentinel');
     await composer.press('Enter');
     await expect(page.getByText('desktop file written', { exact: true }))
-      .toBeVisible({ timeout: 35_000 });
+      // A clean release runner pays the full first-turn MCP/provider startup
+      // cost; local developer environments usually have this state warm.
+      .toBeVisible({ timeout: 90_000 });
 
     await expect.poll(
       async () => readTextOrEmpty(harness.ready.target_path),

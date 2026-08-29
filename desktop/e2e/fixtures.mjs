@@ -367,6 +367,15 @@ export class DeterministicGateway {
       sendJson(response, { ok: true, fixture: 'deterministic-gateway' });
       return;
     }
+    if (url.pathname === '/api/capabilities') {
+      // This fixture deliberately exercises the released-client/legacy-server
+      // compatibility path.  An older Gateway has no unified-history
+      // capability route and answers 404; returning an invalid successful `{}`
+      // response would violate the wire contract and crash discovery before
+      // the legacy `/api/sessions` fallback can run.
+      sendJson(response, { error: 'unsupported by deterministic legacy fixture' }, 404);
+      return;
+    }
     if (url.pathname === '/api/sessions') {
       sendJson(response, {
         sessions: [{

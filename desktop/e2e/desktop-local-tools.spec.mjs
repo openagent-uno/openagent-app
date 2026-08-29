@@ -66,15 +66,18 @@ test('real Electron host executes local tools, reports its host, audits, and nev
     electronApp.process().stdout?.on('data', (chunk) => mainOutput.push(chunk.toString()));
     electronApp.process().stderr?.on('data', (chunk) => mainOutput.push(chunk.toString()));
 
-    // Exercise the production consent dialog path. Playwright replaces only
-    // the native human click, never the IPC handler or CapabilityManager.
-    await electronApp.evaluate(({ dialog }) => {
-      dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false });
-    });
-
     const page = await electronApp.firstWindow();
     await page.setViewportSize({ width: 1_440, height: 960 });
     await expect(page).toHaveURL(`${gateway.baseUrl}/settings`);
+
+    // Keep the Electron main realm alive before installing the native-dialog
+    // substitute.  On a cold CI launch, evaluating before the first window is
+    // retained can let Playwright collect the pending main-realm promise.
+    // Only the physical click is replaced; IPC and CapabilityManager remain
+    // the production implementations.
+    await electronApp.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false });
+    });
 
     const account = {
       id: accountId,
@@ -363,10 +366,10 @@ test('persistent consent survives Electron relaunch and an explicit local plugin
 
   try {
     electronApp = await launchDesktop();
+    let page = await electronApp.firstWindow();
     await electronApp.evaluate(({ dialog }) => {
       dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false });
     });
-    let page = await electronApp.firstWindow();
     await page.setViewportSize({ width: 1_440, height: 960 });
     await expect(page).toHaveURL(`${gateway.baseUrl}/settings`);
 
