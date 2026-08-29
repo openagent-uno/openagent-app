@@ -21,16 +21,16 @@ test('committed host-tools lock is the complete immutable public release index',
   const lock = JSON.parse(bytes.toString('utf8'));
   assert.equal(
     createHash('sha256').update(bytes).digest('hex'),
-    '9bbfd7a094c8d1b3238e8a580caba768af7d6b455f42a41f05dd9bfc8d7f727f',
+    '4e4d16c5276e6393f6171a5670a9551773df3044f983d33d78ec7c120d351a33',
   );
-  assert.equal(lock.source_commit, '660225c8e8bbf6488173d4e6d4d1b3ba04e8f194');
+  assert.equal(lock.source_commit, '78b31f872f30bc2a307360403857dfa58696e678');
   assert.deepEqual(Object.keys(lock.platforms).sort(), [
     'darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64',
     'win32-arm64', 'win32-x64',
   ]);
   assert.equal(
     lock.python_wheel.sha256,
-    '415f294201edacdf5b71d635df8e4f910f60b43d4c2afb92b8bfe29a11d20a84',
+    '74977320f43033fe18bf9bd58c710823886c0f348c94bb36766627b4037c2e88',
   );
 });
 
