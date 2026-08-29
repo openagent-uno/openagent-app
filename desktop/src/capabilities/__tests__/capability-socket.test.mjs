@@ -22,16 +22,17 @@ test('capability WS registers, executes once, chunks media, then returns result'
         if (frame.type === 'capability_hello') {
           assert.equal(frame.protocol, 'client-capabilities/1');
           assert.equal(frame.client_instance_id, 'instance-1');
+          assert.equal(frame.network_id, 'network-1');
           ws.send(JSON.stringify({
             type: 'capability_hello_ack', protocol: frame.protocol,
-            device_id: 'device-1', account_id: 'network-1',
+            device_id: 'device-1', account_id: 'network-1', network_id: 'network-1',
             client_instance_id: frame.client_instance_id,
             generation: frame.generation, accepted: true,
           }));
           ws.send(JSON.stringify({
             type: 'client_tool_call', call_id: 'call-1', generation: frame.generation,
             server: 'filesystem', tool: 'read_media_file', args: {}, session_id: null,
-            account_id: 'network-1',
+            account_id: 'network-1', network_id: 'network-1',
             idempotency_key: 'idem-1', deadline_ms: 5000,
             arguments_sha256: '0'.repeat(64),
           }));
@@ -240,6 +241,97 @@ test('ambiguous local-host loss closes capability transport without a determinat
       clientFrames.some((frame) => frame.type === 'client_tool_result'),
       false,
     );
+  } finally {
+    socket.stop();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('argument-specific read-only cancellation returns a result without dropping the socket', async () => {
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const address = server.address();
+  assert.equal(typeof address, 'object');
+
+  let completed = false;
+  const received = new Promise((resolve, reject) => {
+    server.on('connection', (ws) => {
+      ws.on('message', (raw) => {
+        const frame = JSON.parse(raw.toString());
+        if (frame.type === 'capability_hello') {
+          ws.send(JSON.stringify({
+            type: 'capability_hello_ack', protocol: frame.protocol,
+            device_id: 'device-dynamic-read', account_id: 'network-dynamic-read',
+            network_id: 'network-dynamic-read',
+            client_instance_id: frame.client_instance_id,
+            generation: frame.generation, accepted: true,
+          }));
+          ws.send(JSON.stringify({
+            type: 'client_tool_call', call_id: 'dynamic-read', generation: frame.generation,
+            server: 'computer-control', tool: 'computer',
+            args: { action: 'get_screenshot' }, session_id: null,
+            account_id: 'network-dynamic-read', network_id: 'network-dynamic-read',
+            idempotency_key: 'dynamic-read-idem', deadline_ms: 5000,
+            arguments_sha256: '0'.repeat(64),
+          }));
+          setTimeout(() => ws.send(JSON.stringify({
+            type: 'client_tool_cancel', call_id: 'dynamic-read',
+            generation: frame.generation, reason: 'test cancellation',
+          })), 25);
+        } else if (frame.type === 'client_tool_result') {
+          try {
+            assert.equal(frame.call_id, 'dynamic-read');
+            assert.equal(frame.error.code, 'cancelled');
+            assert.equal(ws.readyState, ws.OPEN);
+            completed = true;
+            resolve();
+          } catch (error) { reject(error); }
+        }
+      });
+      ws.on('close', () => {
+        if (!completed) reject(new Error('read-only cancellation dropped capability socket'));
+      });
+      ws.on('error', reject);
+    });
+  });
+
+  const socket = new CapabilitySocket({
+    accountId: 'account-dynamic-read',
+    trustedAccountId: 'network-dynamic-read',
+    trustedDeviceId: 'device-dynamic-read',
+    url: `ws://127.0.0.1:${address.port}/ws/capabilities`,
+    clientInstanceId: 'instance-dynamic-read',
+    deviceLabel: 'Dynamic Read Desktop',
+    reconnect: false,
+    getOffer: () => ({
+      generation: 1,
+      servers: [{
+        name: 'computer-control',
+        tools: [{
+          name: 'computer',
+          classification: 'mutating',
+          classification_by_argument: {
+            action: { get_screenshot: 'read_only' },
+          },
+        }],
+      }],
+    }),
+    invoke: async (_call, signal) => new Promise((_, reject) => {
+      signal.addEventListener('abort', () => reject(new CapabilityProtocolError(
+        'cancelled',
+        String(signal.reason || 'cancelled'),
+      )), { once: true });
+    }),
+  });
+  socket.start();
+  try {
+    await Promise.race([
+      received,
+      new Promise((_, reject) => setTimeout(
+        () => reject(new Error('dynamic cancellation timed out')),
+        3000,
+      )),
+    ]);
   } finally {
     socket.stop();
     await new Promise((resolve) => server.close(resolve));

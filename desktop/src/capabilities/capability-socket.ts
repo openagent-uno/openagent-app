@@ -163,6 +163,7 @@ export class CapabilitySocket {
         client_instance_id: this.options.clientInstanceId,
         generation: offer.generation,
         device_label: this.options.deviceLabel,
+        network_id: this.options.trustedAccountId,
         servers: offer.servers,
       });
     });
@@ -219,6 +220,8 @@ export class CapabilitySocket {
           frame.protocol !== CAPABILITY_PROTOCOL ||
           frame.device_id !== this.options.trustedDeviceId ||
           frame.account_id !== this.options.trustedAccountId ||
+          (frame.network_id !== undefined &&
+            frame.network_id !== this.options.trustedAccountId) ||
           frame.client_instance_id !== this.options.clientInstanceId ||
           frame.generation !== offer.generation ||
           !frame.accepted
@@ -278,10 +281,10 @@ export class CapabilitySocket {
       return;
     }
     const offer = this.options.getOffer();
-    const classification = offer.servers
+    const toolManifest = offer.servers
       .find((server) => server.name === call.server)
-      ?.tools.find((tool) => tool.name === call.tool)
-      ?.classification;
+      ?.tools.find((tool) => tool.name === call.tool);
+    const classification = classificationForArguments(toolManifest, call.args);
     const mutating = classification !== 'read_only' && classification !== 'idempotent';
     // account_id is supplied by the certified Gateway, but it is never used
     // to choose a local account or principal. The socket was already bound to
@@ -477,6 +480,22 @@ export class CapabilitySocket {
     this.active.clear();
     this.options.onActivity?.(0);
   }
+}
+
+function classificationForArguments(
+  tool: ClientCapabilityServer['tools'][number] | undefined,
+  args: Record<string, unknown>,
+): string | undefined {
+  let classification = tool?.classification;
+  for (const [argument, values] of Object.entries(
+    tool?.classification_by_argument ?? {},
+  )) {
+    const value = args[argument];
+    if (typeof value === 'string' && typeof values[value] === 'string') {
+      classification = values[value];
+    }
+  }
+  return classification;
 }
 
 function isAmbiguousHostTransportError(error: unknown): boolean {

@@ -62,7 +62,7 @@ test('manager keeps disabled targets offline, then binds exact instance and emer
           } catch (error) { reject(error); return; }
           ws.send(JSON.stringify({
             type: 'capability_hello_ack', protocol: frame.protocol,
-            device_id: 'device-manager', account_id: 'network-1',
+            device_id: 'device-manager', account_id: 'network-1', network_id: 'network-1',
             client_instance_id: frame.client_instance_id,
             generation: frame.generation, accepted: true,
           }));
@@ -70,7 +70,7 @@ test('manager keeps disabled targets offline, then binds exact instance and emer
             type: 'client_tool_call', call_id: 'manager-call', generation: frame.generation,
             server: 'filesystem', tool: 'echo',
             args: { value: 'from-host', emit_event: true },
-            account_id: 'network-1',
+            account_id: 'network-1', network_id: 'network-1',
             session_id: 'interactive-session', idempotency_key: 'manager-idem',
             arguments_sha256: '0'.repeat(64),
           }));

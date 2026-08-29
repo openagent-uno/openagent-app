@@ -479,6 +479,16 @@ export class CapabilityManager {
         `Tool ${call.server}.${call.tool} is not in this client's advertised catalog`,
       );
     }
+    const target = this.targets.get(accountId);
+    if (
+      call.network_id !== undefined &&
+      (!target || call.network_id !== target.networkId)
+    ) {
+      throw new CapabilityProtocolError(
+        'network_mismatch',
+        'Capability call network does not match its certified loopback',
+      );
+    }
     return this.host.call({
       callId: call.call_id,
       server: call.server,

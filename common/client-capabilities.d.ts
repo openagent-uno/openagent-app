@@ -12,7 +12,8 @@ export interface ClientCapabilityTool {
   name: string;
   description?: string;
   input_schema?: Record<string, unknown>;
-  classification?: string | Record<string, unknown>;
+  classification?: string;
+  classification_by_argument?: Record<string, Record<string, string>>;
 }
 
 export interface ClientCapabilityServer {
@@ -28,6 +29,8 @@ export interface CapabilityHello {
   client_instance_id: string;
   generation: number;
   device_label: string;
+  /** Certified network expected on this already-authenticated channel. */
+  network_id?: string;
   servers: ClientCapabilityServer[];
 }
 
@@ -37,6 +40,7 @@ export interface CapabilityHelloAck {
   device_id: string;
   /** Network identity derived by the Gateway from the device certificate. */
   account_id: string;
+  network_id?: string;
   client_instance_id: string;
   generation: number;
   accepted: boolean;
@@ -72,6 +76,7 @@ export interface ClientToolCall {
   session_id?: string | null;
   /** Certified network identity; informative only, never a local selector. */
   account_id: string;
+  network_id?: string;
   idempotency_key: string;
   arguments_sha256: string;
 }

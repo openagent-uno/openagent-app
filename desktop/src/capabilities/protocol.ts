@@ -112,6 +112,7 @@ export function parseCapabilityServerFrame(raw: string): CapabilityServerFrame {
       requireString(frame, 'protocol');
       requireString(frame, 'device_id');
       requireString(frame, 'account_id');
+      if (frame.network_id !== undefined) requireString(frame, 'network_id');
       requireString(frame, 'client_instance_id');
       requireGeneration(frame);
       if (typeof frame.accepted !== 'boolean') invalid('accepted must be a boolean');
@@ -133,6 +134,7 @@ export function parseCapabilityServerFrame(raw: string): CapabilityServerFrame {
       requireString(frame, 'server');
       requireString(frame, 'tool');
       requireString(frame, 'account_id');
+      if (frame.network_id !== undefined) requireString(frame, 'network_id');
       if (frame.session_id != null) requireString(frame, 'session_id');
       requireString(frame, 'idempotency_key');
       requireString(frame, 'arguments_sha256');
