@@ -17,6 +17,7 @@ import path from 'node:path';
 import * as asar from '@electron/asar';
 import yaml from 'js-yaml';
 import {
+  canonicalAsarEntry,
   expectedLinuxExecutableName,
   findLinuxPayloadExecutables,
   listTopLevelReleaseFiles,
@@ -77,7 +78,7 @@ function run(command, args, options = {}) {
 }
 
 function validateAsar(archive) {
-  const entries = new Set(asar.listPackage(archive));
+  const entries = new Set(asar.listPackage(archive).map(canonicalAsarEntry));
   assert(entries.has('/dist/main.js'), `${archive} has no bundled main entrypoint`);
   assert(entries.has('/dist/preload.js'), `${archive} has no bundled preload entrypoint`);
   assert(entries.has('/package.json'), `${archive} has no packaged manifest`);

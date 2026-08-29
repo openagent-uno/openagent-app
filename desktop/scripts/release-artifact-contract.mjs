@@ -54,6 +54,15 @@ export function findLinuxPayloadExecutables(root, expectedName) {
   return found.sort();
 }
 
+/** @electron/asar builds listPackage() entries with node:path, so Windows
+ * runners return backslash-delimited names while POSIX runners return forward
+ * slashes. Canonicalize only for archive-entry comparison; extraction retains
+ * the library's native path handling. */
+export function canonicalAsarEntry(entry) {
+  const normalized = String(entry).replaceAll('\\', '/');
+  return normalized.startsWith('/') ? normalized : `/${normalized}`;
+}
+
 /**
  * Verify an electron-builder blockmap that is embedded at the end of an
  * installer. AppImage update metadata exposes its compressed byte length as

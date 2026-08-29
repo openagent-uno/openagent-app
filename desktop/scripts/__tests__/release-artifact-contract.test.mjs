@@ -10,11 +10,18 @@ import zlib from 'node:zlib';
 import yaml from 'js-yaml';
 
 import {
+  canonicalAsarEntry,
   expectedLinuxExecutableName,
   findLinuxPayloadExecutables,
   listTopLevelReleaseFiles,
   verifyEmbeddedBlockMap,
 } from '../release-artifact-contract.mjs';
+
+test('ASAR entry comparison is invariant across Windows and POSIX separators', () => {
+  assert.equal(canonicalAsarEntry('\\dist\\main.js'), '/dist/main.js');
+  assert.equal(canonicalAsarEntry('/dist/main.js'), '/dist/main.js');
+  assert.equal(canonicalAsarEntry('package.json'), '/package.json');
+});
 
 test('release asset discovery excludes recursive unpacked executables', () => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openagent-release-files-'));
@@ -128,6 +135,28 @@ test('release workflow uses the PowerShell-safe long config option', () => {
   assert.doesNotMatch(workflow, /(?:^|\s)-c\.publish\.channel/);
   assert.match(workflow, /desktop\/release\/latest-linux-arm64\.yml/);
   assert.match(workflow, /desktop\/release\/beta-linux-arm64\.yml/);
+});
+
+test('pull requests package and launch Windows and Linux x64 before tagging', () => {
+  const workflow = yaml.load(fs.readFileSync(
+    path.resolve(import.meta.dirname, '..', '..', '..', '.github', 'workflows', 'test.yml'),
+    'utf8',
+  ));
+  const job = workflow.jobs['packaged-release-smoke'];
+  assert(job, 'Test workflow has no packaged-release-smoke job');
+  assert.equal(job.if, "github.event_name == 'pull_request'");
+  assert.deepEqual(
+    job.strategy.matrix.include.map((entry) => ({ os: entry.os, platform_key: entry.platform_key })),
+    [
+      { os: 'windows-2025', platform_key: 'win32-x64' },
+      { os: 'ubuntu-24.04', platform_key: 'linux-x64' },
+    ],
+  );
+  const commands = job.steps.map((step) => String(step.run || '')).join('\n');
+  assert.match(commands, /fetch-host-tools-release\.js \$\{\{ matrix\.platform_key \}\}/);
+  assert.match(commands, /--publish never/);
+  assert.match(commands, /test-packaged-artifacts\.mjs/);
+  assert(!job.steps.some((step) => String(step.uses || '').startsWith('actions/upload-artifact@')));
 });
 
 test('Linux ARM updater channel and metadata stay separate from Linux x64', () => {
