@@ -16,7 +16,12 @@ import os from 'node:os';
 import path from 'node:path';
 import * as asar from '@electron/asar';
 import yaml from 'js-yaml';
-import { verifyEmbeddedBlockMap } from './release-artifact-contract.mjs';
+import {
+  expectedLinuxExecutableName,
+  findLinuxPayloadExecutables,
+  listTopLevelReleaseFiles,
+  verifyEmbeddedBlockMap,
+} from './release-artifact-contract.mjs';
 import { verifyMacIconPng } from './verify-macos-icon.mjs';
 
 const desktopDir = path.resolve(import.meta.dirname, '..');
@@ -121,7 +126,7 @@ function validateMacIcon(appBundle, temporaryRoot) {
   );
 }
 
-const files = walk(releaseDir);
+const files = listTopLevelReleaseFiles(releaseDir);
 assert(files.length > 0, `No packaged files found in ${releaseDir}`);
 
 let extensions;
@@ -301,11 +306,13 @@ try {
     fs.mkdirSync(debRoot);
     run('dpkg-deb', ['--extract', debs[0], debRoot]);
     validatePayload(debRoot);
-    const executables = walk(debRoot).filter((file) => {
-      const name = path.basename(file).toLowerCase();
-      return name === 'openagent' && (fs.statSync(file).mode & 0o111) !== 0;
-    });
-    assert(executables.length > 0, 'Extracted deb has no OpenAgent executable');
+    const expectedExecutable = expectedLinuxExecutableName(pkg);
+    const executables = findLinuxPayloadExecutables(debRoot, expectedExecutable);
+    assert.equal(
+      executables.length,
+      1,
+      `Extracted deb has no unique ${expectedExecutable} executable`,
+    );
     smokeExecutable(executables[0]);
   }
 } finally {

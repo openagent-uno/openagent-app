@@ -9,7 +9,71 @@ import test from 'node:test';
 import zlib from 'node:zlib';
 import yaml from 'js-yaml';
 
-import { verifyEmbeddedBlockMap } from '../release-artifact-contract.mjs';
+import {
+  expectedLinuxExecutableName,
+  findLinuxPayloadExecutables,
+  listTopLevelReleaseFiles,
+  verifyEmbeddedBlockMap,
+} from '../release-artifact-contract.mjs';
+
+test('release asset discovery excludes recursive unpacked executables', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openagent-release-files-'));
+  try {
+    const installer = path.join(root, 'openagent-app-0.17.1-windows-x64.exe');
+    const metadata = path.join(root, 'latest.yml');
+    const unpacked = path.join(root, 'win-unpacked');
+    fs.mkdirSync(unpacked);
+    fs.writeFileSync(installer, 'installer');
+    fs.writeFileSync(metadata, 'version: 0.17.1\n');
+    fs.writeFileSync(path.join(unpacked, 'OpenAgent.exe'), 'payload');
+
+    assert.deepEqual(listTopLevelReleaseFiles(root), [metadata, installer].sort());
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Linux executable contract follows electron-builder package/config naming', () => {
+  assert.equal(
+    expectedLinuxExecutableName({ name: 'OpenAgent-Desktop', build: { linux: {} } }),
+    'openagent-desktop',
+  );
+  assert.equal(
+    expectedLinuxExecutableName({
+      name: 'openagent-desktop',
+      build: { executableName: 'global-name', linux: { executableName: 'openagent-local' } },
+    }),
+    'openagent-local',
+  );
+  assert.throws(
+    () => expectedLinuxExecutableName({ name: '../openagent' }),
+    /not an exact portable basename/,
+  );
+
+  const packageManifest = JSON.parse(fs.readFileSync(
+    path.resolve(import.meta.dirname, '..', '..', 'package.json'),
+    'utf8',
+  ));
+  assert.equal(expectedLinuxExecutableName(packageManifest), 'openagent-desktop');
+});
+
+test('Linux payload discovery accepts only the exact executable basename', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'openagent-linux-payload-'));
+  try {
+    const appDir = path.join(root, 'opt', 'OpenAgent');
+    fs.mkdirSync(appDir, { recursive: true });
+    const expected = path.join(appDir, 'openagent-desktop');
+    const obsolete = path.join(appDir, 'openagent');
+    const nonExecutable = path.join(root, 'openagent-desktop');
+    fs.writeFileSync(expected, 'payload', { mode: 0o755 });
+    fs.writeFileSync(obsolete, 'wrong payload', { mode: 0o755 });
+    fs.writeFileSync(nonExecutable, 'not executable', { mode: 0o644 });
+
+    assert.deepEqual(findLinuxPayloadExecutables(root, 'openagent-desktop'), [expected]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function embeddedBlockMapFixture(root) {
   const payload = Buffer.from('synthetic packaged application');
