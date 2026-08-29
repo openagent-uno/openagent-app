@@ -137,7 +137,7 @@ test('release workflow uses the PowerShell-safe long config option', () => {
   assert.match(workflow, /desktop\/release\/beta-linux-arm64\.yml/);
 });
 
-test('pull requests package and launch Windows and Linux x64 before tagging', () => {
+test('pull requests package and launch Windows x64/ARM64 and Linux x64 before tagging', () => {
   const workflow = yaml.load(fs.readFileSync(
     path.resolve(import.meta.dirname, '..', '..', '..', '.github', 'workflows', 'test.yml'),
     'utf8',
