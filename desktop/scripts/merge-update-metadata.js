@@ -20,7 +20,7 @@ if (fs.existsSync(outputDir) && fs.readdirSync(outputDir).length > 0) {
 
 const byName = new Map();
 for (const file of walk(artifactRoot)) {
-  if (!/^(?:latest|beta)(?:-(?:mac|linux))?\.ya?ml$/i.test(path.basename(file))) continue;
+  if (!/^(?:latest|beta)(?:-mac|-linux(?:-arm64)?)?\.ya?ml$/i.test(path.basename(file))) continue;
   const name = path.basename(file);
   const records = byName.get(name) || [];
   records.push({ file, value: yaml.load(fs.readFileSync(file, 'utf8')) });

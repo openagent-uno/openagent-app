@@ -134,7 +134,9 @@ if (targetPlatform === 'darwin') {
   metadataName = `${channel}.yml`;
 } else if (targetPlatform === 'linux') {
   extensions = ['.AppImage', '.deb'];
-  metadataName = `${channel}-linux.yml`;
+  metadataName = targetArch === 'arm64'
+    ? `${channel}-linux-arm64.yml`
+    : `${channel}-linux.yml`;
 } else {
   throw new Error(`Unsupported release platform: ${targetPlatform}`);
 }
@@ -201,7 +203,9 @@ const legacyEntry = metadata.files.find((entry) => entry.url === metadata.path);
 assert(legacyEntry, 'Legacy update path is not present in files[]');
 assert.equal(metadata.sha512, legacyEntry.sha512, 'Legacy update checksum mismatch');
 
-const wrongChannel = beta ? /^latest(?:-(?:mac|linux))?\.yml$/ : /^beta(?:-(?:mac|linux))?\.yml$/;
+const wrongChannel = beta
+  ? /^latest(?:-mac|-linux(?:-arm64)?)?\.yml$/
+  : /^beta(?:-mac|-linux(?:-arm64)?)?\.yml$/;
 assert(
   !files.some((file) => wrongChannel.test(path.basename(file))),
   `Found update metadata for the wrong ${beta ? 'stable' : 'beta'} channel`,

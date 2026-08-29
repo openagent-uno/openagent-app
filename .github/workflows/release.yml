@@ -163,9 +163,11 @@ jobs:
             desktop/release/latest.yml
             desktop/release/latest-mac.yml
             desktop/release/latest-linux.yml
+            desktop/release/latest-linux-arm64.yml
             desktop/release/beta.yml
             desktop/release/beta-mac.yml
             desktop/release/beta-linux.yml
+            desktop/release/beta-linux-arm64.yml
             desktop/release/*.blockmap
             desktop/release/*.sha256
             desktop/release/release-manifest-*.json

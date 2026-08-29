@@ -92,6 +92,7 @@ const expectedMetadata = new Set([
   `${channel}-mac.yml`,
   `${channel}.yml`,
   `${channel}-linux.yml`,
+  `${channel}-linux-arm64.yml`,
 ]);
 assert.deepEqual(
   actualAssets.filter((name) => name.endsWith('.yml')).sort(),
@@ -119,17 +120,20 @@ for (const metadataName of expectedMetadata) {
         `openagent-app-${version}-macos-x64.dmg`,
         `openagent-app-${version}-macos-x64.zip`,
       ]
-    : metadataName.endsWith('-linux.yml')
+    : metadataName.endsWith('-linux-arm64.yml')
       ? [
           `openagent-app-${version}-linux-arm64.deb`,
           `openagent-app-${version}-linux-arm64.AppImage`,
-          `openagent-app-${version}-linux-amd64.deb`,
-          `openagent-app-${version}-linux-x86_64.AppImage`,
         ]
-      : [
-          `openagent-app-${version}-windows-arm64.exe`,
-          `openagent-app-${version}-windows-x64.exe`,
-        ];
+      : metadataName.endsWith('-linux.yml')
+        ? [
+            `openagent-app-${version}-linux-amd64.deb`,
+            `openagent-app-${version}-linux-x86_64.AppImage`,
+          ]
+        : [
+            `openagent-app-${version}-windows-arm64.exe`,
+            `openagent-app-${version}-windows-x64.exe`,
+          ];
   const urls = metadata.files.map((entry) => entry.url);
   assert.equal(new Set(urls).size, urls.length, `${metadataName} has duplicate URLs`);
   assert.deepEqual([...urls].sort(), [...expectedUrls].sort(), `${metadataName} URL set is not exact`);
@@ -147,9 +151,11 @@ for (const metadataName of expectedMetadata) {
   }
   const expectedLegacyPath = metadataName.endsWith('-mac.yml')
     ? `openagent-app-${version}-macos-x64.zip`
-    : metadataName.endsWith('-linux.yml')
-      ? `openagent-app-${version}-linux-x86_64.AppImage`
-      : `openagent-app-${version}-windows-x64.exe`;
+    : metadataName.endsWith('-linux-arm64.yml')
+      ? `openagent-app-${version}-linux-arm64.AppImage`
+      : metadataName.endsWith('-linux.yml')
+        ? `openagent-app-${version}-linux-x86_64.AppImage`
+        : `openagent-app-${version}-windows-x64.exe`;
   assert.equal(metadata.path, expectedLegacyPath, `${metadataName} legacy path mismatch`);
   const legacyEntry = metadata.files.find((entry) => entry.url === metadata.path);
   assert(legacyEntry, `${metadataName} legacy path is absent from files[]`);
