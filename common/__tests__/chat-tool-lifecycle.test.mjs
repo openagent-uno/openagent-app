@@ -43,7 +43,7 @@ const bundle = await build({
 });
 
 const bundledSource = bundle.outputFiles[0].text;
-const { appendOrPatchTool } = await import(
+const { appendOrPatchTool, preserveToolMetadataAcrossReplay } = await import(
   `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
 );
 
@@ -85,4 +85,65 @@ test('a sparse terminal frame preserves execution host from the started frame', 
   assert.equal(patched[0].toolInfo.result, 'written');
   assert.equal(patched[0].toolInfo.status, 'success');
   assert.equal(messages[0].toolInfo.result, undefined);
+});
+
+test('a reconnect replay cannot erase execution host from an observed tool call', () => {
+  const executionHost = {
+    kind: 'client',
+    device_label: 'Alessandro MacBook',
+    device_id: 'device-1',
+    client_instance_id: 'desktop-1',
+    generation: 7,
+  };
+  const previous = [
+    {
+      id: 'user-live',
+      role: 'user',
+      text: 'write the file',
+      timestamp: 1,
+    },
+    {
+      id: 'tool-live',
+      role: 'tool',
+      text: 'Writing file',
+      timestamp: 2,
+      toolInfo: {
+        tool_name: 'filesystem_write_file',
+        tool_call_id: 'call-1',
+        tool_args: { path: '/tmp/client-only.txt' },
+        execution_host: executionHost,
+      },
+    },
+  ];
+  const replay = [
+    {
+      id: 'user-replay',
+      role: 'user',
+      text: 'write the file',
+      timestamp: 3,
+    },
+    {
+      id: 'tool-replay',
+      role: 'tool',
+      text: 'File written',
+      timestamp: 4,
+      toolInfo: {
+        tool_name: 'filesystem_write_file',
+        tool_call_id: 'call-1',
+        result: 'written',
+      },
+    },
+  ];
+
+  const merged = preserveToolMetadataAcrossReplay(
+    previous,
+    replay,
+    { preserveMessageIds: true },
+  );
+
+  assert.equal(merged[1].id, 'tool-live');
+  assert.deepEqual(merged[1].toolInfo.execution_host, executionHost);
+  assert.deepEqual(merged[1].toolInfo.tool_args, previous[1].toolInfo.tool_args);
+  assert.equal(merged[1].toolInfo.result, 'written');
+  assert.equal(replay[1].toolInfo.execution_host, undefined);
 });

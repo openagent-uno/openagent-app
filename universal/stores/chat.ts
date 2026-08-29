@@ -98,16 +98,24 @@ function transcriptPatch(
   previous: readonly ChatMessage[],
 ): Pick<ChatSession, 'messages' | 'messageWindow'> {
   if (loaded.kind === 'legacy') {
-    return { messages: loaded.messages, messageWindow: undefined };
+    return {
+      messages: preserveToolMetadataAcrossReplay([...previous], loaded.messages),
+      messageWindow: undefined,
+    };
   }
   const priorById = new Map(previous.map((message) => [message.id, message]));
-  const messages = loaded.page.messages.map((wire) => {
+  const projected = loaded.page.messages.map((wire) => {
     const message = canonicalMessageToChat(wire);
     const prior = priorById.get(message.id);
     return prior?.toolInfo && !message.toolInfo
       ? { ...message, toolInfo: prior.toolInfo }
       : message;
   });
+  // Live optimistic rows use local ids while canonical transcript rows use
+  // durable database ids.  Merge the same call by tool_call_id as well, or a
+  // post-turn reconcile can erase the trusted execution host even though the
+  // user just observed it on the live frame.
+  const messages = preserveToolMetadataAcrossReplay([...previous], projected);
   return {
     messages,
     messageWindow: {
@@ -373,6 +381,60 @@ export function appendOrPatchTool(messages: ChatMessage[], toolInfo: ToolInfo): 
     toolInfo,
   });
   return msgs;
+}
+
+/**
+ * A reconnect snapshot is authoritative for ordering and current values, but
+ * older servers and in-flight channel buffers can carry a deliberately sparse
+ * terminal tool frame.  Retain trusted metadata already observed on the live
+ * frame (most importantly execution_host) while letting every replayed field
+ * win.  Match exact call identities first; only use the tool name when the
+ * replay itself has no stronger identifier.
+ */
+export function preserveToolMetadataAcrossReplay(
+  previous: ChatMessage[],
+  replay: ChatMessage[],
+  options: { preserveMessageIds?: boolean } = {},
+): ChatMessage[] {
+  const claimed = new Set<number>();
+
+  return replay.map((message) => {
+    const incoming = message.toolInfo;
+    if (!incoming) return message;
+
+    let match = -1;
+    for (let i = 0; i < previous.length; i += 1) {
+      if (claimed.has(i)) continue;
+      const prior = previous[i].toolInfo;
+      if (!prior) continue;
+      if (incoming.tool_call_id) {
+        if (prior.tool_call_id === incoming.tool_call_id) {
+          match = i;
+          break;
+        }
+        continue;
+      }
+      if (incoming.child_session_id) {
+        if (prior.child_session_id === incoming.child_session_id) {
+          match = i;
+          break;
+        }
+        continue;
+      }
+      if (prior.tool_name === incoming.tool_name) {
+        match = i;
+        break;
+      }
+    }
+
+    if (match < 0) return message;
+    claimed.add(match);
+    return {
+      ...message,
+      ...(options.preserveMessageIds ? { id: previous[match].id } : {}),
+      toolInfo: { ...previous[match].toolInfo!, ...incoming },
+    };
+  });
 }
 
 function liveMessagesFromFrames(
@@ -1062,7 +1124,7 @@ export const useChat = create<ChatState>((set, get) => ({
             shouldReconcile = true;
             return clearLiveFlags(ses, contextReport);
           }
-          const liveMessages = live.messages;
+          let liveMessages = live.messages;
           let messages = ses.messages;
           if (liveMessages.length > 0) {
             let replaceFrom = -1;
@@ -1073,6 +1135,12 @@ export const useChat = create<ChatState>((set, get) => ({
               }
             }
             const prefix = replaceFrom >= 0 ? messages.slice(0, replaceFrom) : messages;
+            const previousLive = replaceFrom >= 0 ? messages.slice(replaceFrom) : messages;
+            liveMessages = preserveToolMetadataAcrossReplay(
+              previousLive,
+              liveMessages,
+              { preserveMessageIds: true },
+            );
             messages = [...prefix, ...liveMessages];
           }
           return {
