@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const stageScript = path.join(desktop, 'scripts', 'stage-host-tools.js');
 const fetchScript = path.join(desktop, 'scripts', 'fetch-host-tools-release.js');
+const mergeMetadataScript = path.join(desktop, 'scripts', 'merge-update-metadata.js');
 const require = createRequire(import.meta.url);
 const tar = require('tar');
 
@@ -70,6 +71,61 @@ test('release matrix selects exactly one architecture per packaged host bundle',
   }
   assert.match(workflow, /arch_flag: --arm64/);
   assert.match(workflow, /arch_flag: --x64/);
+  assert.doesNotMatch(workflow, /merge-multiple:\s*true/);
+  assert.match(workflow, /merge-update-metadata\.js/);
+});
+
+test('release metadata merger preserves both architecture-specific updater files', () => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'openagent-update-metadata-'));
+  try {
+    const root = path.join(temporary, 'artifacts');
+    const output = path.join(root, 'release-metadata');
+    const arm = path.join(root, 'desktop-darwin-arm64');
+    const x64 = path.join(root, 'desktop-darwin-x64');
+    fs.mkdirSync(arm, { recursive: true });
+    fs.mkdirSync(x64, { recursive: true });
+    fs.writeFileSync(path.join(arm, 'latest-mac.yml'), [
+      'version: 0.16.0',
+      'files:',
+      '  - url: openagent-app-0.16.0-macos-arm64.zip',
+      '    sha512: arm-digest',
+      'path: openagent-app-0.16.0-macos-arm64.zip',
+      'sha512: arm-digest',
+      'releaseDate: 2026-08-29T03:00:00.000Z',
+      '',
+    ].join('\n'));
+    fs.writeFileSync(path.join(x64, 'latest-mac.yml'), [
+      'version: 0.16.0',
+      'files:',
+      '  - url: openagent-app-0.16.0-macos-x64.zip',
+      '    sha512: x64-digest',
+      'path: openagent-app-0.16.0-macos-x64.zip',
+      'sha512: x64-digest',
+      'releaseDate: 2026-08-29T03:00:01.000Z',
+      '',
+    ].join('\n'));
+
+    const merged = spawnSync(process.execPath, [mergeMetadataScript, root, output], {
+      cwd: desktop,
+      encoding: 'utf8',
+    });
+    assert.equal(merged.status, 0, merged.stderr || merged.stdout);
+    const result = require('js-yaml').load(
+      fs.readFileSync(path.join(output, 'latest-mac.yml'), 'utf8'),
+    );
+    assert.equal(result.version, '0.16.0');
+    assert.equal(result.path, 'openagent-app-0.16.0-macos-x64.zip');
+    assert.equal(String(result.releaseDate), '2026-08-29T03:00:01.000Z');
+    assert.deepEqual(
+      result.files.map((file) => file.url).sort(),
+      [
+        'openagent-app-0.16.0-macos-arm64.zip',
+        'openagent-app-0.16.0-macos-x64.zip',
+      ],
+    );
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
 });
 
 test('release staging verifies the complete consumer-pinned bundle', () => {

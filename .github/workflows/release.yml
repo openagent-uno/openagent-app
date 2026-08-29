@@ -131,10 +131,20 @@ jobs:
     if: always() && needs.desktop.result == 'success'
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install metadata merger dependency
+        working-directory: desktop
+        run: npm ci
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-          merge-multiple: true
+      - name: Merge per-architecture updater metadata without overwrites
+        run: node desktop/scripts/merge-update-metadata.js artifacts artifacts/release-metadata
       - name: List artifacts
         run: find artifacts -type f | head -40
       - name: Create GitHub Release
@@ -146,6 +156,6 @@ jobs:
             artifacts/**/*.exe
             artifacts/**/*.AppImage
             artifacts/**/*.deb
-            artifacts/**/*.yml
-            artifacts/**/*.yaml
+            artifacts/release-metadata/*.yml
+            artifacts/release-metadata/*.yaml
           generate_release_notes: true
