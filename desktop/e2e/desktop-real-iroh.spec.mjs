@@ -128,6 +128,16 @@ test('real Electron enrolls and executes client:filesystem over coordinator + Ga
     expect(transcript).toContain('desktop-sentinel');
     expect(transcript).toContain('execution_host');
     expect(transcript).toContain(clientInstanceId);
+    // The runtime may append a separate summarization model call after the
+    // agent loop. Select the latest request that actually contains both tool
+    // results instead of assuming the final provider request is the turn.
+    const toolResults = [...evidence].reverse()
+      .map((call) => (call?.messages || []).filter((message) => message?.role === 'tool'))
+      .find((messages) => messages.length >= 2) || [];
+    expect(toolResults).toHaveLength(2);
+    const readResult = JSON.stringify(toolResults.at(-1)?.content);
+    expect(readResult).toContain('desktop-sentinel');
+    expect(readResult).not.toMatch(/"isError"\s*:\s*true/i);
     const enrolledNetworks = await readFile(
       join(clientHome, '.openagent', 'user', 'networks.toml'),
       'utf8',
@@ -324,31 +334,32 @@ async function waitForModelEvidence(path, minimumCalls) {
 }
 
 async function listOwnedBrokerPids(hostBinary, hostHome) {
+  const marker = (await readTextOrEmpty(join(hostHome, 'host-tools', 'broker.pid'))).trim();
+  const ownerPid = Number(marker);
+  if (!Number.isSafeInteger(ownerPid) || ownerPid <= 0) return new Set();
+
   if (process.platform === 'win32') {
     const escapedBinary = hostBinary.replaceAll("'", "''");
-    const escapedHome = hostHome.replaceAll("'", "''");
     const script = [
-      '$items = Get-CimInstance Win32_Process',
+      `$item = Get-CimInstance Win32_Process -Filter "ProcessId = ${ownerPid}"`,
       `$bin = [Regex]::Escape('${escapedBinary}')`,
-      `$home = [Regex]::Escape('${escapedHome}')`,
-      '$pids = @($items | Where-Object { $_.CommandLine -match $bin -and $_.CommandLine -match "--broker" -and $_.CommandLine -match $home } | ForEach-Object { $_.ProcessId })',
+      '$pids = @($item | Where-Object { $_.CommandLine -match $bin -and $_.CommandLine -match "--broker" } | ForEach-Object { $_.ProcessId })',
       '$pids | ConvertTo-Json -Compress',
     ].join('; ');
     const output = await runProcess('powershell', ['-NoProfile', '-Command', script]);
     const parsed = output.trim() ? JSON.parse(output) : [];
     return new Set((Array.isArray(parsed) ? parsed : [parsed]).map(Number));
   }
-  const output = await runProcess('ps', ['eww', '-axo', 'pid=,command=']);
-  const homeMarker = `OPENAGENT_HOST_TOOLS_HOME=${hostHome}`;
-  return new Set(output.split(/\r?\n/).flatMap((line) => {
-    const match = line.match(/^\s*(\d+)\s+(.+)$/);
-    if (!match) return [];
-    const command = match[2];
-    const isBroker = command.includes(hostBinary) || command.includes('openagent_host_tools');
-    return isBroker && /(?:^|\s)--broker(?:\s|$)/.test(command) && command.includes(homeMarker)
-      ? [Number(match[1])]
-      : [];
-  }));
+  let command;
+  try {
+    command = await runProcess('ps', ['-p', String(ownerPid), '-o', 'command=']);
+  } catch {
+    return new Set();
+  }
+  const isBroker = command.includes(hostBinary) || command.includes('openagent_host_tools');
+  return isBroker && /(?:^|\s)--broker(?:\s|$)/.test(command)
+    ? new Set([ownerPid])
+    : new Set();
 }
 
 async function stopNewOwnedBrokerPids(hostBinary, hostHome, before) {
