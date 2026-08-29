@@ -47,6 +47,31 @@ test('macOS packaging preserves and re-verifies upstream host-tool signatures', 
   assert.match(hook, /com\.openagent\.computer-control/);
 });
 
+test('release matrix selects exactly one architecture per packaged host bundle', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(desktop, 'package.json'), 'utf8'));
+  for (const platform of ['mac', 'win', 'linux']) {
+    for (const target of pkg.build[platform].target) {
+      assert.equal(
+        Object.hasOwn(target, 'arch'),
+        false,
+        `${platform}/${target.target} must inherit the single CI --arm64/--x64 flag`,
+      );
+    }
+  }
+  const workflow = fs.readFileSync(
+    path.resolve(desktop, '..', '.github', 'workflows', 'release.yml'),
+    'utf8',
+  );
+  for (const platformKey of [
+    'darwin-arm64', 'darwin-x64', 'win32-arm64',
+    'win32-x64', 'linux-arm64', 'linux-x64',
+  ]) {
+    assert.match(workflow, new RegExp(`platform_key: ${platformKey}`));
+  }
+  assert.match(workflow, /arch_flag: --arm64/);
+  assert.match(workflow, /arch_flag: --x64/);
+});
+
 test('release staging verifies the complete consumer-pinned bundle', () => {
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'openagent-host-stage-'));
   try {
