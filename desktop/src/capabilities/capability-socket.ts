@@ -486,16 +486,27 @@ function classificationForArguments(
   tool: ClientCapabilityServer['tools'][number] | undefined,
   args: Record<string, unknown>,
 ): string | undefined {
-  let classification = tool?.classification;
+  const matches: string[] = [];
   for (const [argument, values] of Object.entries(
     tool?.classification_by_argument ?? {},
   )) {
     const value = args[argument];
     if (typeof value === 'string' && typeof values[value] === 'string') {
-      classification = values[value];
+      matches.push(values[value]);
     }
   }
-  return classification;
+  if (!matches.length) return tool?.classification;
+  const risk: Record<string, number> = {
+    read_only: 0,
+    idempotent: 1,
+    mutating: 2,
+  };
+  return matches.reduce((mostRestrictive, candidate) =>
+    (risk[candidate] ?? risk.mutating) >
+    (risk[mostRestrictive] ?? risk.mutating)
+      ? candidate
+      : mostRestrictive,
+  );
 }
 
 function isAmbiguousHostTransportError(error: unknown): boolean {
