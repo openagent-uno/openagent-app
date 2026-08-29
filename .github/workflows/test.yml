@@ -65,7 +65,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: openagent-uno/openagent-server
-          ref: c4fe793e0cc686eabaa8a5828e2559d777a32750
+          ref: 45751921827960b2db7d087d05c28e1e6e723f7a
           path: .e2e-deps/openagent-server
           persist-credentials: false
 

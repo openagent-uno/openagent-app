@@ -41,7 +41,7 @@ test('CI gates Desktop client tools over the exact real-Iroh server twice', () =
   );
   assert.match(workflow, /desktop-real-iroh-e2e:/);
   assert.match(workflow, /repository: openagent-uno\/openagent-server/);
-  assert.match(workflow, /ref: c4fe793e0cc686eabaa8a5828e2559d777a32750/);
+  assert.match(workflow, /ref: 45751921827960b2db7d087d05c28e1e6e723f7a/);
   assert.match(workflow, /cmp desktop\/host-tools\.lock\.json \.e2e-deps\/openagent-server\/host-tools\.lock\.json/);
   assert.match(workflow, /OPENAGENT_REAL_DESKTOP_SERVER_ROOT:/);
   assert.match(workflow, /OPENAGENT_REAL_DESKTOP_PYTHON:/);
