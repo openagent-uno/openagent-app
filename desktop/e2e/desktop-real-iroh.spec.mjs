@@ -76,7 +76,7 @@ test('real Electron enrolls and executes client:filesystem over coordinator + Ga
     // Drive the actual onboarding UI. Electron's main process creates its own
     // device identity, redeems the one-use invitation through coordinator
     // SRP, pins the returned certificate, and opens the native TS Iroh proxy.
-    await page.getByPlaceholder('oa1abcdef… (paste from `openagent invite`)')
+    await page.getByPlaceholder('oa1abcdef… (from `openagent invite`)')
       .fill(harness.ready.ticket);
     await page.getByPlaceholder('alice').fill(harness.ready.handle);
     const password = page.locator('input[type="password"]');
