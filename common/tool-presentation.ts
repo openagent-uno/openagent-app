@@ -1,4 +1,4 @@
-import type { ToolInfo } from './types.ts';
+import { toolPhase, type ToolInfo } from './types.ts';
 import type {
   SafeJsonValue,
   ToolInvocationDetail,
@@ -8,6 +8,34 @@ import type {
 const MAX_RESULT_PREVIEW_CHARS = 12_000;
 const MAX_LEGACY_TOOL_JSON_CHARS = 64_000;
 const MAX_FALLBACK_LABEL_CHARS = 120;
+
+/** React identity for a tool row across live-to-canonical reconciliation.
+ * The durable message id legitimately changes when the database row lands,
+ * but the runtime call id does not. Keeping the component key on that call id
+ * prevents transient card UI (for example the expanded host details) from
+ * being reset by the reconciliation remount. */
+export function toolMessageRenderKey(
+  messageId: string,
+  toolInfo?: ToolInfo,
+  toolInvocationId?: string,
+): string {
+  const identity = toolInfo?.tool_call_id
+    || toolInfo?.child_session_id
+    || toolInfo?.tool_invocation_id
+    || toolInvocationId;
+  return identity ? `tool:${identity}` : messageId;
+}
+
+/** Whether the compact card has a useful expandable body. Canonical history
+ * deliberately omits args/results, but the trusted execution host remains a
+ * first-class detail and must still be inspectable. */
+export function toolCardHasExpandableDetails(info: ToolInfo): boolean {
+  const hasArgs = !!(info.tool_args && Object.keys(info.tool_args).length > 0);
+  const isError = toolPhase(info) === 'error';
+  const hasError = isError && typeof info.result === 'string' && info.result.length > 0;
+  const hasResult = !isError && info.result != null && info.result !== '';
+  return hasArgs || hasResult || hasError || !!info.execution_host;
+}
 
 function safeJsonText(value: SafeJsonValue | undefined): string | undefined {
   if (value == null) return undefined;

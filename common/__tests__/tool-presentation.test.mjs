@@ -5,8 +5,10 @@ import { effectiveTool, isMemoryTool, runLaunchTarget, toolPhase } from '../type
 import {
   compactToolFallback,
   legacyToolInfoFromText,
+  toolCardHasExpandableDetails,
   toolInfoFromInvocationDetail,
   toolInfoFromSummary,
+  toolMessageRenderKey,
 } from '../tool-presentation.ts';
 
 test('compact transcript summary becomes a completed collapsed-card model without result JSON', () => {
@@ -29,6 +31,47 @@ test('compact transcript summary becomes a completed collapsed-card model withou
   assert.equal(info.tool_call_id, 'call-1');
   assert.equal(info.tool_server, 'builtin');
   assert.equal(info.server, 'builtin');
+});
+
+test('live and canonical tool rows keep one React identity across reconciliation', () => {
+  const live = {
+    tool_name: 'filesystem_write_file',
+    tool_call_id: 'call-stable',
+    tool_args: { path: '/tmp/example' },
+  };
+  const canonical = toolInfoFromSummary({
+    id: 'invocation-durable',
+    tool_call_id: 'call-stable',
+    tool_name: 'filesystem_write_file',
+    status: 'success',
+  });
+
+  assert.ok(canonical);
+  assert.equal(
+    toolMessageRenderKey('message-live', live),
+    toolMessageRenderKey('message-durable', canonical, 'invocation-durable'),
+  );
+  assert.equal(toolMessageRenderKey('message-only'), 'message-only');
+});
+
+test('redacted canonical tool card remains expandable for execution host details', () => {
+  const info = toolInfoFromSummary({
+    id: 'tool-hosted',
+    tool_call_id: 'call-hosted',
+    tool_name: 'filesystem_write_file',
+    status: 'success',
+  });
+  assert.ok(info);
+  assert.equal(toolCardHasExpandableDetails(info), false);
+
+  info.execution_host = {
+    kind: 'client',
+    device_label: 'Desktop runner',
+    device_id: 'device-1',
+    client_instance_id: 'desktop-1',
+    generation: 1,
+  };
+  assert.equal(toolCardHasExpandableDetails(info), true);
 });
 
 test('summary preserves child run and session links used by specialized cards', () => {

@@ -34,7 +34,12 @@ import {
 } from '../../common/types';
 import type { MessagePart } from '../../common/ui-views';
 import { attachmentKey } from '../../common/attachments';
-import { compactToolFallback, legacyToolInfoFromText } from '../../common/tool-presentation';
+import {
+  compactToolFallback,
+  legacyToolInfoFromText,
+  toolCardHasExpandableDetails,
+  toolMessageRenderKey,
+} from '../../common/tool-presentation';
 import AttachmentBlock from './Attachments';
 import Markdown from './Markdown';
 import DelegationCard from './DelegationCard';
@@ -159,14 +164,17 @@ function MessageListBase({
   }, [visible]);
   const renderMessage = (msg: ChatMessage) => {
     const isAnchor = msg.id === resolvedAnchorMessageId;
+    const renderKey = msg.role === 'tool'
+      ? toolMessageRenderKey(msg.id, msg.toolInfo, msg.toolInvocationId)
+      : msg.id;
     const wrap = (node: ReactNode) => {
       // Search highlighting needs one measurable wrapper, but wrapping every
       // ordinary row changed the stable chat layout and web DOM. Keep normal
       // messages structurally identical to main.
-      if (!isAnchor) return <Fragment key={msg.id}>{node}</Fragment>;
+      if (!isAnchor) return <Fragment key={renderKey}>{node}</Fragment>;
       return (
         <View
-          key={msg.id}
+          key={renderKey}
           nativeID={`message-anchor-${encodeURIComponent(msg.id)}`}
           style={styles.anchorMessage}
           onLayout={onAnchorLayout
@@ -630,7 +638,7 @@ const ToolCard = memo(function ToolCard({
     : executionHost?.kind === 'server' ? executionHost.device_label || 'OpenAgent server' : null;
   const hasArgs = !!(info.tool_args && Object.keys(info.tool_args).length > 0);
   const hasResult = !isError && info.result != null && info.result !== '';
-  const canExpand = hasArgs || hasResult || !!errorText;
+  const canExpand = toolCardHasExpandableDetails(info);
 
   return (
     <TouchableOpacity
