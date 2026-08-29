@@ -52,7 +52,8 @@ jobs:
           sudo apt-get install -y \
             libxdo-dev libx11-dev libxtst-dev libxi-dev libxrandr-dev \
             libwayland-dev libxkbcommon-dev libpipewire-0.3-dev libdbus-1-dev \
-            libegl1-mesa-dev libgl1-mesa-dev libgbm-dev pkg-config
+            libegl1-mesa-dev libgl1-mesa-dev libgbm-dev pkg-config \
+            xvfb xauth
       - name: Verify immutable source identity
         working-directory: host-tools
         shell: bash
@@ -92,16 +93,32 @@ jobs:
         working-directory: host-tools
         run: |
           python scripts/snapshot_sidecar_manifests.py "dist/${{ matrix.platform }}" --check
-          python scripts/smoke_bundle.py "dist/${{ matrix.platform }}"
+          python scripts/smoke_bundle.py "dist/${{ matrix.platform }}" --computer-control expect-denied
+      - name: Verify catalogs and computer-control under Xvfb
+        if: runner.os == 'Linux'
+        working-directory: host-tools
+        shell: bash
+        run: |
+          python scripts/snapshot_sidecar_manifests.py "dist/${{ matrix.platform }}" --check
+          xvfb-run -a -s '-screen 0 1280x1024x24' \
+            python scripts/smoke_bundle.py "dist/${{ matrix.platform }}" \
+            --core-only --computer-control expect-granted
       - name: Verify catalogs and frozen core runtime
-        if: runner.os != 'macOS'
+        if: runner.os == 'Windows'
         working-directory: host-tools
         run: |
           python scripts/snapshot_sidecar_manifests.py "dist/${{ matrix.platform }}" --check
-          python scripts/smoke_bundle.py "dist/${{ matrix.platform }}" --core-only
+          python scripts/smoke_bundle.py "dist/${{ matrix.platform }}" --core-only --computer-control skip
       - name: Package after signing and notarization
         working-directory: host-tools
         run: python scripts/package_bundle.py "dist/${{ matrix.platform }}"
+      - name: Verify final macOS archive after extraction
+        if: runner.os == 'macOS'
+        working-directory: host-tools
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: scripts/verify_macos_archive.sh "dist/openagent-host-tools-${{ matrix.platform }}.tar.gz"
       - uses: actions/upload-artifact@v4
         with:
           name: signed-host-tools-${{ matrix.platform }}
@@ -132,10 +149,11 @@ jobs:
           test "$(git rev-parse HEAD)" = "${{ inputs.source_ref }}"
           python -m pip install build
           python -m build --wheel
+          version="$(python -c 'import runpy; print(runpy.run_path("src/openagent_host_tools/_version.py")["__version__"])')"
           python -m venv "$RUNNER_TEMP/wheel-smoke"
           "$RUNNER_TEMP/wheel-smoke/bin/pip" install --no-cache-dir dist/*.whl
           "$RUNNER_TEMP/wheel-smoke/bin/python" -c \
-            "import openagent_host_tools as h; assert h.__version__ == '0.1.0'"
+            "import openagent_host_tools as h; assert h.__version__ == '$version'"
           "$RUNNER_TEMP/wheel-smoke/bin/openagent-host-tools" --help >/dev/null
           cd dist
           sha256sum *.whl > openagent-host-tools-wheel.sha256
