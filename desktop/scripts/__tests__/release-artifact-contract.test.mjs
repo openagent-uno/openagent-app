@@ -149,6 +149,7 @@ test('pull requests package and launch Windows and Linux x64 before tagging', ()
     job.strategy.matrix.include.map((entry) => ({ os: entry.os, platform_key: entry.platform_key })),
     [
       { os: 'windows-2025', platform_key: 'win32-x64' },
+      { os: 'windows-11-arm', platform_key: 'win32-arm64' },
       { os: 'ubuntu-24.04', platform_key: 'linux-x64' },
     ],
   );

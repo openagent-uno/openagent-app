@@ -37,6 +37,10 @@ jobs:
             package_script: build:win
             arch_flag: --x64
             platform_key: win32-x64
+          - os: windows-11-arm
+            package_script: build:win
+            arch_flag: --arm64
+            platform_key: win32-arm64
           - os: ubuntu-24.04
             package_script: build:linux
             arch_flag: --x64

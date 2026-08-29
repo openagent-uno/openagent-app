@@ -283,8 +283,20 @@ try {
     const installDir = path.join(extractionRoot, 'installed');
     run(installers[0], ['/S', `/D=${installDir}`]);
     validatePayload(installDir);
-    const executables = walk(installDir).filter((file) => path.basename(file).toLowerCase() === 'openagent.exe');
-    assert.equal(executables.length, 1, 'Installed Windows payload has no unique OpenAgent.exe');
+    const installedExecutables = walk(installDir).filter((file) => file.toLowerCase().endsWith('.exe'));
+    const executables = installedExecutables.filter(
+      (file) => path.basename(file).toLowerCase() === 'openagent.exe',
+    );
+    assert.equal(
+      executables.length,
+      1,
+      `Installed Windows payload has no unique OpenAgent.exe; executable tree: ${
+        installedExecutables
+          .map((file) => path.relative(installDir, file))
+          .sort()
+          .join(', ') || '<none>'
+      }`,
+    );
     smokeExecutable(executables[0]);
   } else if (targetPlatform === 'linux') {
     const appImages = files.filter((file) => file.endsWith('.AppImage'));
