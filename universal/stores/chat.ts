@@ -330,7 +330,7 @@ function hasOpenLocalTurn(session: ChatSession): boolean {
   return false;
 }
 
-function appendOrPatchTool(messages: ChatMessage[], toolInfo: ToolInfo): ChatMessage[] {
+export function appendOrPatchTool(messages: ChatMessage[], toolInfo: ToolInfo): ChatMessage[] {
   const phase = toolPhase(toolInfo);
   const msgs = [...messages];
   const callId = toolInfo.tool_call_id;
@@ -350,7 +350,10 @@ function appendOrPatchTool(messages: ChatMessage[], toolInfo: ToolInfo): ChatMes
         return msgs;
       }
     } else if (matches(existing) && toolPhase(existing) === 'running') {
-      msgs[i] = { ...msgs[i], toolInfo };
+      // Completion/error frames may be intentionally sparse. Preserve the
+      // identity and execution boundary learned from the started frame while
+      // letting every field the terminal frame does carry win.
+      msgs[i] = { ...msgs[i], toolInfo: { ...existing, ...toolInfo } };
       return msgs;
     }
   }
