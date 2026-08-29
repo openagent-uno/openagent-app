@@ -12,7 +12,7 @@
  */
 
 import { Stack } from 'expo-router';
-import { themedHeader, HeaderMenu, HeaderBack } from '../../../components/screenHeader';
+import { themedHeader, HeaderMenu, HeaderMenuAndBack } from '../../../components/screenHeader';
 
 // Anchor the stack at ``index`` so the task editor / run-history sub-screens
 // always have the list beneath them — back pops to the list in-section
@@ -26,7 +26,7 @@ export default function TasksStackLayout() {
         ...themedHeader,
         // Section fallback: a cold-loaded (reloaded/deep-linked) sub-screen
         // with no trail history backs out to the section dashboard, not chat.
-        headerLeft: () => <HeaderBack fallback="/(tabs)/tasks" />,
+        headerLeft: () => <HeaderMenuAndBack fallback="/(tabs)/tasks" />,
         animation: 'slide_from_right',
       }}
     >

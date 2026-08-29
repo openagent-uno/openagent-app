@@ -7,7 +7,7 @@
  */
 
 import { Stack } from 'expo-router';
-import { themedHeader, HeaderMenu, HeaderBack } from '../../../components/screenHeader';
+import { themedHeader, HeaderMenu, HeaderMenuAndBack } from '../../../components/screenHeader';
 
 export const unstable_settings = { initialRouteName: 'index' };
 
@@ -18,7 +18,7 @@ export default function SkillsStackLayout() {
         ...themedHeader,
         // Section fallback: a cold-loaded (reloaded/deep-linked) sub-screen
         // with no trail history backs out to the section dashboard, not chat.
-        headerLeft: () => <HeaderBack fallback="/(tabs)/skills" />,
+        headerLeft: () => <HeaderMenuAndBack fallback="/(tabs)/skills" />,
         animation: 'slide_from_right',
       }}
     >

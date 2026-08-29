@@ -1,142 +1,139 @@
-// Hand-rolled tiny test harness — no jest in this electron app.
-// Run with: node src/network/__tests__/session-dialer.test.mjs (after `npx tsc`).
-//
-// Covers the pool's recovery from a connection that died without telling us —
-// the agent restarting is the everyday cause. Before this, the pool handed out
-// the dead connection forever and the app sat on "Reconnecting…" until it was
-// relaunched.
 import assert from 'node:assert/strict';
+import test from 'node:test';
+
 import { SessionDialer } from '../../../dist/network/session-dialer.js';
 
-const NODE_ID = 'b'.repeat(64);
-const CERT = new Uint8Array([9, 9, 9, 9]);
+const TARGET = 'a'.repeat(64);
+const CERT = new Uint8Array([0x11, 0x22, 0x33]);
 
-function makeStream() {
+function connection({ dead = false, writeError = null } = {}) {
+  const prefixes = [];
+  let openCount = 0;
+  let closed = false;
   return {
-    send: { writeAll: async () => {}, finish: async () => {} },
-    recv: {},
-  };
-}
-
-/** A connection that works, or one that has silently died: iroh only tells
- *  us when the connection is next used, which is ``openBi``. */
-function makeConnection({ dead = false } = {}) {
-  return {
-    dead,
-    openBiCalls: 0,
-    closed: false,
+    prefixes,
+    get openCount() { return openCount; },
+    get closed() { return closed; },
     async openBi() {
-      this.openBiCalls += 1;
-      if (this.dead) throw new Error('connection closed by peer');
-      return makeStream();
+      openCount += 1;
+      if (dead) throw new Error('connection closed by peer');
+      return {
+        send: {
+          async writeAll(value) {
+            if (writeError) throw new Error(writeError);
+            prefixes.push(new Uint8Array(value));
+          },
+          async finish() {},
+        },
+        recv: { async read() { return null; } },
+      };
     },
-    close() {
-      this.closed = true;
-    },
+    close() { closed = true; },
   };
 }
 
-function makeEndpoint(connections) {
+function endpointFor(connections) {
   const queue = [...connections];
-  const endpoint = {
-    dials: 0,
+  let dialCount = 0;
+  return {
+    get dialCount() { return dialCount; },
+    nodeId: () => 'self',
     async connect() {
-      endpoint.dials += 1;
+      dialCount += 1;
       const next = queue.shift();
       if (!next) throw new Error('no more fake connections');
       return next;
     },
-    nodeId: () => 'self',
   };
-  return endpoint;
 }
 
-// 1. A healthy connection is pooled — a second stream must not redial.
-{
-  const live = makeConnection();
-  const endpoint = makeEndpoint([live]);
+test('pools a healthy connection and writes the device-cert prefix', async () => {
+  const live = connection();
+  const endpoint = endpointFor([live]);
   const dialer = new SessionDialer(endpoint, CERT);
 
-  await dialer.openGatewayStream(NODE_ID);
-  await dialer.openGatewayStream(NODE_ID);
+  await dialer.openGatewayStream(TARGET);
+  await dialer.openGatewayStream(TARGET);
 
-  assert.equal(endpoint.dials, 1, 'a healthy connection must be reused, not redialled');
-  assert.equal(live.openBiCalls, 2);
-}
+  assert.equal(endpoint.dialCount, 1, 'a healthy connection remains pooled');
+  assert.equal(live.openCount, 2);
+  assert.deepEqual(
+    Array.from(live.prefixes[0]),
+    [0, 0, 0, CERT.length, ...CERT],
+  );
+  await dialer.close();
+});
 
-// 2. A pooled connection that has died is evicted, closed, and redialled once.
-{
-  const dead = makeConnection({ dead: true });
-  const fresh = makeConnection();
-  const endpoint = makeEndpoint([dead, fresh]);
+test('evicts a connection that dies before its first stream and redials once', async () => {
+  const dropped = connection({ dead: true });
+  const replacement = connection();
+  const endpoint = endpointFor([dropped, replacement]);
   const dialer = new SessionDialer(endpoint, CERT);
 
-  // First call dials the (already doomed) connection and fails: nothing
-  // pooled yet, so there is no stale entry to blame.
-  await assert.rejects(() => dialer.openGatewayStream(NODE_ID), /connection closed by peer/);
-  assert.equal(endpoint.dials, 1, 'a fresh dial must not be retried — that failure is real');
+  const stream = await dialer.openGatewayStream(TARGET);
 
-  // It was pooled by that attempt. The next caller finds the corpse, evicts
-  // it, redials, and succeeds — this is the recovery that was missing.
-  const stream = await dialer.openGatewayStream(NODE_ID);
-  assert.equal(stream.targetNodeId, NODE_ID);
-  assert.equal(endpoint.dials, 2, 'the dead pooled connection must be redialled');
-  assert.equal(dead.closed, true, 'the dead connection must be closed on eviction');
-  assert.equal(fresh.openBiCalls, 1);
-}
+  assert.equal(stream.targetNodeId, TARGET);
+  assert.equal(endpoint.dialCount, 2, 'one failed stream gets one redial');
+  assert.equal(dropped.openCount, 1);
+  assert.equal(dropped.closed, true, 'the dead connection is closed');
+  assert.equal(replacement.openCount, 1);
 
-// 3. When the redial is also dead, the caller hears about it — one retry,
-//    never a loop.
-{
-  const dead = makeConnection({ dead: true });
-  const alsoDead = makeConnection({ dead: true });
-  const endpoint = makeEndpoint([dead, alsoDead]);
+  await dialer.openGatewayStream(TARGET);
+  assert.equal(endpoint.dialCount, 2, 'the healthy replacement remains pooled');
+  await dialer.close();
+});
+
+test('evicts a failed replacement without an unbounded retry loop', async () => {
+  const first = connection({ dead: true });
+  const second = connection({ dead: true });
+  const third = connection();
+  const endpoint = endpointFor([first, second, third]);
   const dialer = new SessionDialer(endpoint, CERT);
 
-  await assert.rejects(() => dialer.openGatewayStream(NODE_ID));
-  await assert.rejects(() => dialer.openGatewayStream(NODE_ID), /connection closed by peer/);
-  assert.equal(endpoint.dials, 2, 'exactly one redial per call, no retry storm');
-}
+  await assert.rejects(
+    dialer.openGatewayStream(TARGET),
+    /connection closed by peer/,
+  );
+  assert.equal(endpoint.dialCount, 2, 'only the initial dial and one redial run');
+  assert.equal(first.closed, true);
+  assert.equal(second.closed, true);
 
-// 4. Concurrent callers on the same corpse share one redial rather than each
-//    opening a connection of their own.
-{
-  const dead = makeConnection({ dead: true });
-  const fresh = makeConnection();
-  const endpoint = makeEndpoint([dead, fresh]);
+  await dialer.openGatewayStream(TARGET);
+  assert.equal(endpoint.dialCount, 3, 'a later call can make a fresh attempt');
+  await dialer.close();
+});
+
+test('concurrent callers share the same replacement connection', async () => {
+  const dropped = connection({ dead: true });
+  const replacement = connection();
+  const endpoint = endpointFor([dropped, replacement]);
   const dialer = new SessionDialer(endpoint, CERT);
 
-  await assert.rejects(() => dialer.openGatewayStream(NODE_ID));
-  const [a, b] = await Promise.all([
-    dialer.openGatewayStream(NODE_ID),
-    dialer.openGatewayStream(NODE_ID),
+  const [first, second] = await Promise.all([
+    dialer.openGatewayStream(TARGET),
+    dialer.openGatewayStream(TARGET),
   ]);
 
-  assert.equal(a.targetNodeId, NODE_ID);
-  assert.equal(b.targetNodeId, NODE_ID);
-  assert.equal(endpoint.dials, 2, 'two concurrent callers must not dial twice over');
-}
+  assert.equal(first.targetNodeId, TARGET);
+  assert.equal(second.targetNodeId, TARGET);
+  assert.equal(endpoint.dialCount, 2, 'concurrent recovery performs one redial');
+  assert.equal(replacement.openCount, 2);
+  await dialer.close();
+});
 
-// 5. The cert prefix still rides on the stream after a redial.
-{
-  const dead = makeConnection({ dead: true });
-  const fresh = makeConnection();
-  const written = [];
-  fresh.openBi = async () => ({
-    send: { writeAll: async (buf) => { written.push(buf); }, finish: async () => {} },
-    recv: {},
-  });
-  const endpoint = makeEndpoint([dead, fresh]);
+test('a failed cert-prefix write also evicts and redials once', async () => {
+  const broken = connection({ writeError: 'stream write failed' });
+  const replacement = connection();
+  const endpoint = endpointFor([broken, replacement]);
   const dialer = new SessionDialer(endpoint, CERT);
 
-  await assert.rejects(() => dialer.openGatewayStream(NODE_ID));
-  await dialer.openGatewayStream(NODE_ID);
+  await dialer.openGatewayStream(TARGET);
 
-  assert.equal(written.length, 1);
-  const prefix = written[0];
-  assert.equal(prefix.length, 4 + CERT.length);
-  assert.equal(new DataView(prefix.buffer, prefix.byteOffset).getUint32(0, false), CERT.length);
-  assert.deepEqual(Array.from(prefix.slice(4)), Array.from(CERT));
-}
-
-console.log('session-dialer: all tests passed');
+  assert.equal(endpoint.dialCount, 2);
+  assert.equal(broken.closed, true);
+  assert.deepEqual(
+    Array.from(replacement.prefixes[0]),
+    [0, 0, 0, CERT.length, ...CERT],
+  );
+  await dialer.close();
+});

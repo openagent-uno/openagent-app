@@ -50,12 +50,15 @@ import { colors, font, radius } from '../../theme';
 import BlockPalette from './BlockPalette';
 import PropertiesPanel from './PropertiesPanel';
 import { openDetached } from '../../services/windows';
+import { HeaderMenu } from '../screenHeader';
 import { nodeTypes } from './nodes/nodeTypes';
 
 interface Props {
   workflow: WorkflowTask;
   onBack: () => void;
   onWorkflowUpdated?: (wf: WorkflowTask) => void;
+  initialNodeId?: string;
+  initialField?: string;
 }
 
 type NodeStatus = 'idle' | 'running' | 'success' | 'failed';
@@ -69,7 +72,7 @@ export default function WorkflowEditor(props: Props) {
   );
 }
 
-function EditorInner({ workflow, onBack, onWorkflowUpdated }: Props) {
+function EditorInner({ workflow, onBack, onWorkflowUpdated, initialNodeId, initialField }: Props) {
   const {
     blockTypes,
     mcpTools,
@@ -130,13 +133,16 @@ function EditorInner({ workflow, onBack, onWorkflowUpdated }: Props) {
     );
     setVariables(g.variables || {});
     setDirty(false);
-    setSelectedNodeId(null);
+    setSelectedNodeId(
+      initialNodeId && (g.nodes || []).some((node) => node.id === initialNodeId)
+        ? initialNodeId : null,
+    );
     // ``maxConcurrentInput`` is seeded in its OWN effect (below) so a
     // settings save — which mutates ``workflow.max_concurrent_runs`` on
     // the parent and re-renders us — cannot retrigger this effect and
     // wipe unsaved graph edits. Same applies to any future scalar
     // metadata field: do not depend on it here.
-  }, [workflow.id]);
+  }, [initialNodeId, workflow.id]);
 
   // Seed/refresh just the concurrency input when the parent prop
   // changes. Decoupled from the graph-seed effect so saving the cap
@@ -417,6 +423,7 @@ function EditorInner({ workflow, onBack, onWorkflowUpdated }: Props) {
   return (
     <div style={styles.container}>
       <div style={styles.topBar}>
+        <HeaderMenu />
         <button onClick={onBack} style={styles.iconBtn as any} title="Back">
           <Feather name="arrow-left" size={14} color={colors.textSecondary} />
         </button>
@@ -609,6 +616,7 @@ function EditorInner({ workflow, onBack, onWorkflowUpdated }: Props) {
         <PropertiesPanel
           node={selectedNode}
           blockTypes={blockTypes}
+          initialField={initialField}
           onChange={patchSelectedNode}
           onDelete={deleteSelectedNode}
         />

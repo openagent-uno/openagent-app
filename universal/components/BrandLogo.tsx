@@ -37,8 +37,8 @@ const styles = StyleSheet.create({
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   word: {
     fontFamily: font.display,
-    fontWeight: '700',
+    fontWeight: '600',
     color: colors.text,
-    letterSpacing: 2,
+    letterSpacing: -0.2,
   },
 });

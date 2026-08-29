@@ -7,13 +7,13 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-// Override HOME so the store writes into a tempdir. On POSIX,
-// os.homedir() reads $HOME on each call so this is enough.
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'oa-store-'));
-process.env.HOME = tmp;
-process.env.USERPROFILE = tmp; // for Windows-style lookups, harmless on POSIX
+const isolatedUserDir = path.join(tmp, 'network-profile');
+process.env.OPENAGENT_USER_DIR = isolatedUserDir;
 
 const ns = await import('../../../dist/network/network-store.js');
+assert.equal(ns.userDir(), path.resolve(isolatedUserDir));
+assert.equal(ns.storePath(), path.join(path.resolve(isolatedUserDir), 'networks.toml'));
 
 const store = ns.emptyStore();
 assert.equal(store.networks.length, 0);

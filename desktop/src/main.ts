@@ -9,13 +9,45 @@
  * for a complete desktop-window management experience.
  */
 
-import { app, BrowserWindow, shell, dialog, protocol, ipcMain, Menu } from 'electron';
+import { app, BrowserWindow, shell, dialog, Menu } from 'electron';
 import * as path from 'path';
 import * as fs from 'fs';
 import * as http from 'http';
+import * as os from 'os';
+import { randomUUID } from 'crypto';
 import { registerStorageHandlers } from './services/storage';
-import { registerLoopbackHandlers, stopAllLoopbacks } from './services/loopback';
+import {
+  configureLoopbackLifecycleHooks,
+  getVerifiedLoopbackTarget,
+  installTestLoopback,
+  registerLoopbackHandlers,
+  releaseLoopbackReservation,
+  stopAllLoopbacks,
+  transferLoopbackAttempt,
+} from './services/loopback';
+import { registerCredentialHandlers } from './services/credentials';
+import { findWindowForVerifiedTarget } from './network/agent-window-routing';
 import { decodeTicket } from './network/ticket';
+import { CapabilityConsentStore } from './capabilities/consent-store';
+import { discoverHostTools } from './capabilities/host-bridge';
+import { broadcastCapabilityStatus, registerCapabilityHandlers } from './capabilities/ipc';
+import { CapabilityManager } from './capabilities/manager';
+import {
+  buildRendererTarget,
+  createRendererUrlPolicy,
+} from './security/renderer-url-policy';
+import { resolveStaticFile } from './security/static-file-policy';
+import {
+  registerTrustedRenderer,
+  sendToTrustedRenderer,
+  unregisterTrustedRenderer,
+} from './security/trusted-renderers';
+import { handleTrustedIpc, onTrustedIpc } from './security/trusted-ipc';
+import {
+  applyLocalE2EProfile,
+  desktopRuntimePolicy,
+  resolveLocalE2EProfile,
+} from './local-e2e-profile';
 
 // ── New desktop-controls modules ──
 import {
@@ -23,6 +55,7 @@ import {
   unregisterWindow,
   getPrimaryWindow as getPrimaryFromRegistry,
   getAllWindows,
+  getWindowsByAccount,
   focusWindow,
   closeWindow,
   getWindowCount,
@@ -30,10 +63,25 @@ import {
 } from './window-manager';
 import { registerAllShortcuts, unregisterAllShortcuts, getShortcutsMap } from './shortcuts';
 import { buildMenu, rebuildMenu, setupMenuAutoRebuild } from './menu';
-import { createTray, updateTrayAgentList, destroyTray } from './tray';
+import {
+  configureCapabilityTray,
+  createTray,
+  updateTrayAgentList,
+  updateTrayCapabilityStatus,
+  destroyTray,
+} from './tray';
 import { setupDockMenu, updateDockAgentList } from './dock';
+import { configureAutoUpdater, shouldAcceptUpdate } from './update-policy';
+import {
+  PRODUCTION_CSP,
+  resolveDevServerUrl,
+} from './security-policy';
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.heic', '.tiff']);
+// Random for every Electron-main boot, shared by every window and every
+// account tunnel in this process. The server binds interactive turns to this
+// exact instance; automatic/server-originated turns never receive it.
+const CLIENT_INSTANCE_ID = randomUUID();
 
 // Hard cap on ``dialog:readFile`` IPC payloads so a single runaway attachment
 // can't OOM the renderer. The renderer streams these into a Blob before the
@@ -51,7 +99,7 @@ const MAX_READ_BYTES = 200 * 1024 * 1024;
 const pickedPaths = new Set<string>();
 
 function registerDialogHandlers(): void {
-  ipcMain.handle('dialog:pickFiles', async () => {
+  handleTrustedIpc('dialog:pickFiles', async () => {
     const focused = BrowserWindow.getFocusedWindow();
     const opts: Electron.OpenDialogOptions = {
       properties: ['openFile', 'multiSelections'],
@@ -91,7 +139,7 @@ function registerDialogHandlers(): void {
   // has actually picked via the native dialog in this session, so the path
   // string is effectively a capability token issued by the OS file picker
   // rather than a free-form argument.
-  ipcMain.handle('dialog:readFile', async (_event, filePath: unknown) => {
+  handleTrustedIpc('dialog:readFile', async (_event, filePath: unknown) => {
     if (typeof filePath !== 'string') {
       throw new Error('readFile: path must be a string');
     }
@@ -117,7 +165,7 @@ function registerDialogHandlers(): void {
   // different URL scheme; falls back to ``no-op`` on platforms we
   // don't have a target for (the renderer should still log + show
   // instructions).
-  ipcMain.handle('app:openMicSettings', async () => {
+  handleTrustedIpc('app:openMicSettings', async () => {
     try {
       if (process.platform === 'darwin') {
         await shell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone');
@@ -135,6 +183,21 @@ function registerDialogHandlers(): void {
 }
 
 const isDev = !app.isPackaged;
+const packagedSmoke = process.argv.includes('--packaged-smoke');
+const localE2EProfile = resolveLocalE2EProfile(process.argv);
+const localE2E = localE2EProfile != null;
+const runtimePolicy = desktopRuntimePolicy({
+  isPackaged: app.isPackaged,
+  packagedSmoke,
+  localE2E,
+});
+const expectedSmokeVersion = process.argv
+  .find((value) => value.startsWith('--expected-version='))
+  ?.slice('--expected-version='.length);
+
+if (localE2EProfile) {
+  applyLocalE2EProfile(localE2EProfile, (value) => app.setPath('userData', value));
+}
 
 app.setAboutPanelOptions({
   applicationName: 'OpenAgent',
@@ -146,7 +209,7 @@ if (process.platform === 'win32') {
   app.setAppUserModelId('ai.openagent.desktop');
 }
 
-const gotLock = app.requestSingleInstanceLock();
+const gotLock = runtimePolicy.bypassSingleInstanceLock || app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 }
@@ -163,6 +226,9 @@ const relayChildIds = new Set<number>();
 let primaryWindowId: number | null = null;
 let staticServer: http.Server | null = null;
 let staticPort = 0;
+let capabilityManager: CapabilityManager | null = null;
+let shutdownInProgress = false;
+let shutdownComplete = false;
 
 // ── Static file server for production ──
 
@@ -197,40 +263,49 @@ function startStaticServer(): Promise<number> {
     }
 
     const server = http.createServer((req, res) => {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.writeHead(405, { Allow: 'GET, HEAD' });
+        res.end('Method not allowed');
+        return;
+      }
       // Strip query strings & fragments, decode percent-encoded chars
       const rawUrl = (req.url || '/').split('?')[0].split('#')[0];
       let urlPath: string;
       try {
         urlPath = decodeURIComponent(rawUrl);
       } catch {
-        urlPath = rawUrl;
+        res.writeHead(400);
+        res.end('Bad request');
+        return;
       }
 
-      // Resolve and guard against path traversal (stay within webBuildDir)
-      let filePath = path.join(webBuildDir, urlPath === '/' ? 'index.html' : urlPath);
-      const resolved = path.resolve(filePath);
-      if (!resolved.startsWith(path.resolve(webBuildDir))) {
+      const resolution = resolveStaticFile(webBuildDir, urlPath);
+      if (resolution.kind === 'forbidden') {
         res.writeHead(403);
         res.end('Forbidden');
         return;
       }
-
-      // SPA fallback: serve index.html when the file doesn't exist *and*
-      // it's not an asset request (assets should 404, not get HTML).
-      if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
-        const ext = path.extname(filePath).toLowerCase();
-        if (ext === '' || ext === '.html') {
-          filePath = path.join(webBuildDir, 'index.html');
-        }
+      if (resolution.kind === 'not_found') {
+        res.writeHead(404);
+        res.end('Not found');
+        return;
       }
 
+      const filePath = resolution.path;
       const ext = path.extname(filePath).toLowerCase();
       const contentType = mimeTypes[ext] || 'application/octet-stream';
 
       try {
         const content = fs.readFileSync(filePath);
-        res.writeHead(200, { 'Content-Type': contentType });
-        res.end(content);
+        res.writeHead(200, {
+          'Content-Type': contentType,
+          'Content-Security-Policy': PRODUCTION_CSP,
+          'X-Content-Type-Options': 'nosniff',
+          'Referrer-Policy': 'no-referrer',
+          'Cross-Origin-Opener-Policy': 'same-origin',
+          'Cross-Origin-Resource-Policy': 'same-origin',
+        });
+        res.end(req.method === 'HEAD' ? undefined : content);
       } catch (err) {
         console.error(`[openagent] 404 ${req.url} -> ${filePath}`);
         res.writeHead(404);
@@ -290,22 +365,43 @@ function createWindow(opts: CreateWindowOptions = {}): BrowserWindow {
       preload: path.resolve(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      nodeIntegrationInSubFrames: false,
+      nodeIntegrationInWorker: false,
+      sandbox: true,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      webviewTag: false,
+      navigateOnDragDrop: false,
+      safeDialogs: true,
+      additionalArguments: [`--openagent-client-instance-id=${CLIENT_INSTANCE_ID}`],
     },
   });
-  const webContentsId = win.webContents.id;
+  // Electron 43 invalidates BrowserWindow.webContents before emitting
+  // `closed`. Retain the exact registered object now so lifecycle cleanup
+  // never dereferences a destroyed BrowserWindow.
+  const trustedContents = win.webContents;
+  const webContentsId = trustedContents.id;
 
-  const baseUrl = isDev ? 'http://localhost:8081' : `http://127.0.0.1:${staticPort}`;
-  // Build the URL through the URL API so query params compose safely even
-  // when the route already carries one (e.g. ``terminal/<id>?cwd=…``).
-  const target = new URL(route ? `${baseUrl}/${route}` : baseUrl);
+  const testRendererUrl = isDev && process.env.NODE_ENV === 'test'
+    && process.env.OPENAGENT_DESKTOP_E2E === '1'
+    ? process.env.OPENAGENT_DESKTOP_E2E_RENDERER_URL?.trim()
+    : undefined;
+  const baseUrl = testRendererUrl
+    || (runtimePolicy.useStaticRenderer
+      ? `http://127.0.0.1:${staticPort}`
+      : resolveDevServerUrl(process.env.OPENAGENT_DEV_SERVER_PORT));
+  const rendererPolicy = createRendererUrlPolicy(baseUrl);
+  // Register authority and navigation guards before the first document load.
+  registerTrustedRenderer(win, rendererPolicy, (url) => shell.openExternal(url));
+  // An explicit route is rooted at the trusted origin; when omitted, retain
+  // the configured base path (the E2E fixture and future embedded exports can
+  // boot directly into a route such as /settings).
+  const target = route === undefined
+    ? new URL(baseUrl)
+    : buildRendererTarget(rendererPolicy, route);
   if (connectAccountId) target.searchParams.set('connect', connectAccountId);
   if (markChild) target.searchParams.set('child', '1');
-  win.loadURL(target.toString());
-
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    shell.openExternal(url);
-    return { action: 'deny' };
-  });
+  void win.loadURL(target.toString());
 
   if (markChild) relayChildIds.add(webContentsId);
 
@@ -323,6 +419,7 @@ function createWindow(opts: CreateWindowOptions = {}): BrowserWindow {
   });
 
   win.on('closed', () => {
+    unregisterTrustedRenderer(trustedContents);
     childWindows.delete(win);
     relayChildIds.delete(webContentsId);
     // Also unregister from the central registry.
@@ -339,7 +436,8 @@ function createWindow(opts: CreateWindowOptions = {}): BrowserWindow {
     if (terminalId && primaryWindowId) {
       const primary = BrowserWindow.fromId(primaryWindowId);
       if (primary && !primary.isDestroyed() && primary.webContents.id !== webContentsId) {
-        primary.webContents.send(
+        sendToTrustedRenderer(
+          primary.webContents,
           'ws:relay-from-child',
           JSON.stringify({ type: 'terminal_close', terminal_id: terminalId }),
         );
@@ -373,18 +471,91 @@ function closeAllChildWindows(): void {
   }
 }
 
+/** Bind the deterministic loopback supplied by the Playwright harness.
+ *
+ * No renderer method can install or select this target. The hook is accepted
+ * only by an unpackaged, explicit test process and only for a loopback URL,
+ * so production authentication and Iroh routing remain the sole path.
+ */
+function installConfiguredTestLoopback(): void {
+  if (
+    !isDev || process.env.NODE_ENV !== 'test' ||
+    process.env.OPENAGENT_DESKTOP_E2E !== '1'
+  ) return;
+  const raw = process.env.OPENAGENT_DESKTOP_E2E_LOOPBACK?.trim();
+  if (!raw) return;
+
+  let value: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+    value = parsed as Record<string, unknown>;
+  } catch {
+    throw new Error('OPENAGENT_DESKTOP_E2E_LOOPBACK must be a JSON object');
+  }
+  const required = [
+    'account_id', 'base_url', 'network_name', 'network_id', 'device_id',
+    'handle', 'coordinator_node_id', 'agent_node_id', 'agent_handle',
+  ] as const;
+  for (const key of required) {
+    if (typeof value[key] !== 'string' || !(value[key] as string).length) {
+      throw new Error(`OPENAGENT_DESKTOP_E2E_LOOPBACK.${key} must be a non-empty string`);
+    }
+  }
+  const baseUrl = new URL(value.base_url as string);
+  if (
+    baseUrl.protocol !== 'http:' ||
+    !['127.0.0.1', 'localhost', '[::1]'].includes(baseUrl.hostname) ||
+    !baseUrl.port
+  ) {
+    throw new Error('Desktop E2E loopback must be an explicit loopback http URL with a port');
+  }
+  const port = Number(baseUrl.port);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error('Desktop E2E loopback port is invalid');
+  }
+  installTestLoopback(value.account_id as string, {
+    port,
+    baseUrl: baseUrl.origin,
+    wsUrl: `${baseUrl.origin.replace(/^http:/, 'ws:')}/ws`,
+    networkId: value.network_id as string,
+    deviceId: value.device_id as string,
+    agentNodeId: value.agent_node_id as string,
+    agentHandle: value.agent_handle as string,
+    verifiedTarget: {
+      networkName: value.network_name as string,
+      networkId: value.network_id as string,
+      handle: value.handle as string,
+      coordinatorNodeId: value.coordinator_node_id as string,
+      agentHandle: value.agent_handle as string,
+      agentNodeId: value.agent_node_id as string,
+    },
+    stop: async () => {},
+  });
+}
+
 // Register the factory so menu/shortcuts/tray can create windows.
 setCreateWindowFactory(createWindow);
 
 // ── Auto-updater ──
 
 function setupAutoUpdater(): void {
-  if (isDev) return;
+  if (!runtimePolicy.enableAutoUpdater) return;
   const { autoUpdater } = require('electron-updater');
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  const installedVersion = app.getVersion();
+  const policy = configureAutoUpdater(autoUpdater, installedVersion);
+  autoUpdater.autoDownload = policy.automaticCheck;
+  autoUpdater.autoInstallOnAppQuit = policy.installOnQuit;
 
   autoUpdater.on('update-downloaded', (info: any) => {
+    if (!shouldAcceptUpdate(installedVersion, info.version)) {
+      // A stale or malformed provider response must never become a queued
+      // downgrade on quit, even if electron-updater's own guard changes.
+      autoUpdater.autoInstallOnAppQuit = false;
+      console.error(`Rejected updater candidate ${info.version} for ${installedVersion}`);
+      return;
+    }
+    autoUpdater.autoInstallOnAppQuit = policy.installOnQuit;
     dialog.showMessageBox({
       type: 'info',
       title: 'Update Ready',
@@ -400,34 +571,36 @@ function setupAutoUpdater(): void {
     console.error('Auto-updater error:', err.message);
   });
 
-  autoUpdater.checkForUpdatesAndNotify();
+  // Beta builds stay on an explicit, user-initiated update path until the
+  // desktop app has launch-crash recovery. Stable behavior is unchanged.
+  if (policy.automaticCheck) autoUpdater.checkForUpdatesAndNotify();
 }
 
 // ── IPC: Window-control handlers (module-level so they're registered
 // before ``activate`` can fire and create a window on macOS). ──
 
-ipcMain.handle('app:quit', () => {
+handleTrustedIpc('app:quit', () => {
   app.quit();
 });
 
-ipcMain.handle('window:minimize', (event) => {
+handleTrustedIpc('window:minimize', (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (win && !win.isDestroyed()) win.minimize();
 });
 
-ipcMain.handle('window:maximize', (event) => {
+handleTrustedIpc('window:maximize', (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (win && !win.isDestroyed()) {
     win.isMaximized() ? win.unmaximize() : win.maximize();
   }
 });
 
-ipcMain.handle('window:close', (event) => {
+handleTrustedIpc('window:close', (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   if (win && !win.isDestroyed()) win.close();
 });
 
-ipcMain.handle('window:isMaximized', (event) => {
+handleTrustedIpc('window:isMaximized', (event) => {
   const win = BrowserWindow.fromWebContents(event.sender);
   return win && !win.isDestroyed() ? win.isMaximized() : false;
 });
@@ -435,14 +608,14 @@ ipcMain.handle('window:isMaximized', (event) => {
 // ── IPC: Menu-initiated actions ──
 
 // Renderer requests a new relay-child window at root.
-ipcMain.handle('menu:newWindow', () => {
+handleTrustedIpc('menu:newWindow', () => {
   createWindow({ route: '', markChild: true });
   rebuildMenu();
 });
 
 // Renderer requests a new standalone agent window.
 // The renderer sends a connectAccountId if known, else we prompt.
-ipcMain.handle('menu:newAgentWindow', (_event, accountId?: string) => {
+handleTrustedIpc('menu:newAgentWindow', (_event, accountId?: string) => {
   if (typeof accountId === 'string' && accountId.length > 0) {
     createWindow({ connectAccountId: accountId });
   } else {
@@ -455,38 +628,38 @@ ipcMain.handle('menu:newAgentWindow', (_event, accountId?: string) => {
 
 // Renderer triggers the agent switcher (primary window will show the
 // agent selection UI).
-ipcMain.handle('menu:switchAgent', () => {
+handleTrustedIpc('menu:switchAgent', () => {
   const primary = getPrimaryFromRegistry();
   if (primary && !primary.isDestroyed()) {
-    primary.webContents.send('menu:switchAgent');
+    sendToTrustedRenderer(primary.webContents, 'menu:switchAgent');
   }
 });
 
 // Renderer wants to open the Settings route.
-ipcMain.handle('menu:openSettings', () => {
+handleTrustedIpc('menu:openSettings', () => {
   const primary = getPrimaryFromRegistry();
   if (primary && !primary.isDestroyed()) {
-    primary.webContents.send('menu:openSettings');
+    sendToTrustedRenderer(primary.webContents, 'menu:openSettings');
   }
 });
 
 // Renderer wants to open the Keyboard Shortcuts documentation.
-ipcMain.handle('menu:openShortcuts', () => {
+handleTrustedIpc('menu:openShortcuts', () => {
   const primary = getPrimaryFromRegistry();
   if (primary && !primary.isDestroyed()) {
-    primary.webContents.send('menu:openShortcuts');
+    sendToTrustedRenderer(primary.webContents, 'menu:openShortcuts');
   }
 });
 
 // Focus a specific window by its webContents id.
-ipcMain.handle('menu:focusWindow', (_event, id: number) => {
+handleTrustedIpc('menu:focusWindow', (_event, id: number) => {
   if (typeof id === 'number') {
     focusWindow(id);
   }
 });
 
 // Cycle focus through all open windows (next in the list).
-ipcMain.handle('menu:cycleWindows', () => {
+handleTrustedIpc('menu:cycleWindows', () => {
   const all = getAllWindows().filter((e) => !e.win.isDestroyed());
   if (all.length === 0) return;
 
@@ -500,12 +673,12 @@ ipcMain.handle('menu:cycleWindows', () => {
 // Note: shortcuts:getMap is registered inside registerAllShortcuts() in shortcuts.ts.
 
 // Quick actions that need main-process side effects
-ipcMain.handle('menu:quickJump', () => {
+handleTrustedIpc('menu:quickJump', () => {
   // The menu already sent the IPC to the focused renderer.
   return true;
 });
 
-ipcMain.handle('menu:quickCreate', () => {
+handleTrustedIpc('menu:quickCreate', () => {
   return true;
 });
 
@@ -514,7 +687,7 @@ ipcMain.handle('menu:quickCreate', () => {
 // Renderer asks the main process to open a new window for a tab route.
 // These are *relay* children — they share the primary window's agent
 // connection (WS tunnelled through the primary).
-ipcMain.handle('window:open', (_event, route: string) => {
+handleTrustedIpc('window:open', (_event, route: string) => {
   if (typeof route !== 'string' || !route) {
     throw new Error('window:open requires a non-empty route string');
   }
@@ -527,17 +700,65 @@ ipcMain.handle('window:open', (_event, route: string) => {
 // full app window bound to a specific account that opens its OWN
 // connection (its own loopback + WS), independent of the primary. This is
 // what powers "open another agent in a new window" from the switcher.
-ipcMain.handle('window:openAgent', (_event, accountId: string) => {
+handleTrustedIpc('window:openAgent', async (
+  event,
+  accountId: string,
+  attemptToken?: number,
+  sourceAccountId?: string,
+) => {
   if (typeof accountId !== 'string' || !accountId) {
     throw new Error('window:openAgent requires a non-empty accountId string');
   }
+  if (
+    attemptToken !== undefined &&
+    (!Number.isSafeInteger(attemptToken) || attemptToken <= 0)
+  ) {
+    throw new Error('window:openAgent attemptToken must be a positive safe integer');
+  }
+  if (sourceAccountId !== undefined && (typeof sourceAccountId !== 'string' || !sourceAccountId)) {
+    throw new Error('window:openAgent sourceAccountId must be a non-empty string');
+  }
+
+  const requestedTarget = getVerifiedLoopbackTarget(accountId);
+  const targetMatch = findWindowForVerifiedTarget(
+    requestedTarget,
+    getAllWindows()
+      .filter((entry) => !entry.win.isDestroyed())
+      .map((entry) => {
+        const boundAccountId = entry.id === event.sender.id
+          ? sourceAccountId ?? entry.accountId
+          : entry.accountId;
+        return {
+          value: entry,
+          target: boundAccountId ? getVerifiedLoopbackTarget(boundAccountId) : null,
+        };
+      }),
+  );
+  // A target may be temporarily unavailable during an older/manual flow;
+  // retain the pre-existing same-account guard as a conservative fallback.
+  const existing = targetMatch ?? getWindowsByAccount(accountId)[0] ?? null;
+  if (existing) {
+    focusWindow(existing.id);
+    const sourceAlreadyUsesThisAccount = existing.id === event.sender.id
+      && sourceAccountId === accountId;
+    if (!sourceAlreadyUsesThisAccount) {
+      await releaseLoopbackReservation(accountId, event.sender.id, attemptToken);
+    }
+    rebuildMenu();
+    return existing.id;
+  }
+
   const win = createWindow({ connectAccountId: accountId });
+  // Both remembered/manual opens (session reservation) and background joins
+  // (numbered attempt reservation) hand ownership to the destination. The
+  // source window was only the launcher and must not pin the loopback alive.
+  transferLoopbackAttempt(accountId, event.sender.id, attemptToken, win.webContents);
   rebuildMenu();
   return win.webContents.id;
 });
 
 // Renderer asks the main process to close all sub-windows.
-ipcMain.handle('window:closeAllChildren', () => {
+handleTrustedIpc('window:closeAllChildren', () => {
   closeAllChildWindows();
   rebuildMenu();
 });
@@ -548,22 +769,24 @@ ipcMain.handle('window:closeAllChildren', () => {
 // Standalone agent windows carry their own connection and are never part
 // of this fan-out (their ids are not in ``relayChildIds``), so agent A's
 // frames can't leak into an agent-B window.
-ipcMain.on('ws:relay-out', (event, payload: string) => {
+onTrustedIpc('ws:relay-out', (event, payload: string) => {
   if (!relayChildIds.has(event.sender.id)) return;
+  if (typeof payload !== 'string' || Buffer.byteLength(payload, 'utf8') > 16 * 1024 * 1024) return;
   const primary = primaryWindowId
     ? BrowserWindow.fromId(primaryWindowId)
     : null;
   if (primary && !primary.isDestroyed()) {
-    primary.webContents.send('ws:relay-from-child', payload);
+    sendToTrustedRenderer(primary.webContents, 'ws:relay-from-child', payload);
   }
 });
 
-ipcMain.on('ws:relay-broadcast', (event, payload: string) => {
+onTrustedIpc('ws:relay-broadcast', (event, payload: string) => {
   if (event.sender.id !== primaryWindowId) return;
+  if (typeof payload !== 'string' || Buffer.byteLength(payload, 'utf8') > 16 * 1024 * 1024) return;
   for (const id of relayChildIds) {
     const win = BrowserWindow.fromId(id);
     if (win && !win.isDestroyed()) {
-      win.webContents.send('ws:relay-to-child', payload);
+      sendToTrustedRenderer(win.webContents, 'ws:relay-to-child', payload);
     }
   }
 });
@@ -575,7 +798,7 @@ ipcMain.on('ws:relay-broadcast', (event, payload: string) => {
 // any decode error, return null so the renderer falls back to
 // manual entry — the loopback step will surface a clearer error
 // if the ticket really is malformed.
-ipcMain.handle('network:decode-ticket', (_event, ticket: unknown) => {
+handleTrustedIpc('network:decode-ticket', (_event, ticket: unknown) => {
   if (typeof ticket !== 'string' || ticket.length < 8) return null;
   try {
     const t = decodeTicket(ticket);
@@ -592,8 +815,58 @@ ipcMain.handle('network:decode-ticket', (_event, ticket: unknown) => {
 // ── Lifecycle ──
 
 app.whenReady().then(async () => {
+  if (packagedSmoke) {
+    try {
+      if (!app.isPackaged) throw new Error('packaged smoke was started from an unpackaged app');
+      if (!expectedSmokeVersion || app.getVersion() !== expectedSmokeVersion) {
+        throw new Error(`version mismatch: expected ${expectedSmokeVersion || '<missing>'}, got ${app.getVersion()}`);
+      }
+      for (const required of [
+        path.join(process.resourcesPath, 'app.asar'),
+        path.join(process.resourcesPath, 'web-build', 'index.html'),
+      ]) {
+        if (!fs.existsSync(required)) throw new Error(`missing packaged resource: ${required}`);
+      }
+      console.log(`packaged-smoke ok ${app.getVersion()} ${process.platform} ${process.arch}`);
+      app.exit(0);
+    } catch (error) {
+      console.error(`packaged-smoke failed: ${error instanceof Error ? error.message : String(error)}`);
+      app.exit(1);
+    }
+    return;
+  }
+
   registerStorageHandlers();
+  registerCredentialHandlers();
   registerDialogHandlers();
+
+  capabilityManager = new CapabilityManager({
+    clientInstanceId: CLIENT_INSTANCE_ID,
+    deviceLabel: `${os.hostname()} (OpenAgent Desktop)`,
+    hostLaunch: discoverHostTools({
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      appPath: app.getAppPath(),
+      manifestPath: path.join(__dirname, 'host-tools-manifest.json'),
+    }),
+    consentStore: new CapabilityConsentStore(),
+    onStatus: (status) => {
+      updateTrayCapabilityStatus(status);
+      broadcastCapabilityStatus(status);
+    },
+  });
+  registerCapabilityHandlers(capabilityManager);
+  configureLoopbackLifecycleHooks({
+    onStarted: (accountId, loopback) => capabilityManager?.addLoopback(
+      accountId,
+      loopback.baseUrl,
+      loopback.agentNodeId,
+      loopback.networkId,
+      loopback.deviceId,
+    ),
+    onStopping: (accountId) => capabilityManager?.removeLoopback(accountId),
+  });
+  installConfiguredTestLoopback();
   registerLoopbackHandlers();
 
   // ── Desktop controls setup ──
@@ -610,32 +883,59 @@ app.whenReady().then(async () => {
 
   // Create the system tray.
   createTray();
+  configureCapabilityTray(async () => { await capabilityManager?.emergencyDisable(); });
 
   // Set up the macOS dock menu.
   setupDockMenu();
 
   // In production, start a local HTTP server for the web build
   // (Expo Router needs proper URL routing that file:// can't do)
-  if (!isDev) {
+  if (runtimePolicy.useStaticRenderer) {
     staticPort = await startStaticServer();
   }
 
   createWindow();
+  // Status discovery is asynchronous so a missing/outdated optional host
+  // binary never delays the first window. Any persisted canonical grant is
+  // read from host-tools before a capability socket can be advertised.
+  void capabilityManager.start();
   setupAutoUpdater();
 });
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
-    stopAllLoopbacks();
-    if (staticServer) staticServer.close();
-    destroyTray();
-    unregisterAllShortcuts();
     app.quit();
   }
 });
 
-app.on('before-quit', () => {
-  stopAllLoopbacks();
+app.on('before-quit', (event) => {
+  if (shutdownComplete) return;
+  event.preventDefault();
+  if (shutdownInProgress) return;
+  shutdownInProgress = true;
+  // Close capability admission before loopback callbacks run. In particular,
+  // an emergency-stop retry must not reopen host-tools while Electron is
+  // already committed to quitting.
+  capabilityManager?.beginShutdown();
+  void (async () => {
+    try {
+      // Await local-principal release before Electron tears down the main
+      // process. Otherwise sidecar/browser state could outlive its account.
+      await stopAllLoopbacks();
+      await capabilityManager?.shutdown();
+    } catch (error) {
+      console.warn('[openagent] graceful capability shutdown failed:', error);
+    } finally {
+      if (staticServer) staticServer.close();
+      destroyTray();
+      unregisterAllShortcuts();
+      shutdownComplete = true;
+      // Re-enter Electron's quit flow only after every owned service and shim
+      // has drained. `shutdownComplete` makes the second before-quit event
+      // pass through without cancelling it again.
+      app.quit();
+    }
+  })();
 });
 
 app.on('activate', () => {
@@ -656,12 +956,6 @@ app.on('second-instance', () => {
   }
 });
 
-app.on('before-quit', () => {
-  if (staticServer) staticServer.close();
-  destroyTray();
-  unregisterAllShortcuts();
-});
-
 // ── Notify renderers of focus changes ──
 
 app.on('browser-window-focus', (_event, win) => {
@@ -669,7 +963,7 @@ app.on('browser-window-focus', (_event, win) => {
     const id = win.webContents.id;
     for (const entry of getAllWindows()) {
       if (!entry.win.isDestroyed()) {
-        entry.win.webContents.send('window:focusChanged', id);
+        sendToTrustedRenderer(entry.win.webContents, 'window:focusChanged', id);
       }
     }
   }

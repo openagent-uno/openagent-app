@@ -85,10 +85,15 @@ export interface ContextPanelProps {
   variant?: 'floating' | 'inline';
   /** Extra top offset for the floating variant (e.g. the header inset). */
   topInset?: number;
+  /** The legacy floating panel is governed by the persisted visibility
+   *  preference. A containing surface such as the session-details drawer owns
+   *  its own visibility and can opt out of that second gate. */
+  respectVisibilityPreference?: boolean;
 }
 
 const ContextPanel = memo(function ContextPanel({
   context, variant = 'floating', topInset = 0,
+  respectVisibilityPreference = true,
 }: ContextPanelProps) {
   const { isPhone } = useLayout();
   const visible = useUI((s) => s.contextPanelVisible);
@@ -99,7 +104,7 @@ const ContextPanel = memo(function ContextPanel({
 
   // Hidden by the user's toggle (chat header menu / run screen) → render
   // nothing regardless of data.
-  if (!visible) return null;
+  if (respectVisibilityPreference && !visible) return null;
   // No data yet (brand-new session before its first turn) → render nothing so
   // the panel never shows an empty frame.
   if (!context || !context.context_window || !context.sections?.length) return null;

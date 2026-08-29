@@ -1,22 +1,16 @@
 #!/usr/bin/env bash
-# Rebuild the macOS .icns from the full-bleed master.
-#
-# macOS 26 (Tahoe) composites every app icon onto its own squircle plate and
-# masks it. Art that already contains a rounded tile with transparent margin
-# gets the treatment twice: the system plate shows through the margin as a pale
-# frame and our own corners are clipped inside it. The master below is therefore
-# FULL-BLEED — opaque edge to edge, no rounded corners — and the single mask the
-# system applies is the only one.
-#
-# Windows (icon.ico) and Linux (icon.png) keep the pre-rounded tile: neither
-# platform masks, so there the tile is the shape.
+# Rebuild the macOS .icns from the padded transparent squircle master.
+# macOS 15 does not apply Tahoe's icon mask to legacy .icns assets, so an
+# opaque full-bleed master renders as a giant square. The verifier below keeps
+# the cross-version source geometry fail-closed.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SRC="${1:-$HERE/../buildResources/icon-macos.png}"
+SRC="${1:-$HERE/../buildResources/icon.png}"
 OUT="${2:-$HERE/../buildResources/icon.icns}"
 
 [ -f "$SRC" ] || { echo "missing master: $SRC" >&2; exit 1; }
+node "$HERE/verify-macos-icon.mjs" "$SRC"
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 SET="$WORK/icon.iconset"; mkdir -p "$SET"
@@ -27,4 +21,7 @@ for s in 16 32 128 256 512; do
 done
 
 iconutil -c icns "$SET" -o "$OUT"
+VERIFY_SET="$WORK/verify.iconset"
+iconutil -c iconset "$OUT" -o "$VERIFY_SET"
+node "$HERE/verify-macos-icon.mjs" "$VERIFY_SET/icon_512x512@2x.png"
 echo "✅ $OUT"

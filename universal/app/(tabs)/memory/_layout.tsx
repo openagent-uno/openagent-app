@@ -11,7 +11,7 @@
  */
 
 import { Stack } from 'expo-router';
-import { themedHeader, HeaderMenu, HeaderBack } from '../../../components/screenHeader';
+import { themedHeader, HeaderMenu, HeaderMenuAndBack } from '../../../components/screenHeader';
 
 // Anchor the stack at ``index`` so a pushed/deep-linked sub-screen (a note,
 // the vault history) always has the graph dashboard beneath it — its back
@@ -26,7 +26,7 @@ export default function MemoryStackLayout() {
         ...themedHeader,
         // Section fallback: a cold-loaded (reloaded/deep-linked) sub-screen
         // with no trail history backs out to the section dashboard, not chat.
-        headerLeft: () => <HeaderBack fallback="/(tabs)/memory" />,
+        headerLeft: () => <HeaderMenuAndBack fallback="/(tabs)/memory" />,
         animation: 'slide_from_right',
       }}
     >

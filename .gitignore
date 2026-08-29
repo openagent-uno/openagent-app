@@ -6,6 +6,8 @@ dist/
 release/
 web-build/
 .expo/
+test-results/
+playwright-report/
 
 # Android / iOS
 android/

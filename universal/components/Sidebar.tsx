@@ -31,28 +31,29 @@ import {
   Pressable,
   StyleSheet,
   Platform,
-  ScrollView,
+  FlatList,
+  ActivityIndicator,
 } from 'react-native';
-import Animated, {
-  useSharedValue,
-  useAnimatedStyle,
-  withTiming,
-  Easing,
-} from 'react-native-reanimated';
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter, useSegments, useGlobalSearchParams } from 'expo-router';
 import { useChat } from '../stores/chat';
 import { isHiddenChildSession } from '../../common/types';
 import { useActivity, type ActivityRun } from '../stores/activity';
 import { useConnection } from '../stores/connection';
+import { globalSearchAvailable, useSearch } from '../stores/search';
+import { openSearchTarget } from '../services/searchNavigation';
+import { sessionEntryFromActivity } from '../services/api';
+import type { ActivityItem, SearchTarget } from '../../common/unified-history';
+import { historyKindsForFilters } from '../../common/history-feed-policy';
 import { useConfirm } from './ConfirmDialog';
 import PopupMenu from './PopupMenu';
 import { useEvents } from '../stores/events';
+import { useUIViews } from '../stores/uiViews';
 import AgentSwitcher from './AgentSwitcher';
 import BrandLogo from './BrandLogo';
 import WindowControls from './WindowControls';
 import DragRegion from './DragRegion';
-import { colors, font, radius, spacing, tracking } from '../theme';
+import { colors, font, radius, spacing } from '../theme';
 
 type IconName = keyof typeof Feather.glyphMap;
 
@@ -70,11 +71,12 @@ const NAV: NavItem[] = [
   { href: '/tasks', match: 'tasks', label: 'Scheduled', icon: 'clock' },
   { href: '/workflows', match: 'workflows', label: 'Workflows', icon: 'git-branch' },
   { href: '/events', match: 'events', label: 'Events', icon: 'zap' },
+  { href: '/views', match: 'views', label: 'Views', icon: 'layout' },
 ];
 
-// Fixed nav-row geometry so the gliding rail can resolve a row's Y.
-const ROW_H = 38;
-const ROW_GAP = 2;
+// Fixed nav-row geometry shared by actions and navigation.
+const ROW_H = 32;
+const ROW_GAP = 1;
 const FEED_MAX = 60;
 
 type FilterKey = 'chat' | 'workflow' | 'task' | 'event';
@@ -106,6 +108,7 @@ export default function Sidebar({
 }) {
   const router = useRouter();
   const segments = useSegments();
+  const routeParams = useGlobalSearchParams<{ id?: string }>();
   // Post-auth WS drop — surfaced right above the agent name so the connection
   // state lives next to the agent identity (moved here from the chat screen).
   const isReconnecting = useConnection((s) => s.isReconnecting);
@@ -114,7 +117,7 @@ export default function Sidebar({
   const isMac = typeof window !== 'undefined' && (window as any).desktop?.platform === 'darwin';
 
   const activeSeg = useMemo(() => {
-    const known = ['memory', 'mcps', 'skills', 'tasks', 'workflows', 'events', 'settings', 'system', 'logs', 'chat'];
+    const known = ['memory', 'mcps', 'skills', 'tasks', 'workflows', 'events', 'views', 'settings', 'system', 'logs', 'chat'];
     for (let i = segments.length - 1; i >= 0; i--) {
       if (known.includes(segments[i])) return segments[i];
     }
@@ -122,23 +125,10 @@ export default function Sidebar({
   }, [segments]);
 
   const navIndex = NAV.findIndex((n) => n.match === activeSeg);
-
-  // ── Gliding cyan rail ──
-  const railY = useSharedValue(navIndex < 0 ? 0 : navIndex * (ROW_H + ROW_GAP));
-  const railOpacity = useSharedValue(navIndex < 0 ? 0 : 1);
-  useEffect(() => {
-    railOpacity.value = withTiming(navIndex < 0 ? 0 : 1, { duration: 180 });
-    if (navIndex >= 0) {
-      railY.value = withTiming(navIndex * (ROW_H + ROW_GAP), {
-        duration: 280,
-        easing: Easing.out(Easing.cubic),
-      });
-    }
-  }, [navIndex, railOpacity, railY]);
-  const railStyle = useAnimatedStyle(() => ({
-    transform: [{ translateY: railY.value }],
-    opacity: railOpacity.value,
-  }));
+  const searchSupport = useSearch((state) => state.support);
+  const searchCapabilities = useSearch((state) => state.capabilities);
+  const canSearch = globalSearchAvailable({ support: searchSupport, capabilities: searchCapabilities });
+  const customViews = useUIViews((state) => state.items);
 
   const go = (href: string) => {
     router.push(href as any);
@@ -179,24 +169,37 @@ export default function Sidebar({
         <BrandLogo size={22} wordmark />
       </View>
 
-      {/* ── New session (styled like a nav row) ── */}
-      <Pressable
-        onPress={startSession}
-        // @ts-ignore web hover
-        {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
-        style={[styles.newRow, styles.newRowFull]}
-        accessibilityRole="button"
-        accessibilityLabel="New session"
-      >
-        <Feather name="edit-3" size={16} color={colors.accent} />
-        <Text style={styles.newRowText}>New session</Text>
-      </Pressable>
+      {/* ── Primary actions ── */}
+      <View style={styles.actionGroup}>
+        <Pressable
+          onPress={startSession}
+          // @ts-ignore web hover
+          {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
+          style={[styles.newRow, styles.newRowFull]}
+          accessibilityRole="button"
+          accessibilityLabel="New session"
+        >
+          <Feather name="edit-3" size={15} color={colors.accent} />
+          <Text style={styles.newRowText}>New session</Text>
+        </Pressable>
+        {canSearch ? (
+          <Pressable
+            onPress={() => useSearch.getState().show()}
+            // @ts-ignore web hover
+            {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
+            style={[styles.searchRow, styles.newRowFull]}
+            accessibilityRole="button"
+            accessibilityLabel="Search"
+          >
+            <Feather name="search" size={15} color={colors.textSecondary} />
+            <Text style={styles.searchRowText}>Search</Text>
+            {Platform.OS === 'web' ? <Text style={styles.searchShortcut}>⌘P</Text> : null}
+          </Pressable>
+        ) : null}
+      </View>
 
       {/* ── Workspace nav ── */}
       <View style={styles.nav}>
-        <Animated.View pointerEvents="none" style={[styles.rail, { height: ROW_H }, railStyle]}>
-          <View style={styles.railFill} />
-        </Animated.View>
         {NAV.map((item) => {
           const isActive = navIndex >= 0 && item.match === activeSeg;
           return (
@@ -209,6 +212,7 @@ export default function Sidebar({
                 styles.row,
                 { height: ROW_H, marginBottom: ROW_GAP },
                 styles.rowFull,
+                isActive && styles.rowActive,
               ]}
               accessibilityRole="button"
               accessibilityState={{ selected: isActive }}
@@ -216,7 +220,7 @@ export default function Sidebar({
             >
               <Feather
                 name={item.icon}
-                size={16}
+                size={15}
                 color={isActive ? colors.accent : colors.textSecondary}
               />
               <Text
@@ -229,6 +233,37 @@ export default function Sidebar({
           );
         })}
       </View>
+
+      {customViews.length > 0 ? (
+        <FlatList
+          style={styles.viewList}
+          contentContainerStyle={styles.viewListContent}
+          data={customViews}
+          keyExtractor={(item) => item.id}
+          showsVerticalScrollIndicator={false}
+          renderItem={({ item, index }) => {
+            const selected = activeSeg === 'views' && routeParams.id === item.id;
+            const showGroup = !!item.sidebarGroup
+              && customViews[index - 1]?.sidebarGroup !== item.sidebarGroup;
+            return (
+              <View>
+                {showGroup ? <Text style={styles.viewGroup} numberOfLines={1}>{item.sidebarGroup}</Text> : null}
+                <Pressable
+                  onPress={() => go(`/views/${encodeURIComponent(item.id)}`)}
+                  style={[styles.viewRow, selected && styles.viewRowActive]}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected }}
+                  accessibilityLabel={item.title}
+                  {...(Platform.OS === 'web' ? { className: 'oa-side-row' } as any : {})}
+                >
+                  <View style={[styles.viewDot, item.status !== 'active' && styles.viewDotStale]} />
+                  <Text style={[styles.viewText, selected && styles.rowLabelActive]} numberOfLines={1}>{item.title}</Text>
+                </Pressable>
+              </View>
+            );
+          }}
+        />
+      ) : null}
 
       {/* ── Recent feed ── */}
       <RecentFeed activeSeg={activeSeg} onNavigate={onNavigate} />
@@ -246,7 +281,7 @@ export default function Sidebar({
           </View>
         )}
         {/* Two rows, not one. Six things — avatar, agent name, chevron and
-            three 40px buttons — do not fit across a 220px sidebar: the name is
+            three action buttons — do not fit across a 220px sidebar: the name is
             the only flexible item, so it collapsed to 23px and rendered
             "es…" for "esound-agent" (measured). Which agent you are talking to
             is the single most important word down here, and the row below it
@@ -285,7 +320,7 @@ function FooterIcon({
       accessibilityState={{ selected: active }}
       accessibilityLabel={label}
     >
-      <Feather name={icon} size={18} color={active ? colors.accent : colors.textSecondary} />
+      <Feather name={icon} size={17} color={active ? colors.accent : colors.textSecondary} />
     </Pressable>
   );
 }
@@ -334,9 +369,26 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
   const filters = useActivity((s) => s.filters);
   const setFilter = useActivity((s) => s.setFilter);
   const loadActivity = useActivity((s) => s.loadActivity);
+  const unifiedSupport = useSearch((s) => s.support);
+  const unifiedItems = useSearch((s) => s.historyItems);
+  const unifiedLoading = useSearch((s) => s.historyLoading);
+  const unifiedPaginating = useSearch((s) => s.historyPaginating);
+  const unifiedError = useSearch((s) => s.historyError || s.capabilityError);
+  const loadMoreHistory = useSearch((s) => s.loadMoreHistory);
+  const setHistoryKinds = useSearch((s) => s.setHistoryKinds);
+
+  const requestedHistoryKinds = useMemo(() => historyKindsForFilters(filters), [filters]);
+  const requestedHistoryKindsKey = requestedHistoryKinds.join(',');
+  useEffect(() => {
+    if (unifiedSupport !== 'v2') return;
+    void setHistoryKinds(requestedHistoryKinds);
+    // The stable string is the dependency; the array itself is rebuilt when
+    // Zustand replaces the filter object.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [requestedHistoryKindsKey, setHistoryKinds, unifiedSupport]);
 
   useEffect(() => {
-    if (!isConnected) return;
+    if (!isConnected || unifiedSupport !== 'legacy') return;
     void loadActivity();
     const off1 = useEvents.getState().subscribe('workflow', () => void loadActivity());
     const off2 = useEvents.getState().subscribe('scheduled_task', () => void loadActivity());
@@ -344,13 +396,39 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
     // 'event' resource event, so a webhook trigger refreshes the feed live.
     const off3 = useEvents.getState().subscribe('event', () => void loadActivity());
     return () => { off1(); off2(); off3(); };
-  }, [isConnected, loadActivity]);
+  }, [isConnected, loadActivity, unifiedSupport]);
 
   const onChat = activeSeg === 'chat' && !onRunsRoute;
   const allOn = filters.chat && filters.workflow && filters.task && filters.event;
 
   const feed = useMemo<FeedItem[]>(() => {
     const items: FeedItem[] = [];
+    if (unifiedSupport === 'v2') {
+      for (const item of unifiedItems) {
+        // Delegated child sessions stay reachable from their parent transcript
+        // and from global search, but never become top-level Recent rows.
+        if (item.kind === 'delegated_session') continue;
+        if (item.kind === 'chat') {
+          if (!filters.chat) continue;
+        } else if (item.kind === 'workflow_run') {
+          if (!filters.workflow) continue;
+        } else if (item.kind === 'scheduled_run') {
+          if (!filters.task) continue;
+        } else if (!filters.event) continue;
+        const mapped = unifiedFeedItem(
+          item, router, activeRunId, activeSessionId, onChat, onNavigate,
+          item.kind === 'chat'
+            ? () => confirmAndRemove(item.session_id || item.resource_id, item.title)
+            : undefined,
+        );
+        if (mapped) items.push(mapped);
+      }
+      // Every v2 page was explicitly requested by the user reaching the end
+      // of the feed, so keep it visible. Re-applying the legacy 60-row cap
+      // here made subsequent pages load over the network and then disappear.
+      return items;
+    }
+    if (unifiedSupport !== 'legacy') return items;
     if (filters.chat) {
       for (const s of sessions) {
         // Sub-agent (delegation) sessions are navigable only from their
@@ -391,7 +469,10 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
     items.sort((a, b) => b.ts - a.ts);
     return items.slice(0, FEED_MAX);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions, workflowRuns, taskRuns, eventRuns, filters, onChat, activeSessionId, activeRunId]);
+  }, [
+    unifiedSupport, unifiedItems, sessions, workflowRuns, taskRuns, eventRuns,
+    filters, onChat, activeSessionId, activeRunId,
+  ]);
 
   return (
     <View style={styles.recent}>
@@ -430,48 +511,78 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
         </PopupMenu>
       </View>
 
-      <ScrollView style={styles.recentScroll} contentContainerStyle={styles.recentContent} showsVerticalScrollIndicator={false}>
-        {feed.length === 0 ? (
-          <Text style={styles.recentEmpty}>Nothing here yet.</Text>
+      <FlatList
+        style={styles.recentScroll}
+        contentContainerStyle={styles.recentContent}
+        data={feed}
+        keyExtractor={feedKeyExtractor}
+        renderItem={renderFeedItem}
+        showsVerticalScrollIndicator={false}
+        initialNumToRender={18}
+        maxToRenderPerBatch={18}
+        windowSize={7}
+        removeClippedSubviews={Platform.OS !== 'web'}
+        onEndReachedThreshold={0.35}
+        onEndReached={() => {
+          if (unifiedSupport === 'v2') void loadMoreHistory();
+        }}
+        ListEmptyComponent={unifiedLoading ? (
+          <ActivityIndicator size="small" color={colors.textMuted} style={styles.recentLoader} />
+        ) : unifiedError ? (
+          <Text style={styles.recentError}>{unifiedError}</Text>
         ) : (
-          feed.map((it) => (
-            <Pressable
-              key={it.key}
-              onPress={it.onPress}
-              // @ts-ignore web hover + entrance
-              {...(Platform.OS === 'web' ? { className: 'oa-side-row oa-fade-in' } : {})}
-              style={[styles.feedRow, it.active && styles.feedRowActive]}
-              accessibilityRole="button"
-              accessibilityState={{ selected: !!it.active }}
-              accessibilityLabel={it.label}
-            >
-              <Feather name={it.icon} size={13} color={it.active ? colors.accent : colors.textMuted} />
-              <Text style={[styles.feedText, it.active && styles.feedTextActive]} numberOfLines={1}>
-                {it.label}
-              </Text>
-              {it.ts ? <Text style={styles.feedMeta}>{relTime(it.ts)}</Text> : null}
-              {it.dotColor ? <View style={[styles.feedDot, { backgroundColor: it.dotColor }]} /> : null}
-              {it.onDelete ? (
-                <PopupMenu
-                  triggerIcon="more-horizontal"
-                  triggerSize={15}
-                  triggerColor={colors.textMuted}
-                  triggerStyle={styles.feedMenuBtn}
-                  accessibilityLabel={`Options for ${it.label}`}
-                  items={[
-                    { label: 'Delete', icon: 'trash-2', destructive: true, onPress: it.onDelete },
-                  ]}
-                />
-              ) : null}
-            </Pressable>
-          ))
+          <Text style={styles.recentEmpty}>Nothing here yet.</Text>
         )}
-      </ScrollView>
+        ListFooterComponent={unifiedPaginating ? (
+          <ActivityIndicator size="small" color={colors.textMuted} style={styles.recentLoader} />
+        ) : null}
+      />
     </View>
   );
 }
 
 // ── helpers ──
+
+function feedKeyExtractor(item: FeedItem): string {
+  return item.key;
+}
+
+function renderFeedItem({ item }: { item: FeedItem }) {
+  return (
+    <View
+      // @ts-ignore web hover + entrance
+      {...(Platform.OS === 'web' ? { className: 'oa-side-row oa-fade-in' } : {})}
+      style={[styles.feedRow, item.active && styles.feedRowActive]}
+    >
+      <Pressable
+        onPress={item.onPress}
+        style={styles.feedRowMain}
+        accessibilityRole="button"
+        accessibilityState={{ selected: !!item.active }}
+        accessibilityLabel={item.label}
+      >
+        <Feather name={item.icon} size={13} color={item.active ? colors.accent : colors.textMuted} />
+        <Text style={[styles.feedText, item.active && styles.feedTextActive]} numberOfLines={1}>
+          {item.label}
+        </Text>
+        {item.ts ? <Text style={styles.feedMeta}>{relTime(item.ts)}</Text> : null}
+        {item.dotColor ? <View style={[styles.feedDot, { backgroundColor: item.dotColor }]} /> : null}
+      </Pressable>
+      {item.onDelete ? (
+        <PopupMenu
+          triggerIcon="more-horizontal"
+          triggerSize={15}
+          triggerColor={colors.textMuted}
+          triggerStyle={styles.feedMenuBtn}
+          accessibilityLabel={`Options for ${item.label}`}
+          items={[
+            { label: 'Delete', icon: 'trash-2', destructive: true, onPress: item.onDelete },
+          ]}
+        />
+      ) : null}
+    </View>
+  );
+}
 
 function compactBoundEventRuns(runs: ActivityRun[]): ActivityRun[] {
   const byKey = new Map<string, ActivityRun>();
@@ -523,6 +634,65 @@ function runItem(
   };
 }
 
+function unifiedFeedItem(
+  item: ActivityItem,
+  router: ReturnType<typeof useRouter>,
+  activeRunId: string | null,
+  activeSessionId: string | null,
+  onChat: boolean,
+  onNavigate?: () => void,
+  onDelete?: () => void,
+): FeedItem | null {
+  let target: SearchTarget;
+  let prefix: string;
+  let icon: IconName;
+  if (item.kind === 'chat' || item.kind === 'delegated_session') {
+    const sessionId = item.session_id || item.resource_id;
+    target = { kind: 'chat', session_id: sessionId };
+    prefix = 'c';
+    icon = 'message-circle';
+  } else {
+    if (!item.parent?.id) return null;
+    if (item.kind === 'workflow_run') {
+      target = { kind: 'workflow_run', run_id: item.resource_id, workflow_id: item.parent.id };
+      prefix = 'w';
+      icon = 'git-branch';
+    } else if (item.kind === 'scheduled_run') {
+      target = {
+        kind: 'scheduled_run', run_id: item.resource_id, task_id: item.parent.id,
+        ...(item.session_id ? { session_id: item.session_id } : {}),
+      };
+      prefix = 't';
+      icon = 'clock';
+    } else {
+      target = {
+        kind: 'event_delivery', delivery_id: item.resource_id, event_id: item.parent.id,
+        ...(item.session_id ? { session_id: item.session_id } : {}),
+      };
+      prefix = 'e';
+      icon = 'zap';
+    }
+  }
+  const sessionId = target.kind === 'chat' ? target.session_id : null;
+  return {
+    key: `${prefix}-${item.id}`,
+    icon,
+    label: item.title,
+    ts: Date.parse(item.occurred_at),
+    active: sessionId ? onChat && sessionId === activeSessionId : activeRunId === item.resource_id,
+    dotColor: item.live ? colors.warning : item.status ? runStatusColor(item.status) : null,
+    onPress: () => {
+      if (target.kind === 'chat') {
+        const entry = sessionEntryFromActivity(item);
+        if (entry) useChat.getState().hydrateFromServer([entry]);
+      }
+      openSearchTarget(router, target);
+      onNavigate?.();
+    },
+    onDelete,
+  };
+}
+
 function runStatusColor(status: string): string {
   if (status === 'success') return colors.success;
   if (status === 'failed' || status === 'rejected') return colors.error;
@@ -561,7 +731,7 @@ const styles = StyleSheet.create({
     // the panel never leaves a gap when the drawer is wider than a fixed
     // width. The divider lives on the content's left edge, not here.
     backgroundColor: colors.sidebar,
-    paddingVertical: spacing.lg,
+    paddingVertical: spacing.md,
     height: '100%',
     width: '100%',
   },
@@ -575,10 +745,11 @@ const styles = StyleSheet.create({
   macControls: { height: 36, position: 'relative', marginBottom: spacing.xs },
 
   // Brand
-  brand: { marginBottom: spacing.lg },
+  brand: { marginBottom: spacing.sm },
   brandFull: { gap: spacing.sm },
 
   // New session row
+  actionGroup: { gap: ROW_GAP, marginBottom: spacing.sm },
   newRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -587,46 +758,37 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.primaryLight,
   },
-  newRowFull: { gap: 11, paddingHorizontal: spacing.md, height: ROW_H, marginBottom: spacing.md },
-  newRowText: { fontFamily: font.sans, fontSize: 14, color: colors.text, fontWeight: '600' },
+  newRowFull: { gap: 10, paddingHorizontal: 10, height: ROW_H },
+  newRowText: { fontFamily: font.sans, fontSize: 13.5, color: colors.text, fontWeight: '600' },
+  searchRow: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md },
+  searchRowText: { flex: 1, fontFamily: font.sans, fontSize: 13.5, color: colors.textSecondary, fontWeight: '500' },
+  searchShortcut: { fontFamily: font.mono, fontSize: 9.5, color: colors.textMuted },
 
   // Nav
   nav: { position: 'relative' },
-  rail: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    borderRadius: radius.md,
-    backgroundColor: colors.surface,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  railFill: {
-    position: 'absolute',
-    left: 0,
-    top: 6,
-    bottom: 6,
-    width: 2.5,
-    borderRadius: radius.pill,
-    backgroundColor: colors.accent,
-    ...(Platform.OS === 'web' ? ({ boxShadow: `0 0 8px ${colors.accentGlow}` } as any) : {}),
-  },
   row: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md },
-  rowFull: { gap: 11, paddingHorizontal: spacing.md },
-  rowLabel: { fontFamily: font.sans, fontSize: 14, color: colors.textSecondary, fontWeight: '500' },
+  rowFull: { gap: 10, paddingHorizontal: 10 },
+  rowActive: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  rowLabel: { fontFamily: font.sans, fontSize: 13.5, color: colors.textSecondary, fontWeight: '500' },
   rowLabelActive: { color: colors.text, fontWeight: '600' },
+  viewList: { maxHeight: 116, marginTop: 2, marginBottom: 2 },
+  viewListContent: { paddingLeft: 17 },
+  viewGroup: { paddingHorizontal: 9, paddingTop: 4, paddingBottom: 2, fontFamily: font.sans, fontSize: 8.5, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.7, color: colors.textMuted },
+  viewRow: { height: 27, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: radius.sm },
+  viewRowActive: { backgroundColor: colors.surface },
+  viewDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: colors.success },
+  viewDotStale: { backgroundColor: colors.textMuted },
+  viewText: { flex: 1, fontFamily: font.sans, fontSize: 11.5, color: colors.textSecondary },
 
   // Recent
-  recent: { flex: 1, minHeight: 0, marginTop: spacing.md, position: 'relative' },
-  recentDivider: { height: 1, backgroundColor: colors.borderLight, marginBottom: spacing.sm },
-  recentHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xs, marginBottom: spacing.xs },
+  recent: { flex: 1, minHeight: 0, marginTop: spacing.sm, position: 'relative' },
+  recentDivider: { height: 1, backgroundColor: colors.borderLight, marginBottom: spacing.xs },
+  recentHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: spacing.xs, marginBottom: 2 },
   recentHeading: {
     fontFamily: font.sans,
-    fontSize: 10,
+    fontSize: 11,
     fontWeight: '600',
     color: colors.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: tracking.wider,
   },
   filterBtn: { width: 24, height: 24, alignItems: 'center', justifyContent: 'center', borderRadius: radius.sm, borderWidth: 1, borderColor: 'transparent' },
   filterBtnActive: { borderColor: colors.border, backgroundColor: colors.primaryLight },
@@ -638,15 +800,24 @@ const styles = StyleSheet.create({
   recentScroll: { flex: 1 },
   recentContent: { gap: 1, paddingBottom: spacing.sm },
   recentEmpty: { fontFamily: font.sans, fontSize: 12, color: colors.textMuted, fontStyle: 'italic', paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
+  recentError: { fontFamily: font.sans, fontSize: 11.5, lineHeight: 16, color: colors.error, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
+  recentLoader: { marginVertical: spacing.md },
   feedRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 6,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: 'transparent',
+  },
+  feedRowMain: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingLeft: spacing.sm,
+    paddingRight: spacing.xs,
+    paddingVertical: 4,
   },
   feedRowActive: { backgroundColor: colors.surface, borderColor: colors.border },
   feedText: { flex: 1, minWidth: 0, fontFamily: font.sans, fontSize: 12.5, color: colors.textSecondary },
@@ -654,15 +825,15 @@ const styles = StyleSheet.create({
   feedMeta: { fontFamily: font.mono, fontSize: 9.5, color: colors.textMuted },
   feedDot: { width: 6, height: 6, borderRadius: radius.pill },
   feedMenuBtn: {
-    width: 22, height: 22, marginLeft: 2,
+    width: 22, height: 22, marginLeft: 2, marginRight: spacing.xs,
     alignItems: 'center', justifyContent: 'center',
     borderRadius: radius.sm,
   },
 
   // Footer (icons only)
   footer: { marginTop: 'auto' },
-  footerFull: { paddingTop: spacing.sm },
-  footerRule: { height: 1, backgroundColor: colors.borderLight, marginBottom: spacing.sm },
+  footerFull: { paddingTop: spacing.xs },
+  footerRule: { height: 1, backgroundColor: colors.borderLight, marginBottom: spacing.xs },
   // Reconnecting hint — sits right above the agent row (see [[isReconnecting]]).
   reconnectRow: {
     flexDirection: 'row', alignItems: 'center', gap: 7,
@@ -672,8 +843,8 @@ const styles = StyleSheet.create({
   reconnectText: {
     fontSize: 11, color: colors.textSecondary, fontFamily: font.mono, letterSpacing: 0.3,
   },
-  footerAgentRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.xs },
+  footerAgentRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 2 },
   footerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
-  footerBtn: { width: 40, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, borderWidth: 1, borderColor: 'transparent' },
+  footerBtn: { width: 36, height: 30, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, borderWidth: 1, borderColor: 'transparent' },
   footerBtnActive: { backgroundColor: colors.surface, borderColor: colors.border },
 });

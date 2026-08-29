@@ -4,11 +4,18 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
+import type { DesktopCapabilityStatus } from './capabilities/protocol';
 
 const isChild = (() => {
   try {
     return new URLSearchParams(window.location.search).get('child') === '1';
   } catch { return false; }
+})();
+
+const clientInstanceId = (() => {
+  const prefix = '--openagent-client-instance-id=';
+  const raw = process.argv.find((arg) => arg.startsWith(prefix))?.slice(prefix.length) ?? '';
+  return /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(raw) ? raw : '';
 })();
 
 /**
@@ -55,6 +62,22 @@ contextBridge.exposeInMainWorld('desktop', {
   platform: process.platform,
   isDesktop: true,
   isChild,
+  // Read-only boot identity. It binds renderer-originated session_open frames
+  // to the Electron-main capability channel; it grants no local authority.
+  clientInstanceId,
+
+  // Local capability control plane. No tool invocation method is exposed.
+  getCapabilityStatus: (): Promise<DesktopCapabilityStatus> =>
+    ipcRenderer.invoke('capabilities:getStatus'),
+  setCapabilityEnabled: (enabled: boolean): Promise<DesktopCapabilityStatus> =>
+    ipcRenderer.invoke('capabilities:setEnabled', enabled),
+  emergencyDisableCapabilities: (): Promise<DesktopCapabilityStatus> =>
+    ipcRenderer.invoke('capabilities:emergencyDisable'),
+  onCapabilityStatus: (cb: (status: DesktopCapabilityStatus) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, status: DesktopCapabilityStatus) => cb(status);
+    ipcRenderer.on('capabilities:status', handler);
+    return () => { ipcRenderer.removeListener('capabilities:status', handler); };
+  },
 
   // Storage (electron-store based, persists across restarts)
   getItem: (key: string): Promise<string | null> =>
@@ -98,8 +121,12 @@ contextBridge.exposeInMainWorld('desktop', {
   // Open a *standalone* agent window bound to ``accountId`` — a full app
   // window with its OWN connection (own loopback + WS), independent of this
   // one. Powers "open another agent in a new window" from the switcher.
-  openAgentWindow: (accountId: string): Promise<void> =>
-    ipcRenderer.invoke('window:openAgent', accountId),
+  openAgentWindow: (
+    accountId: string,
+    attemptToken?: number,
+    sourceAccountId?: string,
+  ): Promise<void> =>
+    ipcRenderer.invoke('window:openAgent', accountId, attemptToken, sourceAccountId),
 
   // Close all sub-windows (called on agent switch or main window close).
   closeAllChildren: (): Promise<void> => ipcRenderer.invoke('window:closeAllChildren'),
@@ -142,7 +169,46 @@ contextBridge.exposeInMainWorld('desktop', {
     handle?: string;
     network?: string;
     agent?: string;
-  }): Promise<number> => ipcRenderer.invoke('loopback:start', args),
+    remember?: boolean;
+    attemptToken?: number;
+  }): Promise<{
+    port: number;
+    target: { network: string; handle: string; agentHandle: string };
+  }> => ipcRenderer.invoke('loopback:start', args),
+
+  // Remembered passwords are encrypted/decrypted in the main process. There
+  // is deliberately no IPC getter that can return plaintext to the renderer.
+  credentialsAvailable: (): Promise<boolean> =>
+    ipcRenderer.invoke('credentials:isAvailable'),
+
+  forgetCredential: (accountId: string): Promise<void> =>
+    ipcRenderer.invoke('credentials:remove', accountId),
+
+  startRememberedLoopback: (args: {
+    accountId: string;
+    ticket?: string;
+    handle?: string;
+    network?: string;
+    agent?: string;
+    attemptToken?: number;
+  }): Promise<
+    | {
+        status: 'started'; port: number;
+        target: { network: string; handle: string; agentHandle: string };
+      }
+    | { status: 'missing' }
+    | {
+        status: 'invalid'; error: string;
+        target?: { network: string; handle: string; agentHandle: string };
+      }
+    | {
+        status: 'retryable_error'; error: string;
+        target?: { network: string; handle: string; agentHandle: string };
+      }
+  > => ipcRenderer.invoke('loopback:startRemembered', args),
+
+  releaseLoopbackAttempt: (args: { accountId: string; attemptToken: number }): Promise<void> =>
+    ipcRenderer.invoke('loopback:releaseAttempt', args),
 
   stopLoopback: (args: { accountId: string }): Promise<void> =>
     ipcRenderer.invoke('loopback:stop', args),

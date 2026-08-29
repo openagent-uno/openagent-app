@@ -2,9 +2,9 @@
  * Attachments — renders the files an agent (or a user) attaches to a message.
  *
  * Vision §2/§16: files are first-class in the stream and restored with the
- * transcript. The server ferries an attachment as ``{type, path, filename}``
- * on the ``response`` / rehydration payload; the bytes are fetched over HTTP
- * from ``/api/files?path=…`` via {@link fileUrl}. This layer turns that into UI:
+ * transcript. New responses carry a durable ``AttachmentRef`` with an opaque
+ * ``artifact_id`` and authenticated ``url``; path-only rows remain readable
+ * during beta compatibility. This layer turns that into UI:
  *
  *   • image / video → shown FULL-WIDTH inline in the session column.
  *   • voice          → a full-width inline audio player.
@@ -26,7 +26,8 @@ import {
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import type { Attachment } from '../../common/types';
-import { fileUrl, downloadFile } from '../services/api';
+import { attachmentKey } from '../../common/attachments';
+import { attachmentUrl, downloadAttachment } from '../services/api';
 import { colors, font, radius } from '../theme';
 
 const isWeb = Platform.OS === 'web';
@@ -77,7 +78,7 @@ function iconFor(att: Attachment): string {
 async function doDownload(att: Attachment) {
   if (!isWeb) return;
   try {
-    await downloadFile(att.path, att.filename);
+    await downloadAttachment(att);
   } catch (e) {
     console.error('Download failed:', e);
   }
@@ -107,7 +108,7 @@ export default function AttachmentBlock({ attachments, downloadable = false }: A
     <View style={styles.block}>
       {media.map((att, i) => (
         <MediaItem
-          key={`m-${att.path}-${i}`}
+          key={`m-${attachmentKey(att)}-${i}`}
           attachment={att}
           downloadable={downloadable}
           onPreview={() => setPreview(att)}
@@ -117,7 +118,7 @@ export default function AttachmentBlock({ attachments, downloadable = false }: A
         <View style={styles.fileRow}>
           {files.map((att, i) => (
             <FileBadge
-              key={`f-${att.path}-${i}`}
+              key={`f-${attachmentKey(att)}-${i}`}
               attachment={att}
               downloadable={downloadable}
               onPreview={() => setPreview(att)}
@@ -173,7 +174,7 @@ function MediaFooter({ attachment, downloadable }: { attachment: Attachment; dow
 function MediaImage({ attachment, downloadable, onPreview }: {
   attachment: Attachment; downloadable: boolean; onPreview: () => void;
 }) {
-  const uri = fileUrl(attachment.path);
+  const uri = attachmentUrl(attachment);
   // Full-width, aspect-correct. Image.getSize resolves natural dimensions on
   // both native and RNW (via a DOM Image); until then a placeholder height
   // holds the layout. maxHeight caps very tall images so one attachment can't
@@ -201,9 +202,9 @@ function MediaImage({ attachment, downloadable, onPreview }: {
 
 function MediaVideo({ attachment, downloadable }: { attachment: Attachment; downloadable: boolean }) {
   // Real <video> via React DOM (RNW/Electron). Content-Disposition:attachment
-  // on /api/files is ignored for a media subresource, so it streams inline.
+  // on the content endpoint is ignored for a media subresource, so it streams inline.
   const el = createElement('video', {
-    src: fileUrl(attachment.path),
+    src: attachmentUrl(attachment),
     controls: true,
     preload: 'metadata',
     playsInline: true,
@@ -222,7 +223,7 @@ function MediaVideo({ attachment, downloadable }: { attachment: Attachment; down
 
 function MediaAudio({ attachment, downloadable }: { attachment: Attachment; downloadable: boolean }) {
   const el = createElement('audio', {
-    src: fileUrl(attachment.path),
+    src: attachmentUrl(attachment),
     controls: true,
     preload: 'metadata',
     style: { width: '100%', display: 'block' },
@@ -335,7 +336,7 @@ function AttachmentPreview({ attachment, onClose }: {
 
 function PreviewViewer({ attachment }: { attachment: Attachment }) {
   const kind = previewKindFor(attachment);
-  const uri = fileUrl(attachment.path);
+  const uri = attachmentUrl(attachment);
 
   // Image — RN Image on every platform (contain to fit the panel).
   if (kind === 'image') {

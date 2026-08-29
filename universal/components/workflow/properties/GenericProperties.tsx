@@ -73,7 +73,7 @@ function Field({
   if (field.enum && field.enum.length > 0) {
     const current = (value as string) ?? (field.default as string) ?? '';
     return (
-      <div style={{ marginBottom: 10 }}>
+      <div id={`workflow-field-${encodeURIComponent(name)}`} style={{ marginBottom: 10 }}>
         <div style={styles.label}>{label}</div>
         <div style={styles.chipRow}>
           {field.enum.map((opt) => (
@@ -103,6 +103,7 @@ function Field({
         : JSON.stringify(value, null, 2);
     return (
       <FormField
+        fieldKey={name}
         label={label}
         value={text}
         onChange={(v) => {
@@ -124,7 +125,7 @@ function Field({
   if (field.type === 'boolean') {
     const v = Boolean(value);
     return (
-      <div style={{ marginBottom: 10 }}>
+      <div id={`workflow-field-${encodeURIComponent(name)}`} style={{ marginBottom: 10 }}>
         <div style={styles.label}>{label}</div>
         <button
           onClick={() => onChange(!v)}
@@ -144,6 +145,7 @@ function Field({
   const isNumeric = field.type === 'integer' || field.type === 'number';
   return (
     <FormField
+      fieldKey={name}
       label={label}
       value={value == null ? '' : String(value)}
       onChange={(v) => {

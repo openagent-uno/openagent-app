@@ -20,11 +20,42 @@ import type {
   SkillSummary, SkillDetail, SkillWriteResult, CreateSkillInput,
   ProviderAccounts, AgentEvent, CreateEventInput, UpdateEventInput, EventDelivery, EventTypeSpec,
 } from '../../common/types';
+import type {
+  ActivityItem,
+  ApiErrorPayload,
+  CapabilitiesResponse,
+  EventDeliveryDetail,
+  HistoryPage,
+  HistoryQuery,
+  ScheduledRunDetail,
+  SearchPage,
+  SearchRequest,
+  SessionMessagePage,
+  SessionMessagesQuery,
+  SessionDescendantsPage,
+  SessionRelatedRunsPage,
+  ToolInvocationDetail,
+  WorkflowRunDetail,
+} from '../../common/unified-history';
+import {
+  mergeCanonicalWorkflowTrace,
+  type WorkflowRunWithCanonicalTrace,
+} from '../../common/workflow-trace';
+import type { UIJson } from '../../common/ui-views';
+import { normalizeAttachmentRefs, normalizeMessageContent } from '../../common/ui-views';
+import { attachmentContentRef } from '../../common/attachments';
 
 let baseUrl = '';
 
 export function setBaseUrl(host: string, port: number) {
   baseUrl = `http://${host}:${port}`;
+}
+
+/** Current REST origin, used only for gateway-owned media links. Keeping it
+ * behind a helper prevents custom view specs from choosing arbitrary local
+ * file URLs. */
+export function apiUrl(path: string): string {
+  return `${baseUrl}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
 // Hard ceiling so a hung loopback stream (Iroh stalls, server crashes
@@ -43,10 +74,16 @@ const REQUEST_TIMEOUT_MS = 30_000;
  *  is a support ticket we wrote ourselves. */
 export class ApiError extends Error {
   readonly status: number;
-  constructor(status: number, message: string) {
+  readonly code?: ApiErrorPayload['code'];
+  readonly retryable?: boolean;
+  readonly details?: ApiErrorPayload['details'];
+  constructor(status: number, message: string, payload?: ApiErrorPayload) {
     super(message);
     this.name = 'ApiError';
     this.status = status;
+    this.code = payload?.code;
+    this.retryable = payload?.retryable;
+    this.details = payload?.details;
   }
 }
 
@@ -55,6 +92,11 @@ export class ApiError extends Error {
  *  the wrong method 405; both mean "this server can't do that yet". */
 export function isUnsupportedByAgent(e: unknown): boolean {
   return e instanceof ApiError && (e.status === 404 || e.status === 405);
+}
+
+/** A v2 endpoint exists but this server intentionally disabled the feature. */
+export function isExplicitlyUnsupported(e: unknown): boolean {
+  return e instanceof ApiError && e.status === 501 && e.code === 'unsupported';
 }
 
 /** True when the request never reached the agent at all: the loopback tunnel
@@ -77,24 +119,46 @@ export function isAgentUnreachable(e: unknown): boolean {
 function withTimeout(init: RequestInit, label: string): RequestInit {
   if (typeof AbortController === 'undefined') return init;
   const ctrl = new AbortController();
+  const upstream = init.signal;
+  const onUpstreamAbort = () => ctrl.abort(upstream?.reason);
+  if (upstream?.aborted) onUpstreamAbort();
+  else upstream?.addEventListener('abort', onUpstreamAbort, { once: true });
   const timer = setTimeout(() => ctrl.abort(`request timed out after ${REQUEST_TIMEOUT_MS}ms: ${label}`), REQUEST_TIMEOUT_MS);
-  // Clear when the promise settles. We attach this on the returned
-  // init via a sentinel field the caller picks up — simpler than
-  // wrapping every helper in a try/finally.
-  (init as any).__timer = timer;
-  return { ...init, signal: ctrl.signal };
+  const timed = { ...init, signal: ctrl.signal };
+  // Sentinels are removed in `clearTimer`; they never reach fetch's
+  // observable request surface.
+  (timed as any).__timer = timer;
+  (timed as any).__cleanupAbort = () => upstream?.removeEventListener('abort', onUpstreamAbort);
+  return timed;
 }
 
 function clearTimer(init: RequestInit): void {
   const t = (init as any).__timer;
   if (t) clearTimeout(t);
+  (init as any).__cleanupAbort?.();
 }
 
-async function get<T>(path: string): Promise<T> {
-  const init = withTimeout({}, `GET ${path}`);
+async function responseError(res: Response): Promise<ApiError> {
+  const text = await res.text();
+  let payload: ApiErrorPayload | undefined;
+  try {
+    const decoded = JSON.parse(text) as { error?: ApiErrorPayload };
+    if (decoded?.error?.code && decoded.error.message) payload = decoded.error;
+  } catch {
+    // Older gateways return plain text. Preserve it below.
+  }
+  return new ApiError(
+    res.status,
+    payload?.message || `API ${res.status}${text ? `: ${text}` : ''}`,
+    payload,
+  );
+}
+
+async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const init = withTimeout({ signal }, `GET ${path}`);
   try {
     const res = await fetch(`${baseUrl}${path}`, init);
-    if (!res.ok) throw new ApiError(res.status, `API ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw await responseError(res);
     return res.json();
   } finally {
     clearTimer(init);
@@ -116,15 +180,16 @@ async function put<T>(path: string, body: object): Promise<T> {
   }
 }
 
-async function post<T>(path: string, body: object = {}): Promise<T> {
+async function post<T>(path: string, body: object = {}, signal?: AbortSignal): Promise<T> {
   const init = withTimeout({
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
+    signal,
   }, `POST ${path}`);
   try {
     const res = await fetch(`${baseUrl}${path}`, init);
-    if (!res.ok) throw new ApiError(res.status, `API ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw await responseError(res);
     return res.json();
   } finally {
     clearTimer(init);
@@ -154,6 +219,68 @@ async function patch<T>(path: string, body: object): Promise<T> {
   } finally {
     clearTimer(init);
   }
+}
+
+// ── OA-UI custom views ──────────────────────────────────────────────
+
+export async function getUICapabilities(): Promise<unknown> {
+  return get('/api/ui/capabilities');
+}
+
+export async function listUIViews(options: {
+  surface?: 'sidebar' | 'inline';
+  sessionId?: string;
+  limit?: number;
+  cursor?: string;
+} = {}): Promise<unknown> {
+  const params = new URLSearchParams();
+  if (options.surface) params.set('surface', options.surface);
+  if (options.sessionId) params.set('sessionId', options.sessionId);
+  if (options.limit) params.set('limit', String(options.limit));
+  if (options.cursor) params.set('cursor', options.cursor);
+  const query = params.toString();
+  return get(`/api/ui/views${query ? `?${query}` : ''}`);
+}
+
+export async function getUIView(viewId: string, revision?: number): Promise<unknown> {
+  const query = revision != null ? `?revision=${encodeURIComponent(String(revision))}` : '';
+  return get(`/api/ui/views/${encodeURIComponent(viewId)}${query}`);
+}
+
+export async function invokeUIViewAction(
+  viewId: string,
+  actionId: string,
+  input: unknown,
+  idempotencyKey: string,
+  revision?: number,
+): Promise<unknown> {
+  return post(
+    `/api/ui/views/${encodeURIComponent(viewId)}/actions/${encodeURIComponent(actionId)}`,
+    {
+      ...(input !== undefined ? { input } : {}),
+      idempotencyKey,
+      ...(revision != null ? { revision } : {}),
+    },
+  );
+}
+
+export async function reactivateUIView(
+  viewId: string,
+  options: { expectedRevision?: number; expiresAt?: string | number | null } = {},
+): Promise<unknown> {
+  return post(`/api/ui/views/${encodeURIComponent(viewId)}/reactivate`, options);
+}
+
+export async function setUIViewData(
+  viewId: string,
+  key: string,
+  value: UIJson,
+  expectedVersion?: number,
+): Promise<unknown> {
+  return put(
+    `/api/ui/views/${encodeURIComponent(viewId)}/data/${encodeURIComponent(key)}`,
+    { value, ...(expectedVersion != null ? { expectedVersion } : {}) },
+  );
 }
 
 // ── Vault API ──
@@ -559,7 +686,10 @@ export async function getWorkflowRuns(
 }
 
 export async function getWorkflowRun(runId: string): Promise<WorkflowRun> {
-  return get<WorkflowRun>(`/api/workflow-runs/${encodeURIComponent(runId)}`);
+  const run = await get<WorkflowRunWithCanonicalTrace>(
+    `/api/workflow-runs/${encodeURIComponent(runId)}`,
+  );
+  return mergeCanonicalWorkflowTrace(run);
 }
 
 export async function getWorkflowStats(
@@ -649,10 +779,13 @@ export function guessMimeType(filename: string, kind: 'image' | 'file'): string 
 export async function uploadFile(
   file: File | Blob,
   filename = 'upload',
-  opts?: { language?: string; signal?: AbortSignal },
-): Promise<{
-  path: string;
-  filename: string;
+  opts?: {
+    language?: string;
+    sessionId?: string;
+    kind?: Attachment['type'];
+    signal?: AbortSignal;
+  },
+): Promise<Attachment & {
   transcription?: string;
   // Set by /api/upload when the file is audio. The chat screen flips
   // ``input_was_voice`` on the WS message so the gateway returns a
@@ -665,32 +798,61 @@ export async function uploadFile(
   } else {
     form.append('file', file, filename);
   }
+  if (opts?.kind) form.append('kind', opts.kind);
   // ``lang`` (ISO-639-1) hints the STT backend; empty means auto-detect.
-  const qs = opts?.language ? `?lang=${encodeURIComponent(opts.language)}` : '';
+  const query = new URLSearchParams();
+  if (opts?.language) query.set('lang', opts.language);
+  if (opts?.sessionId) query.set('session_id', opts.sessionId);
+  const encodedQuery = query.toString();
+  const qs = encodedQuery ? `?${encodedQuery}` : '';
   const res = await fetch(`${baseUrl}/api/upload${qs}`, {
     method: 'POST',
     body: form,
     signal: opts?.signal,
   });
   if (!res.ok) throw new Error(`Upload failed: ${res.status}`);
-  return res.json();
+  const payload = await res.json() as Record<string, unknown>;
+  const [attachment] = normalizeAttachmentRefs([{ type: opts?.kind, ...payload }]);
+  if (!attachment) throw new Error('Upload failed: gateway returned an invalid attachment reference');
+  return {
+    ...attachment,
+    ...(typeof payload.transcription === 'string' ? { transcription: payload.transcription } : {}),
+    ...(typeof payload.transcribed_from_voice === 'boolean'
+      ? { transcribed_from_voice: payload.transcribed_from_voice }
+      : {}),
+  };
 }
 
 // ── File Download (agent → client) ──
 
 /**
- * URL of the ``/api/files`` endpoint for a given server-side path.
- * Used when the agent returns an attachment in a ``response`` message
- * and the client needs to fetch it (remote install) or just link to
- * it (desktop w/ local gateway).
+ * URL of the deprecated ``/api/files`` endpoint for a legacy server-side
+ * path. Canonical AttachmentRefs use {@link attachmentUrl} and
+ * ``/api/artifacts/{id}/content`` instead.
  *
  * Auth is enforced by the loopback sidecar's Iroh transport — the
  * URL doesn't need a token query param. The legacy ``token`` argument
  * is preserved for callers that still pass it; it's ignored.
  */
 export function fileUrl(path: string, _token?: string): string {
+  if (/^\/api\/artifacts\/[^/?#]+\/content$/.test(path) || /^\/api\/files\?(?:[^#]*)$/.test(path)) {
+    return apiUrl(path);
+  }
   const params = new URLSearchParams({ path });
   return `${baseUrl}/api/files?${params.toString()}`;
+}
+
+/** Resolve a durable attachment through its authenticated canonical URL. */
+export function attachmentUrl(attachment: Attachment): string {
+  const ref = attachmentContentRef(attachment);
+  return ref ? fileUrl(ref) : '';
+}
+
+/** Download a canonical CAS ref, with path-only support for old gateways. */
+export async function downloadAttachment(attachment: Attachment, _token?: string): Promise<void> {
+  const ref = attachmentContentRef(attachment);
+  if (!ref) throw new Error('Attachment has no downloadable content reference');
+  return downloadFile(ref, attachment.filename);
 }
 
 /**
@@ -1140,6 +1302,159 @@ export interface SessionListResponse {
   sessions: SessionEntry[];
 }
 
+/** Adapt an authorized v2 activity summary into the small metadata shape the
+ * chat store needs. Message/tool content remains on-demand through the v2
+ * detail endpoints; this never recreates the legacy full-session listing. */
+export function sessionEntryFromActivity(item: ActivityItem): SessionEntry | null {
+  if (item.kind !== 'chat' && item.kind !== 'delegated_session') return null;
+  const sessionId = item.session_id || item.resource_id;
+  if (!sessionId) return null;
+  const occurredAt = Date.parse(item.occurred_at);
+  const updatedAt = Date.parse(item.updated_at);
+  return {
+    session_id: sessionId,
+    client_id: '',
+    title: item.title,
+    model: null,
+    framework: null,
+    created_at: Number.isFinite(occurredAt) ? Math.floor(occurredAt / 1000) : null,
+    last_active_at: Number.isFinite(updatedAt) ? Math.floor(updatedAt / 1000) : null,
+    parent_session_id: item.parent?.kind === 'session' ? item.parent.id : null,
+    origin: item.origin || (item.kind === 'delegated_session' ? 'delegation' : 'chat'),
+    kind: item.kind,
+    _live: item.live,
+  };
+}
+
+// ── Unified operational history/search beta ──
+
+export async function getUnifiedCapabilities(signal?: AbortSignal): Promise<CapabilitiesResponse> {
+  return get<CapabilitiesResponse>('/api/capabilities', signal);
+}
+
+export async function listUnifiedHistory(
+  query: HistoryQuery = {},
+  signal?: AbortSignal,
+): Promise<HistoryPage> {
+  const params = new URLSearchParams();
+  if (query.kinds?.length) params.set('kinds', query.kinds.join(','));
+  if (query.status?.length) params.set('status', query.status.join(','));
+  if (query.origin) params.set('origin', query.origin);
+  if (query.parent_type) params.set('parent_type', query.parent_type);
+  if (query.parent_id) params.set('parent_id', query.parent_id);
+  if (query.from) params.set('from', query.from);
+  if (query.to) params.set('to', query.to);
+  if (query.include_children != null) {
+    params.set('include_children', query.include_children ? 'true' : 'false');
+  }
+  if (query.limit != null) params.set('limit', String(query.limit));
+  if (query.cursor) params.set('cursor', query.cursor);
+  const suffix = params.toString();
+  return get<HistoryPage>(`/api/history${suffix ? `?${suffix}` : ''}`, signal);
+}
+
+/** Causal automation runs launched from one session's normalized tool
+ * invocations. Unlike the global activity parent, this relation follows the
+ * caller session and therefore remains complete across workflow/task/event
+ * definition kinds. */
+export async function listSessionRelatedRuns(
+  sessionId: string,
+  query: { limit?: number; cursor?: string; includeDescendants?: boolean } = {},
+  signal?: AbortSignal,
+): Promise<SessionRelatedRunsPage> {
+  const params = new URLSearchParams();
+  const limit = Math.max(1, Math.min(100, Math.floor(query.limit ?? 100)));
+  params.set('limit', String(limit));
+  if (query.cursor) params.set('cursor', query.cursor);
+  if (query.includeDescendants != null) {
+    params.set('include_descendants', query.includeDescendants ? 'true' : 'false');
+  }
+  return get<SessionRelatedRunsPage>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/related-runs?${params.toString()}`,
+    signal,
+  );
+}
+
+/** ACL-filtered, cycle-safe session subtree. The server snapshots the whole
+ * normalized lineage, while this client follows it one bounded page at a
+ * time so a large delegation tree never blocks opening the drawer. */
+export async function listSessionDescendants(
+  sessionId: string,
+  query: { limit?: number; cursor?: string } = {},
+  signal?: AbortSignal,
+): Promise<SessionDescendantsPage> {
+  const params = new URLSearchParams();
+  const limit = Math.max(1, Math.min(100, Math.floor(query.limit ?? 100)));
+  params.set('limit', String(limit));
+  if (query.cursor) params.set('cursor', query.cursor);
+  return get<SessionDescendantsPage>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/descendants?${params.toString()}`,
+    signal,
+  );
+}
+
+export async function searchOperationalHistory(
+  request: SearchRequest,
+  signal?: AbortSignal,
+): Promise<SearchPage> {
+  return post<SearchPage>('/api/search', request, signal);
+}
+
+export async function listSessionMessages(
+  sessionId: string,
+  query: SessionMessagesQuery = {},
+  signal?: AbortSignal,
+): Promise<SessionMessagePage> {
+  const params = new URLSearchParams();
+  if ('around' in query && query.around) {
+    params.set('around', query.around);
+    if (query.before != null) params.set('before', String(query.before));
+    if (query.after != null) params.set('after', String(query.after));
+  } else if ('cursor' in query && query.cursor) {
+    params.set('cursor', query.cursor);
+    params.set('direction', query.direction);
+    if (query.limit != null) params.set('limit', String(query.limit));
+  } else if ('limit' in query && query.limit != null) {
+    params.set('limit', String(query.limit));
+  }
+  const suffix = params.toString();
+  return get<SessionMessagePage>(
+    `/api/sessions/${encodeURIComponent(sessionId)}/messages${suffix ? `?${suffix}` : ''}`,
+    signal,
+  );
+}
+
+export async function getToolInvocationDetail(
+  toolInvocationId: string,
+  signal?: AbortSignal,
+): Promise<ToolInvocationDetail> {
+  return get<ToolInvocationDetail>(
+    `/api/tool-invocations/${encodeURIComponent(toolInvocationId)}`,
+    signal,
+  );
+}
+
+export async function getWorkflowRunDetail(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<WorkflowRunDetail> {
+  return get<WorkflowRunDetail>(`/api/workflow-runs/${encodeURIComponent(runId)}`, signal);
+}
+
+export async function getScheduledRunDetail(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<ScheduledRunDetail> {
+  return get<ScheduledRunDetail>(`/api/scheduled-runs/${encodeURIComponent(runId)}`, signal);
+}
+
+export async function getEventDeliveryDetail(
+  deliveryId: string,
+  signal?: AbortSignal,
+): Promise<EventDeliveryDetail> {
+  return get<EventDeliveryDetail>(`/api/event-deliveries/${encodeURIComponent(deliveryId)}`, signal);
+}
+
 export async function fetchSessions(): Promise<SessionEntry[]> {
   const data = await get<SessionListResponse>('/api/sessions');
   return data.sessions;
@@ -1148,9 +1463,13 @@ export async function fetchSessions(): Promise<SessionEntry[]> {
 /** List just the children a session spawned (delegated sub-agents, or the AI
  *  node / firing sessions under a workflow-run / scheduled-task root). Powers
  *  the parent transcript's delegation cards and the run screen. */
-export async function fetchChildSessions(parentSessionId: string): Promise<SessionEntry[]> {
+export async function fetchChildSessions(
+  parentSessionId: string,
+  limit: number = 200,
+): Promise<SessionEntry[]> {
+  const boundedLimit = Math.max(1, Math.min(200, Math.floor(limit)));
   const data = await get<SessionListResponse>(
-    `/api/sessions?parent=${encodeURIComponent(parentSessionId)}`,
+    `/api/sessions?parent=${encodeURIComponent(parentSessionId)}&limit=${boundedLimit}`,
   );
   return data.sessions;
 }
@@ -1188,7 +1507,9 @@ export interface SessionRunMessage {
     tokens_before?: number;
     tokens_after?: number;
   };
-  attachments?: { type: 'image' | 'file' | 'voice' | 'video'; path: string; filename: string }[];
+  attachments?: Record<string, unknown>[];
+  parts?: unknown[];
+  artifacts?: unknown[];
   model?: string;
   /** Per-message authorship (human handle/display, or an agent-self seed).
    *  Server-provided; absent on legacy rows. */
@@ -1204,6 +1525,7 @@ export interface SessionRunsResponse {
 // author / toolInfo passthrough stays consistent across every loader (chat
 // store hydration and the run-detail transcript alike).
 export function runMsgToChat(m: SessionRunMessage): ChatMessage {
+  const attachments = normalizeAttachmentRefs(m.attachments);
   return {
     id: m.id,
     role: m.role,
@@ -1222,7 +1544,8 @@ export function runMsgToChat(m: SessionRunMessage): ChatMessage {
           tokensAfter: m.compaction.tokens_after,
         } as CompactionInfo
       : undefined,
-    attachments: m.attachments as Attachment[] | undefined,
+    attachments: attachments.length ? attachments : undefined,
+    parts: normalizeMessageContent(m.parts, m.artifacts, m.text, attachments),
     model: m.model,
     author: m.author as MessageAuthor | undefined,
   };

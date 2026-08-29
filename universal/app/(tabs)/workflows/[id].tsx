@@ -23,7 +23,7 @@ import { goBack } from '../../../services/windows';
 import type { WorkflowTask } from '../../../../common/types';
 
 export default function WorkflowEditorScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, node, field } = useLocalSearchParams<{ id: string; node?: string; field?: string }>();
   const router = useRouter();
   const connConfig = useConnection((s) => s.config);
   const [workflow, setWorkflow] = useState<WorkflowTask | null>(null);
@@ -75,6 +75,8 @@ export default function WorkflowEditorScreen() {
       workflow={workflow}
       onBack={backToList}
       onWorkflowUpdated={setWorkflow}
+      initialNodeId={node}
+      initialField={field}
     />
   );
 }

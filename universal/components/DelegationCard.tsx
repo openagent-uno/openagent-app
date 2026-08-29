@@ -13,11 +13,12 @@ import Feather from '@expo/vector-icons/Feather';
 import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { colors, radius } from '../theme';
 
-export type DelegationPhase = 'running' | 'completed' | 'error';
+export type DelegationPhase = 'running' | 'completed' | 'stopped' | 'error';
 
 const DOT_COLOR: Record<DelegationPhase, string> = {
   running: colors.accent,
   completed: colors.success,
+  stopped: colors.textMuted,
   error: colors.error,
 };
 
@@ -57,7 +58,9 @@ const DelegationCard = memo(function DelegationCard({
         <Text style={styles.title} numberOfLines={1}>{title}</Text>
         {model ? <Text style={styles.model} numberOfLines={1}>{model}</Text> : null}
       </View>
-      <Text style={styles.label}>{phase === 'running' ? 'running…' : label}</Text>
+      <Text style={styles.label}>
+        {phase === 'running' ? 'running…' : phase === 'stopped' ? 'stopped' : label}
+      </Text>
       {clickable ? (
         <Feather name="chevron-right" size={14} color={colors.textMuted} />
       ) : null}

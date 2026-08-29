@@ -14,7 +14,7 @@ import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useEffect, useLayoutEffect, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { colors, font, radius } from '../../../theme';
-import { HeaderBack, HeaderRight, useHeaderInset } from '../../../components/screenHeader';
+import { HeaderMenuAndBack, HeaderRight, useHeaderInset } from '../../../components/screenHeader';
 import TerminalView, { type TerminalStatus } from '../../../components/terminal/TerminalView';
 import { useConnection } from '../../../stores/connection';
 import { setBaseUrl } from '../../../services/api';
@@ -54,7 +54,7 @@ export default function TerminalScreen() {
   useLayoutEffect(() => {
     navigation.setOptions({
       title: 'Terminal',
-      headerLeft: () => <HeaderBack onPress={() => closeDetached(router)} />,
+      headerLeft: () => <HeaderMenuAndBack onPress={() => closeDetached(router)} />,
       headerRight: () => (
         <HeaderRight>
           <View style={styles.badge}>

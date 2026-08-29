@@ -16,6 +16,9 @@ import {
   getCreateWindowFactory,
   type WindowInfo,
 } from './window-manager';
+import { safeExternalHttpUrl } from './security/renderer-url-policy';
+import { sendToTrustedRenderer } from './security/trusted-renderers';
+import { configureAutoUpdater } from './update-policy';
 
 // ── Helpers ──
 
@@ -25,7 +28,7 @@ const isMac = process.platform === 'darwin';
 function sendToFocused(channel: string, ...args: unknown[]): void {
   const win = BrowserWindow.getFocusedWindow();
   if (win && !win.isDestroyed()) {
-    win.webContents.send(channel, ...args);
+    sendToTrustedRenderer(win.webContents, channel, ...args);
   }
 }
 
@@ -33,7 +36,7 @@ function sendToFocused(channel: string, ...args: unknown[]): void {
 function sendToPrimary(channel: string, ...args: unknown[]): void {
   const primary = getPrimaryWindow();
   if (primary && !primary.isDestroyed()) {
-    primary.webContents.send(channel, ...args);
+    sendToTrustedRenderer(primary.webContents, channel, ...args);
   }
 }
 
@@ -41,7 +44,7 @@ function sendToPrimary(channel: string, ...args: unknown[]): void {
 function sendToAll(channel: string, ...args: unknown[]): void {
   for (const entry of getAllWindows()) {
     if (!entry.win.isDestroyed()) {
-      entry.win.webContents.send(channel, ...args);
+      sendToTrustedRenderer(entry.win.webContents, channel, ...args);
     }
   }
 }
@@ -354,6 +357,12 @@ export function buildMenu(): Menu {
           sendToPrimary('menu:checkForUpdates');
           try {
             const { autoUpdater } = require('electron-updater');
+            const policy = configureAutoUpdater(autoUpdater, app.getVersion());
+            // This path is explicitly initiated by the user. A beta may
+            // download here, but choosing "Later" must never install it on
+            // quit without launch-crash recovery.
+            autoUpdater.autoDownload = true;
+            autoUpdater.autoInstallOnAppQuit = policy.installOnQuit;
             autoUpdater.checkForUpdatesAndNotify();
           } catch {
             // Not available in dev — silently ignore.
@@ -370,7 +379,8 @@ export function buildMenu(): Menu {
       {
         label: 'OpenAgent Website',
         click: () => {
-          shell.openExternal('https://openagent.uno/');
+          const url = safeExternalHttpUrl('https://openagent.uno/');
+          if (url) void shell.openExternal(url);
         },
       },
     ],

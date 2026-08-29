@@ -4,6 +4,8 @@
  */
 
 import type { Attachment, ClientMessage, ServerMessage } from '../../common/types';
+import { attachmentsForSend } from '../../common/attachments';
+import { isConnectionReplacedClose } from '../../common/websocket-close';
 
 export type MessageHandler = (msg: ServerMessage) => void;
 
@@ -12,8 +14,9 @@ export type MessageHandler = (msg: ServerMessage) => void;
  *  "couldn't connect" failure. ``post_auth`` = transient drop in an
  *  already-authed session (auto-reconnect kicks in). ``retries_exhausted``
  *  = capped retry limit hit; the store should give up and surface the
- *  error to the user. */
-export type CloseReason = 'pre_auth' | 'post_auth' | 'retries_exhausted';
+ *  error to the user. ``replaced`` = a newer transport authenticated with the
+ *  same device identity, so this superseded socket must stay closed. */
+export type CloseReason = 'pre_auth' | 'post_auth' | 'retries_exhausted' | 'replaced';
 
 export type CloseHandler = (info: {
   reason: CloseReason;
@@ -27,6 +30,7 @@ export class OpenAgentWS {
   private ws: WebSocket | null = null;
   private url: string;
   private token: string;
+  private clientInstanceId: string;
   private handlers: Set<MessageHandler> = new Set();
   private closeHandlers: Set<CloseHandler> = new Set();
   private errorHandlers: Set<ErrorHandler> = new Set();
@@ -59,9 +63,10 @@ export class OpenAgentWS {
   }
   private _transport: any = null; // IpcWebSocket in Electron child windows
 
-  constructor(url: string, token?: string) {
+  constructor(url: string, token?: string, clientInstanceId?: string) {
     this.url = url;
     this.token = token ?? '';
+    this.clientInstanceId = clientInstanceId ?? '';
   }
 
   setTransport(transport: any): void {
@@ -87,7 +92,12 @@ export class OpenAgentWS {
       this.authed = false;
       // Auth is the only frame the server accepts pre-auth; everything
       // else has to wait for ``auth_ok`` before draining.
-      this.ws?.send(JSON.stringify({ type: 'auth', token: this.token }));
+      this.ws?.send(JSON.stringify({
+        type: 'auth',
+        token: this.token,
+        client_kind: this.clientInstanceId ? 'desktop' : 'webapp',
+        ...(this.clientInstanceId ? { client_instance_id: this.clientInstanceId } : {}),
+      }));
     };
 
     this.ws.onmessage = (event) => {
@@ -111,6 +121,25 @@ export class OpenAgentWS {
       console.log(`[WS] closed: code=${event.code} reason=${event.reason}`);
       this.openedSessions.clear();
       this.authed = false;
+
+      // A fresh connection carrying this device certificate has already
+      // taken over on the gateway.  Reconnecting this old socket would evict
+      // the fresh one; the two instances would then replace each other every
+      // backoff interval forever.  Stop only this superseded OpenAgentWS.
+      // All normal/abnormal transport closes continue through the existing
+      // bounded reconnect policy below.
+      if (isConnectionReplacedClose(event.code, event.reason)) {
+        this.shouldReconnect = false;
+        if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+        this.pendingOut = [];
+        this.notifyClose({
+          reason: 'replaced',
+          code: event.code,
+          detail: event.reason || undefined,
+        });
+        return;
+      }
 
       // Pre-auth drop on the first connect attempt → surface to the
       // store immediately (prevents the indefinite-loading bug). We
@@ -201,6 +230,16 @@ export class OpenAgentWS {
     t.onclose = (info: { code: number; reason: string }) => {
       this.openedSessions.clear();
       this.authed = false;
+      if (isConnectionReplacedClose(info.code, info.reason)) {
+        this.shouldReconnect = false;
+        this.pendingOut = [];
+        this.notifyClose({
+          reason: 'replaced',
+          code: info.code,
+          detail: info.reason || undefined,
+        });
+        return;
+      }
       this.notifyClose({
         reason: this.everAuthed ? 'post_auth' : 'pre_auth',
         code: info.code,
@@ -392,8 +431,16 @@ export class OpenAgentWS {
       tts_pin: options?.ttsPin,
       language: options?.language,
       client_kind: options?.clientKind,
+      client_instance_id: this.clientInstanceId || undefined,
       coalesce_window_ms: options?.coalesceWindowMs,
       speak,
+      client_capabilities: {
+        attachments: true,
+        ordered_parts: true,
+        inline_ui: true,
+        sidebar_ui: true,
+        custom_ui_version: 1,
+      },
     });
     this.openedSessions.add(sessionId);
   }
@@ -457,13 +504,14 @@ export class OpenAgentWS {
     // forwards to Agent.run_stream(attachments=...), which routes
     // non-image files via the agent's native files= parameter (no
     // string injection into the user prompt).
+    const attachments = attachmentsForSend(options?.attachments);
     this.send({
       type: 'text_final',
       session_id: sessionId,
       text,
       source: options?.source ?? 'user_typed',
-      ...(options?.attachments && options.attachments.length
-        ? { attachments: options.attachments }
+      ...(attachments
+        ? { attachments }
         : {}),
     });
   }
@@ -484,6 +532,41 @@ export class OpenAgentWS {
     reason: 'user_speech' | 'user_text' | 'manual' = 'manual',
   ): void {
     this.send({ type: 'interrupt', session_id: sessionId, reason });
+  }
+
+  // ── OA-UI v1 subscriptions ───────────────────────────────────────
+
+  subscribeUIView(
+    subscriptionId: string,
+    viewId: string,
+    options: { revision?: number; knownRevision?: number } = {},
+  ): void {
+    this.send({
+      type: 'ui_subscribe',
+      subscriptionId,
+      viewId,
+      ...(options.revision != null ? { revision: options.revision } : {}),
+      ...(options.knownRevision != null ? { knownRevision: options.knownRevision } : {}),
+    });
+  }
+
+  unsubscribeUIView(subscriptionId: string): void {
+    this.send({ type: 'ui_unsubscribe', subscriptionId });
+  }
+
+  sendUIViewAction(
+    subscriptionId: string,
+    actionId: string,
+    input: unknown,
+    idempotencyKey: string,
+  ): void {
+    this.send({
+      type: 'ui_action',
+      subscriptionId,
+      actionId,
+      ...(input !== undefined ? { input } : {}),
+      idempotencyKey,
+    });
   }
 
   // ── Interactive terminals (PTY on the gateway host) ──

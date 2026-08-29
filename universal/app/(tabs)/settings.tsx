@@ -28,6 +28,7 @@ import { useHeaderInset } from '../../components/screenHeader';
 import TabStrip from '../../components/TabStrip';
 import ThemedSwitch from '../../components/ThemedSwitch';
 import ModelScreen from './model';
+import type { DesktopCapabilityStatus } from '../../../common/client-capabilities';
 
 type CategoryId =
   | 'identity'
@@ -37,6 +38,7 @@ type CategoryId =
   | 'channels'
   | 'dream'
   | 'controls'
+  | 'computer'
   | 'connection'
   | 'models'
   | 'costs'
@@ -64,6 +66,7 @@ const CATEGORIES: Category[] = [
   { id: 'channels', label: 'Channels', icon: 'message-square', description: 'Gateway, Telegram, Discord, WhatsApp' },
   { id: 'dream', label: 'Dream Mode', icon: 'moon', description: 'Nightly vault + log maintenance' },
   { id: 'controls', label: 'Controls', icon: 'sliders', description: 'Auto-update, update and restart' },
+  { id: 'computer', label: 'This Computer', icon: 'monitor', description: 'Local tools and full-access consent' },
   { id: 'connection', label: 'Connection', icon: 'link', description: 'Network and identity' },
 ];
 
@@ -130,6 +133,9 @@ export default function SettingsScreen() {
   const [whPublicUrl, setWhPublicUrl] = useState('');
 
   const [saved, setSaved] = useState<string | null>(null);
+  const [capabilityStatus, setCapabilityStatus] = useState<DesktopCapabilityStatus | null>(null);
+  const [capabilityBusy, setCapabilityBusy] = useState(false);
+  const capabilityApi = desktopCapabilities();
 
   useEffect(() => {
     // The connection store points ``setBaseUrl`` at the loopback
@@ -171,6 +177,22 @@ export default function SettingsScreen() {
     setWhPort(String(wh.port ?? 8899));
     setWhPublicUrl(wh.public_url || '');
   }, [agentConfig]);
+
+  useEffect(() => {
+    const api = desktopCapabilities();
+    if (!api) return;
+    let alive = true;
+    void api.getCapabilityStatus().then((status) => {
+      if (alive) setCapabilityStatus(status);
+    }).catch(() => {});
+    const unsubscribe = api.onCapabilityStatus((status) => {
+      if (alive) setCapabilityStatus(status);
+    });
+    return () => {
+      alive = false;
+      unsubscribe();
+    };
+  }, []);
 
   const saveSection = async (section: string, data: any, label: string) => {
     const ok = await updateSection(section, data);
@@ -614,6 +636,107 @@ export default function SettingsScreen() {
     </>
   );
 
+  const setComputerAccess = async (enabled: boolean) => {
+    const api = desktopCapabilities();
+    if (!api || capabilityBusy) return;
+    setCapabilityBusy(true);
+    try {
+      setCapabilityStatus(await api.setCapabilityEnabled(enabled));
+    } catch (error: any) {
+      alert(`Could not ${enabled ? 'enable' : 'disable'} local access: ${error?.message || String(error)}`);
+      try { setCapabilityStatus(await api.getCapabilityStatus()); } catch { /* keep prior state */ }
+    } finally {
+      setCapabilityBusy(false);
+    }
+  };
+
+  const emergencyDisableComputer = async () => {
+    const api = desktopCapabilities();
+    if (!api || capabilityBusy) return;
+    setCapabilityBusy(true);
+    try {
+      setCapabilityStatus(await api.emergencyDisableCapabilities());
+    } catch (error: any) {
+      alert(`Emergency disable failed: ${error?.message || String(error)}`);
+    } finally {
+      setCapabilityBusy(false);
+    }
+  };
+
+  const renderComputer = () => {
+    const enabled = !!capabilityStatus?.consent.enabled;
+    return (
+      <>
+        <Text style={styles.sectionTitle}>This Computer</Text>
+        <Card>
+          <View style={styles.toggleRow}>
+            <View style={{ flex: 1, paddingRight: 12 }}>
+              <Text style={styles.toggleLabel}>Allow full computer access</Text>
+              <Text style={styles.fieldHint}>
+                One persistent device-level grant shared with the interactive CLI. There are no
+                per-call prompts or folder restrictions after it is enabled.
+              </Text>
+            </View>
+            <ThemedSwitch
+              value={enabled}
+              disabled={!capabilityApi || capabilityBusy}
+              onValueChange={(value) => { void setComputerAccess(value); }}
+            />
+          </View>
+
+          <Row label="Status" value={capabilityStatus ? capabilityPhaseLabel(capabilityStatus) : 'Loading…'} />
+          <Row label="Connected agents" value={String(capabilityStatus?.connectedAccounts ?? 0)} mono />
+          <Row label="Active local calls" value={String(capabilityStatus?.activeCalls ?? 0)} mono />
+          <Row
+            label="Client instance"
+            value={capabilityStatus?.clientInstanceId ? capabilityStatus.clientInstanceId.slice(0, 13) + '…' : '—'}
+            mono
+          />
+
+          {!!capabilityStatus?.servers.length && (
+            <View style={{ marginTop: 12 }}>
+              <Text style={styles.label}>Available on this device</Text>
+              <Text style={styles.fieldHint}>
+                {capabilityStatus.servers.map((server) => `${server.name} (${server.tools})`).join(' · ')}
+              </Text>
+            </View>
+          )}
+          {!!capabilityStatus?.error && (
+            <Text style={[styles.fieldHint, { color: colors.error, marginTop: 10 }]}>
+              {capabilityStatus.error}
+            </Text>
+          )}
+          {!capabilityApi && (
+            <Text style={[styles.fieldHint, { marginTop: 10 }]}>
+              Local computer tools are available in the Desktop app only.
+            </Text>
+          )}
+        </Card>
+
+        <Card style={{ marginTop: 14 }}>
+          <Text style={styles.channelHint}>
+            Local tools are offered only to interactive chats opened by this exact app instance.
+            Webhooks, schedules, automatic workflows, events, and other server-started turns never
+            receive them, and the server never falls back to another or previously used device.
+          </Text>
+          <Text style={[styles.channelHint, { marginTop: 10 }]}>
+            Full access can include reading and changing files, running commands, controlling
+            supported apps and browsers, and explicitly configured local MCP plugins. Operating
+            system privacy permissions still apply.
+          </Text>
+          <Button
+            variant="danger"
+            label="Emergency Disable Local Access"
+            fullWidth
+            disabled={!enabled || capabilityBusy}
+            onPress={() => { void emergencyDisableComputer(); }}
+            style={{ marginTop: 14 }}
+          />
+        </Card>
+      </>
+    );
+  };
+
   const renderMembers = () => (
     <MembersPanel />
   );
@@ -627,6 +750,7 @@ export default function SettingsScreen() {
       case 'channels': return renderChannels();
       case 'dream': return renderDream();
       case 'controls': return renderControls();
+      case 'computer': return renderComputer();
       case 'connection': return renderConnection();
       // 'models' / 'costs' render the embedded ModelScreen outside this
       // screen's ScrollView (it brings its own scroll area), so they
@@ -642,7 +766,7 @@ export default function SettingsScreen() {
   return (
     <View style={[styles.screen, { paddingTop: headerInset }]}>
       <SectionTabs<CategoryId>
-        tabs={CATEGORIES}
+        tabs={capabilityApi ? CATEGORIES : CATEGORIES.filter((category) => category.id !== 'computer')}
         active={activeCategory}
         onChange={setActiveCategory}
       />
@@ -674,6 +798,32 @@ export default function SettingsScreen() {
       )}
     </View>
   );
+}
+
+interface DesktopCapabilitiesAPI {
+  getCapabilityStatus: () => Promise<DesktopCapabilityStatus>;
+  setCapabilityEnabled: (enabled: boolean) => Promise<DesktopCapabilityStatus>;
+  emergencyDisableCapabilities: () => Promise<DesktopCapabilityStatus>;
+  onCapabilityStatus: (cb: (status: DesktopCapabilityStatus) => void) => () => void;
+}
+
+function desktopCapabilities(): DesktopCapabilitiesAPI | null {
+  if (typeof window === 'undefined') return null;
+  const api = (window as any).desktop;
+  if (!api || typeof api.getCapabilityStatus !== 'function') return null;
+  return api as DesktopCapabilitiesAPI;
+}
+
+function capabilityPhaseLabel(status: DesktopCapabilityStatus): string {
+  switch (status.phase) {
+    case 'disabled': return 'Disabled';
+    case 'starting': return 'Starting local host…';
+    case 'unavailable': return 'Unavailable';
+    case 'ready': return 'Ready — waiting for an agent connection';
+    case 'connecting': return 'Connecting to agent…';
+    case 'connected': return 'Connected';
+    case 'active': return `Active (${status.activeCalls})`;
+  }
 }
 
 function VoiceField({
