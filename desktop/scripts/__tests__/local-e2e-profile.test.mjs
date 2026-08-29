@@ -164,12 +164,17 @@ test('iroh discovery override accepts local-only aliases and otherwise defaults'
   }
 });
 
-test('electron-builder stays on the CJS-compatible noble hashes override', () => {
+test('electron-builder includes the fail-closed NSIS PE extraction fix and noble hashes override', () => {
   const desktopRoot = path.resolve(import.meta.dirname, '../..');
   const manifest = JSON.parse(fs.readFileSync(path.join(desktopRoot, 'package.json'), 'utf8'));
   const lock = JSON.parse(fs.readFileSync(path.join(desktopRoot, 'package-lock.json'), 'utf8'));
-  assert.equal(manifest.devDependencies['electron-builder'], '26.15.3');
+  // electron-builder 26.15.7 contains the v26 backport that forces an
+  // install-time-compatible 7z filter for NSIS payloads. Older 26.15.x
+  // releases could silently omit PE files, including OpenAgent.exe, on both
+  // Windows architectures: https://github.com/electron-userland/electron-builder/pull/9989
+  assert.equal(manifest.devDependencies['electron-builder'], '26.15.7');
   assert.equal(manifest.overrides['app-builder-lib']['@noble/hashes'], '1.8.0');
-  assert.equal(lock.packages['node_modules/electron-builder'].version, '26.15.3');
+  assert.equal(lock.packages['node_modules/electron-builder'].version, '26.15.7');
+  assert.equal(lock.packages['node_modules/app-builder-lib'].version, '26.15.7');
   assert.equal(lock.packages['node_modules/@noble/hashes'].version, '1.8.0');
 });
