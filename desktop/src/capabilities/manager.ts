@@ -91,8 +91,12 @@ export class CapabilityManager {
   async start(): Promise<void> {
     this.emitStatus();
     // The stand-alone host is the canonical consent owner shared with the
-    // interactive CLI. Never push the Electron cache into it at boot.
-    await this.ensureHost(true);
+    // interactive CLI. Never push the Electron cache into it at boot. Once
+    // that canonical state has been read, a persisted grant must attach every
+    // already-certified loopback installed during Desktop startup; otherwise
+    // a renderer reload looks enabled while a real Electron relaunch silently
+    // stops advertising capabilities until the user toggles consent again.
+    await this.ensureHost();
   }
 
   getStatus(): DesktopCapabilityStatus {

@@ -10,6 +10,70 @@ import { CapabilityManager } from '../../../dist/capabilities/manager.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 
+test('manager advertises a broker-owned persisted grant on a fresh Desktop boot', async () => {
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await new Promise((resolve) => server.once('listening', resolve));
+  const address = server.address();
+  assert.equal(typeof address, 'object');
+
+  let cache = { enabled: false, version: 1, updatedAt: null };
+  let hello = null;
+  server.on('connection', (ws) => {
+    ws.on('message', (raw) => {
+      const frame = JSON.parse(raw.toString());
+      if (frame.type !== 'capability_hello') return;
+      hello = frame;
+      ws.send(JSON.stringify({
+        type: 'capability_hello_ack',
+        protocol: frame.protocol,
+        device_id: 'persisted-device',
+        account_id: 'persisted-network',
+        network_id: 'persisted-network',
+        client_instance_id: frame.client_instance_id,
+        generation: frame.generation,
+        accepted: true,
+      }));
+    });
+  });
+
+  const manager = new CapabilityManager({
+    clientInstanceId: 'fresh-desktop-instance',
+    deviceLabel: 'Fresh Desktop',
+    hostLaunch: {
+      command: process.execPath,
+      args: [path.join(here, 'fake-host.mjs')],
+      env: { OPENAGENT_FAKE_ENABLED: '1' },
+      source: 'development',
+    },
+    consentStore: {
+      get: () => cache,
+      cacheCanonical: (enabled, version = 1, updatedAt = null) => {
+        cache = { enabled, version, updatedAt };
+        return cache;
+      },
+    },
+  });
+  manager.addLoopback(
+    'persisted-account',
+    `http://127.0.0.1:${address.port}`,
+    'persisted-gateway',
+    'persisted-network',
+    'persisted-device',
+  );
+
+  try {
+    await manager.start();
+    await waitUntil(() => manager.getStatus().phase === 'connected');
+    assert.equal(manager.getStatus().consent.enabled, true);
+    assert.equal(manager.getStatus().connectedAccounts, 1);
+    assert.equal(hello?.client_instance_id, 'fresh-desktop-instance');
+    assert.equal(hello?.servers[0].name, 'filesystem');
+  } finally {
+    await manager.shutdown();
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
 test('manager keeps disabled targets offline, then binds exact instance and emergency-revokes', async () => {
   const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
   await new Promise((resolve) => server.once('listening', resolve));

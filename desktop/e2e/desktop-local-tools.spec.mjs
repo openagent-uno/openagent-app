@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, realpath, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -15,6 +15,8 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const DESKTOP_ROOT = resolve(HERE, '..');
 const APP_ROOT = resolve(DESKTOP_ROOT, '..');
 const WEB_ROOT = join(APP_ROOT, 'universal', 'dist');
+const LOCAL_PLUGIN_FIXTURE = join(HERE, 'local-plugin-fixture.mjs');
+const LOCAL_PLUGIN_SECRET = 'desktop-e2e-plugin-secret-never-on-gateway';
 
 test('real Electron host executes local tools, reports its host, audits, and never falls back', async () => {
   test.slow();
@@ -282,8 +284,269 @@ test('real Electron host executes local tools, reports its host, audits, and nev
   }
 });
 
+test('persistent consent survives Electron relaunch and an explicit local plugin stays local', async () => {
+  test.slow();
+  const testRoot = await mkdtemp(join(tmpdir(), 'openagent-desktop-plugin-e2e-'));
+  const userData = join(testRoot, 'electron-user-data');
+  const hostHomeCandidate = join(testRoot, 'host-tools-home');
+  const pluginMarker = join(testRoot, 'plugin-invocations.ndjson');
+  await mkdir(userData, { recursive: true });
+  await mkdir(hostHomeCandidate, { recursive: true });
+  const hostHome = await realpath(hostHomeCandidate);
+
+  const pluginConfig = [
+    '# Explicit local MCP used by the Desktop release E2E.',
+    'version = 1',
+    '',
+    '[[mcp]]',
+    'name = "e2e-local-plugin"',
+    `command = [${tomlString(process.execPath)}, ${tomlString(LOCAL_PLUGIN_FIXTURE)}]`,
+    'enabled = true',
+    `cwd = ${tomlString(HERE)}`,
+    `env = { OPENAGENT_E2E_PLUGIN_SECRET = ${tomlString(LOCAL_PLUGIN_SECRET)}, ` +
+      `OPENAGENT_E2E_PLUGIN_MARKER = ${tomlString(pluginMarker)} }`,
+    '',
+  ].join('\n');
+  await writeFile(join(hostHome, 'client-mcps.toml'), pluginConfig, { mode: 0o600 });
+
+  const accountId = 'desktop-plugin-e2e-account';
+  const networkId = 'network-certified-plugin-e2e';
+  const deviceId = 'device-certificate-plugin-e2e';
+  const gateway = await new DeterministicGateway({
+    webRoot: WEB_ROOT,
+    accountId,
+    networkId,
+    deviceId,
+    agentNodeId: 'agent-node-plugin-e2e',
+  }).start();
+  const hostBinary = resolveHostToolsBinary(DESKTOP_ROOT);
+  const brokerPidsBefore = await listBrokerPids(hostBinary, hostHome);
+  const shimPidsBefore = await listShimPids(hostBinary);
+  const mainOutput = [];
+  let electronApp;
+
+  const launchDesktop = async () => {
+    const launched = await electron.launch({
+      args: [DESKTOP_ROOT, `--user-data-dir=${userData}`],
+      cwd: DESKTOP_ROOT,
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        OPENAGENT_DESKTOP_E2E: '1',
+        OPENAGENT_DESKTOP_E2E_RENDERER_URL: `${gateway.baseUrl}/settings`,
+        OPENAGENT_DESKTOP_E2E_LOOPBACK: JSON.stringify(gateway.loopbackConfig()),
+        OPENAGENT_HOST_TOOLS_BIN: hostBinary,
+        OPENAGENT_HOST_TOOLS_HOME: hostHome,
+        ELECTRON_DISABLE_SECURITY_WARNINGS: 'true',
+      },
+    });
+    launched.process().stdout?.on('data', (chunk) => mainOutput.push(chunk.toString()));
+    launched.process().stderr?.on('data', (chunk) => mainOutput.push(chunk.toString()));
+    return launched;
+  };
+
+  const closeDesktop = async () => {
+    const active = electronApp;
+    electronApp = undefined;
+    if (active) {
+      const child = active.process();
+      const exited = waitForProcessExit(child, 20_000);
+      // ElectronApplication.close() closes the last BrowserWindow but macOS
+      // intentionally keeps the app/main process alive. Drive the production
+      // quit lifecycle so this is a genuine process relaunch and the
+      // capability manager gets to release its broker principal cleanly.
+      await active.evaluate(({ app }) => { app.quit(); }).catch(() => {});
+      await exited;
+    }
+    await expect.poll(() => gateway.capabilitySocket === null).toBe(true);
+  };
+
+  try {
+    electronApp = await launchDesktop();
+    await electronApp.evaluate(({ dialog }) => {
+      dialog.showMessageBox = async () => ({ response: 1, checkboxChecked: false });
+    });
+    let page = await electronApp.firstWindow();
+    await page.setViewportSize({ width: 1_440, height: 960 });
+    await expect(page).toHaveURL(`${gateway.baseUrl}/settings`);
+
+    const account = {
+      id: accountId,
+      name: 'Desktop Plugin E2E',
+      network: 'desktop-plugin-e2e',
+      handle: 'e2e-plugin-user',
+      agentHandle: 'e2e-plugin-agent',
+      isLocal: true,
+      createdAt: Date.now(),
+    };
+    await page.evaluate(async ({ accountValue, accountKey, connectionKey, port }) => {
+      await window.desktop.setItem(accountKey, JSON.stringify([accountValue]));
+      await window.desktop.setItem(connectionKey, JSON.stringify({
+        accountId: accountValue.id,
+        sidecarPort: port,
+      }));
+    }, {
+      accountValue: account,
+      accountKey: 'openagent:accounts',
+      connectionKey: 'openagent:activeConnection',
+      port: Number(new URL(gateway.baseUrl).port),
+    });
+    await page.reload();
+    await page.getByText('This Computer', { exact: true }).first().click();
+    await expect.poll(async () => (await capabilityStatus(page)).phase).toBe('disabled');
+
+    await page.getByRole('switch').first().click();
+    const firstHello = await gateway.waitForCapabilityHello();
+    const firstElectronPid = electronApp.process().pid;
+    await expect.poll(async () => (await capabilityStatus(page)).phase).toBe('connected');
+    assertPluginCatalog(firstHello);
+
+    const firstInvocation = await gateway.call(
+      'e2e-local-plugin',
+      'local_probe',
+      { marker: 'first-launch' },
+    );
+    assertLocalPluginResult(firstInvocation.result);
+    await expect.poll(async () => (await readPluginInvocations(pluginMarker)).length).toBe(1);
+    const firstMarker = (await readPluginInvocations(pluginMarker))[0];
+    expect(firstMarker.envVerified).toBe(true);
+    expect(firstMarker.arguments).toEqual({ marker: 'first-launch' });
+
+    const consentPath = join(hostHome, 'client-tools-consent.json');
+    expect(JSON.parse(await readFile(consentPath, 'utf8')).enabled).toBe(true);
+    const hellosBeforeRelaunch = capabilityHellos(gateway).length;
+    await closeDesktop();
+
+    // This is a new Electron main process, not a renderer reload. It must read
+    // the broker-owned persistent grant and advertise without another dialog.
+    electronApp = await launchDesktop();
+    expect(electronApp.process().pid).not.toBe(firstElectronPid);
+    page = await electronApp.firstWindow();
+    await page.setViewportSize({ width: 1_440, height: 960 });
+    await expect.poll(async () => (await capabilityStatus(page)).clientInstanceId)
+      .not.toBe(firstHello.client_instance_id);
+    await expect.poll(async () => (await capabilityStatus(page)).phase).toBe('connected');
+    await expect.poll(() => capabilityHellos(gateway).length)
+      .toBe(hellosBeforeRelaunch + 1);
+    const secondHello = capabilityHellos(gateway).at(-1);
+    assertPluginCatalog(secondHello);
+    expect(secondHello.client_instance_id).not.toBe(firstHello.client_instance_id);
+    expect((await capabilityStatus(page)).consent.enabled).toBe(true);
+    expect(JSON.parse(await readFile(consentPath, 'utf8')).enabled).toBe(true);
+
+    const secondInvocation = await gateway.call(
+      'e2e-local-plugin',
+      'local_probe',
+      { marker: 'after-real-relaunch' },
+    );
+    assertLocalPluginResult(secondInvocation.result);
+    await expect.poll(async () => (await readPluginInvocations(pluginMarker)).length).toBe(2);
+    expect((await readPluginInvocations(pluginMarker))[1].arguments)
+      .toEqual({ marker: 'after-real-relaunch' });
+
+    // The Gateway sees only the plugin's public manifest/call/result. Launch
+    // command, cwd, env keys, paths and secret remain inside the local broker.
+    const gatewayWire = JSON.stringify(gateway.capabilityFrames);
+    for (const localOnly of [
+      process.execPath,
+      LOCAL_PLUGIN_FIXTURE,
+      HERE,
+      pluginMarker,
+      LOCAL_PLUGIN_SECRET,
+      'OPENAGENT_E2E_PLUGIN_SECRET',
+      'OPENAGENT_E2E_PLUGIN_MARKER',
+    ]) {
+      expect(gatewayWire).not.toContain(localOnly);
+    }
+
+    await page.getByText('This Computer', { exact: true }).first().click();
+    await page.getByText('EMERGENCY DISABLE LOCAL ACCESS', { exact: true }).click();
+    await expect.poll(async () => (await capabilityStatus(page)).phase).toBe('disabled');
+    await expect.poll(async () => JSON.parse(await readFile(consentPath, 'utf8')).enabled)
+      .toBe(false);
+    const hellosBeforeRevokedRelaunch = capabilityHellos(gateway).length;
+    await closeDesktop();
+
+    electronApp = await launchDesktop();
+    page = await electronApp.firstWindow();
+    await page.setViewportSize({ width: 1_440, height: 960 });
+    await expect.poll(async () => (await capabilityStatus(page)).phase).toBe('disabled');
+    expect((await capabilityStatus(page)).consent.enabled).toBe(false);
+    expect(capabilityHellos(gateway)).toHaveLength(hellosBeforeRevokedRelaunch);
+    await expect(gateway.call('e2e-local-plugin', 'local_probe', { marker: 'must-not-run' }))
+      .rejects.toThrow('No registered client capability host');
+    expect(await readPluginInvocations(pluginMarker)).toHaveLength(2);
+  } catch (error) {
+    const output = mainOutput.join('').trim();
+    if (output) error.message += `\n\nElectron main output:\n${output}`;
+    error.message += `\n\nCapability frames:\n${JSON.stringify(gateway.capabilityFrames)}`;
+    throw error;
+  } finally {
+    try {
+      if (electronApp) await closeDesktop();
+      const leakedShims = [...await listShimPids(hostBinary)]
+        .filter((pid) => !shimPidsBefore.has(pid));
+      expect(leakedShims, 'Electron relaunch E2E must reap every host-tools stdio shim')
+        .toEqual([]);
+    } finally {
+      await stopNewBrokerPids(hostBinary, hostHome, brokerPidsBefore);
+      await gateway.close().catch(() => {});
+      await rm(testRoot, { recursive: true, force: true });
+    }
+  }
+});
+
 async function capabilityStatus(page) {
   return page.evaluate(() => window.desktop.getCapabilityStatus());
+}
+
+function capabilityHellos(gateway) {
+  return gateway.capabilityFrames.filter((frame) => frame.type === 'capability_hello');
+}
+
+function assertPluginCatalog(hello) {
+  const plugin = hello?.servers?.find((server) => server.name === 'e2e-local-plugin');
+  expect(plugin, 'explicit client-mcps.toml plugin must be advertised').toBeTruthy();
+  expect(plugin.version).toBe('1.0.0');
+  expect(plugin.tools.map((tool) => tool.name)).toEqual(['local_probe']);
+  expect(plugin.tools[0].classification).toBe('read_only');
+}
+
+function assertLocalPluginResult(result) {
+  expect(result?._meta?.['openagent/location']).toBe('client');
+  expect(result?._meta?.['openagent/pathSemantics']).toBe('client-local');
+  expect(result?.content?.[0]?.text).toBe('local-plugin-ok');
+  expect(result?.structuredContent).toEqual({ local: true, env_verified: true });
+  expect(result?.isError).toBe(false);
+}
+
+async function readPluginInvocations(path) {
+  try {
+    const value = await readFile(path, 'utf8');
+    return value.trim().split(/\r?\n/).filter(Boolean).map((line) => JSON.parse(line));
+  } catch (error) {
+    if (error?.code === 'ENOENT') return [];
+    throw error;
+  }
+}
+
+function tomlString(value) {
+  return `"${String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"')}"`;
+}
+
+function waitForProcessExit(child, timeoutMs) {
+  if (child.exitCode != null || child.signalCode != null) return Promise.resolve();
+  return new Promise((resolvePromise, reject) => {
+    const timer = setTimeout(() => {
+      child.removeListener('exit', onExit);
+      reject(new Error(`Electron main process did not exit within ${timeoutMs}ms`));
+    }, timeoutMs);
+    const onExit = () => {
+      clearTimeout(timer);
+      resolvePromise();
+    };
+    child.once('exit', onExit);
+  });
 }
 
 function foregroundCommand() {
