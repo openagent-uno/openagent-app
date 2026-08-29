@@ -1,0 +1,87 @@
+name: Sign host-tools macOS release
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: Exact openagent-host-tools commit or signed tag to build
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  signed-bundle:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            platform: darwin-x64
+          - runner: macos-15
+            platform: darwin-arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Check out the exact public host-tools source
+        uses: actions/checkout@v4
+        with:
+          repository: openagent-uno/openagent-host-tools
+          ref: ${{ inputs.source_ref }}
+          path: host-tools
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Verify immutable source identity
+        working-directory: host-tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          test "$actual" = "${{ inputs.source_ref }}" || {
+            echo "source_ref must be a full immutable commit: expected ${{ inputs.source_ref }}, got $actual" >&2
+            exit 1
+          }
+      - name: Install and test twice
+        working-directory: host-tools
+        run: |
+          python -m pip install -e ".[dev]" pyinstaller
+          pytest -q
+          pytest -q
+      - name: Build self-contained bundle
+        working-directory: host-tools
+        run: python scripts/build_standalone.py --require-sidecars --expect-platform ${{ matrix.platform }}
+      - name: Sign and notarize every executable before hashing
+        working-directory: host-tools
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          scripts/sign_macos_bundle.sh "dist/${{ matrix.platform }}"
+          python scripts/build_standalone.py --manifest-only --expect-platform ${{ matrix.platform }}
+      - name: Verify catalogs and signed frozen runtime
+        working-directory: host-tools
+        run: |
+          python scripts/snapshot_sidecar_manifests.py "dist/${{ matrix.platform }}" --check
+          python scripts/smoke_bundle.py "dist/${{ matrix.platform }}"
+      - name: Package after signing and notarization
+        working-directory: host-tools
+        run: python scripts/package_bundle.py "dist/${{ matrix.platform }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signed-host-tools-${{ matrix.platform }}
+          path: |
+            host-tools/dist/openagent-host-tools-${{ matrix.platform }}.tar.gz
+            host-tools/dist/openagent-host-tools-${{ matrix.platform }}.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 14
