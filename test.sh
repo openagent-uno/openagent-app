@@ -10,6 +10,7 @@ set -euo pipefail
 #   ./test.sh types         TypeScript type check only
 #   ./test.sh unit          Common + Electron unit/contract tests
 #   ./test.sh e2e           Two real Electron/host-tools E2E passes
+#   ./test.sh e2e-real-iroh Two opt-in Electron + real server/Iroh passes
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TARGET="${1:-all}"
@@ -60,6 +61,24 @@ run_e2e() {
     echo ""
 }
 
+run_real_iroh_e2e() {
+    echo "🧪 Electron + coordinator/Gateway/Iroh + client tools E2E (two passes)..."
+    cd "$SCRIPT_DIR/desktop"
+    # CI can point at independently checked-out server/Python paths through
+    # OPENAGENT_REAL_DESKTOP_SERVER_ROOT / OPENAGENT_REAL_DESKTOP_PYTHON.
+    # Locally the spec discovers the sibling openagent-server checkout.
+    if ! npm run build:e2e; then
+        FAILURES=$((FAILURES + 1))
+    elif ! OPENAGENT_REAL_DESKTOP_IROH_E2E=1 npx playwright test \
+        --config=playwright.config.mjs \
+        e2e/desktop-real-iroh.spec.mjs \
+        --repeat-each=2 \
+        --workers=1; then
+        FAILURES=$((FAILURES + 1))
+    fi
+    echo ""
+}
+
 case "$TARGET" in
     all)
         run_lint
@@ -70,9 +89,10 @@ case "$TARGET" in
     types)  run_types ;;
     unit)   run_unit ;;
     e2e)    run_e2e ;;
+    e2e-real-iroh) run_real_iroh_e2e ;;
     *)
         echo "❌ Unknown target: $TARGET"
-        echo "Usage: ./test.sh [all|lint|types|unit|e2e]"
+        echo "Usage: ./test.sh [all|lint|types|unit|e2e|e2e-real-iroh]"
         exit 1
         ;;
 esac

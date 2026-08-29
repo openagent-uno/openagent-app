@@ -20,6 +20,63 @@ const CONTENT_TYPES = new Map([
 ]);
 
 /**
+ * Static-only origin for Electron E2Es whose remote endpoint is the real
+ * Gateway over Iroh.  Keeping this separate from DeterministicGateway makes
+ * accidental fake HTTP/WebSocket routing impossible: every upgrade and API
+ * request against this origin is rejected, while the exported SPA assets are
+ * still available to the unpackaged Electron process.
+ */
+export class StaticRendererServer {
+  constructor({ webRoot }) {
+    this.webRoot = resolve(webRoot);
+    this.server = null;
+    this.baseUrl = '';
+    this.requests = [];
+  }
+
+  async start() {
+    if (!existsSync(join(this.webRoot, 'index.html'))) {
+      throw new Error(`Universal web export is missing: ${this.webRoot}`);
+    }
+    this.server = http.createServer((request, response) => {
+      void this.handleHttp(request, response);
+    });
+    this.server.on('upgrade', (_request, socket) => socket.destroy());
+    await new Promise((resolvePromise, reject) => {
+      this.server.once('error', reject);
+      this.server.listen(0, '127.0.0.1', () => resolvePromise());
+    });
+    const address = this.server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('Static renderer server did not bind TCP');
+    }
+    this.baseUrl = `http://127.0.0.1:${address.port}`;
+    return this;
+  }
+
+  async close() {
+    if (!this.server) return;
+    const server = this.server;
+    this.server = null;
+    await new Promise((resolvePromise) => server.close(() => resolvePromise()));
+  }
+
+  async handleHttp(request, response) {
+    const url = new URL(request.url || '/', 'http://127.0.0.1');
+    this.requests.push({ method: request.method, path: url.pathname });
+    if (request.method !== 'GET' && request.method !== 'HEAD') {
+      response.writeHead(405, { Allow: 'GET, HEAD' }).end('method not allowed');
+      return;
+    }
+    if (url.pathname.startsWith('/api/')) {
+      response.writeHead(404).end('real Gateway APIs must use the Iroh loopback');
+      return;
+    }
+    await serveRenderer(this.webRoot, url.pathname, response, request.method === 'HEAD');
+  }
+}
+
+/**
  * Deterministic Gateway boundary for the Desktop release E2E.
  *
  * Electron main, preload, the exported renderer, capability manager/socket,
@@ -365,24 +422,28 @@ export class DeterministicGateway {
   }
 
   async serveRenderer(pathname, response) {
-    let decoded;
-    try { decoded = decodeURIComponent(pathname); } catch { decoded = '/'; }
-    const relative = normalize(decoded).replace(/^([/\\])+/, '');
-    let candidate = resolve(this.webRoot, relative || 'index.html');
-    if (candidate !== this.webRoot && !candidate.startsWith(`${this.webRoot}${sep}`)) {
-      response.writeHead(403).end('forbidden');
-      return;
-    }
-    try {
-      if (!(await stat(candidate)).isFile()) throw new Error('not a file');
-    } catch {
-      candidate = join(this.webRoot, 'index.html');
-    }
-    const body = await readFile(candidate);
-    response.setHeader('Content-Type', CONTENT_TYPES.get(extname(candidate)) || 'application/octet-stream');
-    response.setHeader('Cache-Control', 'no-store');
-    response.writeHead(200).end(body);
+    await serveRenderer(this.webRoot, pathname, response, false);
   }
+}
+
+async function serveRenderer(webRoot, pathname, response, headOnly) {
+  let decoded;
+  try { decoded = decodeURIComponent(pathname); } catch { decoded = '/'; }
+  const relative = normalize(decoded).replace(/^([/\\])+/, '');
+  let candidate = resolve(webRoot, relative || 'index.html');
+  if (candidate !== webRoot && !candidate.startsWith(`${webRoot}${sep}`)) {
+    response.writeHead(403).end('forbidden');
+    return;
+  }
+  try {
+    if (!(await stat(candidate)).isFile()) throw new Error('not a file');
+  } catch {
+    candidate = join(webRoot, 'index.html');
+  }
+  const body = await readFile(candidate);
+  response.setHeader('Content-Type', CONTENT_TYPES.get(extname(candidate)) || 'application/octet-stream');
+  response.setHeader('Cache-Control', 'no-store');
+  response.writeHead(200).end(headOnly ? undefined : body);
 }
 
 export function canonicalArgumentsSha256(value) {
