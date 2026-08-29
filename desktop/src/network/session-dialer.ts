@@ -63,27 +63,45 @@ export class SessionDialer {
     this.certWire = newCertWire;
   }
 
-  /** Open one bi-stream to ``targetNodeId`` with the cert prefix attached. */
+  /** Open one bi-stream to ``targetNodeId`` with the cert prefix attached.
+   *
+   *  A pooled connection can die with nobody telling us: the agent restarts,
+   *  the relay drops the path, the laptop sleeps. iroh reports that only when
+   *  the connection is next used, so ``openBi`` (or the cert write behind it)
+   *  is where we find out. Until this retry existed the pool kept handing out
+   *  the corpse: every stream failed instantly, the loopback proxy reset every
+   *  local socket, and the app sat on "Reconnecting…" until it was restarted —
+   *  even though a fresh dial would have worked, the iroh endpoint and the
+   *  cert both being alive in this process. So: evict the dead entry and dial
+   *  once more. One retry, not a loop — if the fresh connection fails too, the
+   *  agent really is unreachable and the caller must hear about it. */
   async openGatewayStream(targetNodeId: string): Promise<GatewayStream> {
     let cached = await this.getOrOpenConnection(targetNodeId);
-    let bi: IrohBiStream;
     try {
-      bi = await cached.connection.openBi();
+      return await this.openStreamOn(cached.connection, targetNodeId);
     } catch {
       // A successfully-dialled QUIC connection can die later. Keeping that
       // resolved Promise in the pool makes every WebSocket reconnect reuse the
       // same dead connection forever. Evict only the entry this attempt used
       // (another concurrent caller may already have installed a replacement),
-      // then make one bounded redial attempt.
+      // then make one bounded redial attempt. This also covers a connection
+      // that dies between a fresh dial and its first stream.
       this.evictConnection(targetNodeId, cached);
       cached = await this.getOrOpenConnection(targetNodeId);
       try {
-        bi = await cached.connection.openBi();
+        return await this.openStreamOn(cached.connection, targetNodeId);
       } catch (error) {
         this.evictConnection(targetNodeId, cached);
         throw error;
       }
     }
+  }
+
+  private async openStreamOn(
+    conn: IrohConnection,
+    targetNodeId: string,
+  ): Promise<GatewayStream> {
+    const bi: IrohBiStream = await conn.openBi();
     const cert = this.certWire;
     const prefix = new Uint8Array(4 + cert.length);
     new DataView(prefix.buffer).setUint32(0, cert.length, false);

@@ -66,6 +66,7 @@ interface NavItem {
 const NAV: NavItem[] = [
   { href: '/memory', match: 'memory', label: 'Memory', icon: 'book-open' },
   { href: '/mcps', match: 'mcps', label: 'Connectors', icon: 'grid' },
+  { href: '/skills', match: 'skills', label: 'Skills', icon: 'book' },
   { href: '/tasks', match: 'tasks', label: 'Scheduled', icon: 'clock' },
   { href: '/workflows', match: 'workflows', label: 'Workflows', icon: 'git-branch' },
   { href: '/events', match: 'events', label: 'Events', icon: 'zap' },
@@ -113,7 +114,7 @@ export default function Sidebar({
   const isMac = typeof window !== 'undefined' && (window as any).desktop?.platform === 'darwin';
 
   const activeSeg = useMemo(() => {
-    const known = ['memory', 'mcps', 'tasks', 'workflows', 'events', 'settings', 'system', 'chat'];
+    const known = ['memory', 'mcps', 'skills', 'tasks', 'workflows', 'events', 'settings', 'system', 'logs', 'chat'];
     for (let i = segments.length - 1; i >= 0; i--) {
       if (known.includes(segments[i])) return segments[i];
     }
@@ -244,9 +245,18 @@ export default function Sidebar({
             <Text style={styles.reconnectText} numberOfLines={1}>Reconnecting…</Text>
           </View>
         )}
-        <View style={styles.footerRow}>
+        {/* Two rows, not one. Six things — avatar, agent name, chevron and
+            three 40px buttons — do not fit across a 220px sidebar: the name is
+            the only flexible item, so it collapsed to 23px and rendered
+            "es…" for "esound-agent" (measured). Which agent you are talking to
+            is the single most important word down here, and the row below it
+            was empty space. */}
+        <View style={styles.footerAgentRow}>
           <AgentSwitcher variant="compact" />
+        </View>
+        <View style={styles.footerRow}>
           <FooterIcon icon="settings" label="Settings" active={activeSeg === 'settings'} onPress={() => go('/settings')} />
+          <FooterIcon icon="file-text" label="Logs" active={activeSeg === 'logs'} onPress={() => go('/logs')} />
           <FooterIcon icon="activity" label="System" active={activeSeg === 'system'} onPress={() => go('/system')} />
         </View>
       </View>
@@ -662,6 +672,7 @@ const styles = StyleSheet.create({
   reconnectText: {
     fontSize: 11, color: colors.textSecondary, fontFamily: font.mono, letterSpacing: 0.3,
   },
+  footerAgentRow: { flexDirection: 'row', alignItems: 'center', marginBottom: spacing.xs },
   footerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
   footerBtn: { width: 40, height: 36, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, borderWidth: 1, borderColor: 'transparent' },
   footerBtnActive: { backgroundColor: colors.surface, borderColor: colors.border },

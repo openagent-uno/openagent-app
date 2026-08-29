@@ -11,9 +11,9 @@
  * native RN falls back to a ``<TextInput multiline>``.
  */
 
-import { useCallback, useEffect, useRef, useState, type Ref } from 'react';
+import { useCallback, useEffect, useRef, useState, type Ref, type ReactNode, useMemo } from 'react';
 import Feather from '@expo/vector-icons/Feather';
-import { View, Text, TextInput, TouchableOpacity, StyleSheet, Platform, Image } from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Platform, Image } from 'react-native';
 import { colors, font, radius } from '../theme';
 
 export interface SlashCommand {
@@ -90,7 +90,24 @@ export interface MessageComposerProps {
   slashCommands?: SlashCommand[];
   /** LLM rows the composer offers in its model-picker dropdown. Omit
    *  to hide the picker entirely. */
-  modelOptions?: { id: string; label: string; provider?: string }[];
+  modelOptions?: {
+    id: string; label: string; provider?: string;
+    /** Which subscription pays for this row ("Claude", "GPT", "Local").
+     *  The menu groups by it and shows the headroom once per family
+     *  instead of repeating it on every row. */
+    family?: string;
+    /** How hard this row thinks, within its family. */
+    effort?: 'light' | 'standard' | 'high' | 'max';
+    /** Right-aligned note about the account serving this model's provider —
+     *  "40% left", "limited · 12m", "quota not reported". Computed by the
+     *  screen, so the composer stays unaware of where accounts come from. */
+    accountHint?: string;
+    /** Tint for `accountHint`; omitted means muted. */
+    accountTone?: 'ok' | 'warn' | 'bad';
+  }[];
+  /** Rendered at the foot of the model menu — the agent switcher, so
+   *  "which model" and "whose account" are one gesture. */
+  menuFooter?: ReactNode;
   /** Currently-active model id (matches ``modelOptions[i].id``).
    *  ``undefined`` renders the picker as "Auto" — no pin, so the
    *  router leads the turn. */
@@ -132,6 +149,7 @@ export default function MessageComposer({
   onRecallNext,
   slashCommands,
   modelOptions,
+  menuFooter,
   activeModelId,
   onSelectModel,
   recording,
@@ -206,6 +224,29 @@ export default function MessageComposer({
     // keep typing the argument.
     onInputChange(`/${cmd.name} `);
   }, [onInputChange, onSelectModel, modelOptions]);
+  // Group the picker by family, ordered by effort inside each. One header
+  // per subscription carries its headroom; the rows carry only what differs.
+  const groupedModels = useMemo(() => {
+    const order = ['light', 'standard', 'high', 'max'];
+    const byFamily = new Map<string, typeof modelOptions>();
+    for (const m of modelOptions ?? []) {
+      const key = m.family || m.provider || 'Models';
+      const list = byFamily.get(key) ?? [];
+      list.push(m);
+      byFamily.set(key, list);
+    }
+    return [...byFamily.entries()].map(([family, rows]) => ({
+      family,
+      // Every row in a family shares one account, so the first row's hint is
+      // the family's hint.
+      hint: rows?.[0]?.accountHint,
+      tone: rows?.[0]?.accountTone,
+      rows: [...(rows ?? [])].sort(
+        (a, b) => order.indexOf(a.effort ?? 'standard') - order.indexOf(b.effort ?? 'standard'),
+      ),
+    }));
+  }, [modelOptions]);
+
   const activeModel = modelOptions?.find((m) => m.id === activeModelId);
   const files = pendingFiles ?? [];
   // Failed and still-uploading entries stay in the list as visible
@@ -449,7 +490,10 @@ export default function MessageComposer({
                   />
                 </TouchableOpacity>
                 {modelMenuOpen && (
-                  <View style={styles.modelMenu}>
+                  <ScrollView
+                    style={styles.modelMenu}
+                    contentContainerStyle={styles.modelMenuContent}
+                  >
                     <TouchableOpacity
                       style={[styles.modelRow, !activeModelId && styles.modelRowActive]}
                       // @ts-ignore — web hover transition
@@ -466,7 +510,26 @@ export default function MessageComposer({
                         <Text style={styles.modelRowSub}>Let the router pick</Text>
                       </View>
                     </TouchableOpacity>
-                    {modelOptions.map((m) => (
+                    {groupedModels.map(({ family, hint, tone, rows }) => (
+                      <View key={family}>
+                        <View style={styles.modelGroupHead}>
+                          <Text style={styles.modelGroupTitle} numberOfLines={1}>{family}</Text>
+                          {hint ? (
+                            <Text
+                              style={[
+                                styles.modelRowHint,
+                                tone === 'bad' ? { color: colors.error }
+                                  : tone === 'warn' ? { color: colors.warning }
+                                  : tone === 'ok' ? { color: colors.success }
+                                  : null,
+                              ]}
+                              numberOfLines={1}
+                            >
+                              {hint}
+                            </Text>
+                          ) : null}
+                        </View>
+                        {rows.map((m) => (
                       <TouchableOpacity
                         key={m.id}
                         style={[styles.modelRow, m.id === activeModelId && styles.modelRowActive]}
@@ -485,9 +548,23 @@ export default function MessageComposer({
                             <Text style={styles.modelRowSub} numberOfLines={1}>{m.provider}</Text>
                           )}
                         </View>
+                        {/* The headroom now lives once in the family header —
+                            repeating it on every row said the same number
+                            three times. What varies row to row is effort. */}
+                        {m.effort ? (
+                          <Text style={styles.modelRowEffort} numberOfLines={1}>{m.effort}</Text>
+                        ) : null}
                       </TouchableOpacity>
+                        ))}
+                      </View>
                     ))}
-                  </View>
+                    {menuFooter ? (
+                      <>
+                        <View style={styles.modelMenuRule} />
+                        {menuFooter}
+                      </>
+                    ) : null}
+                  </ScrollView>
                 )}
               </View>
             )}
@@ -669,15 +746,22 @@ const styles = StyleSheet.create({
   modelMenu: {
     position: 'absolute',
     bottom: 32, left: 0, minWidth: 220, maxWidth: 320,
-    backgroundColor: colors.surface,
+    // SOLID, not `colors.surface` (~72% opaque): this menu floats over the
+    // transcript, and at that opacity the page behind it read straight
+    // through the model names. A dropdown has to be legible against
+    // whatever happens to be underneath it.
+    backgroundColor: colors.panelBgSolid,
+    // An agent with a dozen models made this list taller than the window
+    // with no way to reach the bottom entries.
+    maxHeight: 320,
     borderRadius: radius.md,
     borderWidth: 1, borderColor: colors.border,
-    paddingVertical: 4,
     shadowColor: colors.shadowColor,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 1, shadowRadius: 12,
     zIndex: 50,
   },
+  modelMenuContent: { paddingVertical: 4 },
   modelRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingHorizontal: 10, paddingVertical: 6,
@@ -713,5 +797,32 @@ const styles = StyleSheet.create({
   kbd: {
     fontSize: 10, color: colors.textSecondary,
     fontFamily: font.mono, fontWeight: '500',
+  },
+  modelGroupHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 10,
+    paddingTop: 8,
+    paddingBottom: 2,
+    gap: 8,
+  },
+  modelGroupTitle: {
+    fontFamily: font.sans,
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.textSecondary,
+    letterSpacing: 0.4,
+    textTransform: 'uppercase',
+  },
+  modelRowEffort: {
+    fontFamily: font.mono,
+    fontSize: 10.5,
+    color: colors.textMuted,
+  },
+  modelRowHint: { fontSize: 10, color: colors.textMuted, marginLeft: 8 },
+  modelMenuRule: {
+    height: 1, backgroundColor: colors.borderLight,
+    marginVertical: 4, marginHorizontal: 8,
   },
 });

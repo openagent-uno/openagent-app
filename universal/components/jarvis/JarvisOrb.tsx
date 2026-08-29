@@ -10,7 +10,7 @@ import Animated, {
   Easing,
   interpolate,
 } from 'react-native-reanimated';
-import { colors, font, tracking } from '../../theme';
+import { colors, font } from '../../theme';
 import OrbParticles from './OrbParticles';
 
 const AnimatedG = Animated.createAnimatedComponent(G);

@@ -20,8 +20,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, TextInput, TouchableOpacity,
-  ActivityIndicator, Platform,
+  View, Text, ScrollView, StyleSheet, TextInput,   ActivityIndicator, Platform,
   type LayoutChangeEvent,
 } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
@@ -88,7 +87,6 @@ export default function McpsScreen() {
     navigation.setOptions({
       headerRight: () => <HeaderAction icon="plus" label="New connector" onPress={() => setMode('new')} />,
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigation]);
 
   const [installed, setInstalled] = useState<MCPEntry[]>([]);

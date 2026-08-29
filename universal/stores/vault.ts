@@ -5,8 +5,7 @@
 import { create } from 'zustand';
 import type {
   VaultNote, GraphData, VaultWarning,
-  InFileMatch, InFileSearchResult,
-} from '../../common/types';
+  InFileMatch, } from '../../common/types';
 import * as api from '../services/api';
 
 interface VaultState {

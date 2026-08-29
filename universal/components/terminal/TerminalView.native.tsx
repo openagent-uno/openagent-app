@@ -36,6 +36,9 @@ function decode(bytes: Uint8Array): string {
 
 // Strip ANSI CSI / OSC control sequences and carriage returns so the
 // plain-text view stays readable without a real terminal emulator.
+// ESC e BEL sono esattamente cio' che questa regex deve riconoscere: sono le
+// sequenze ANSI che il terminale emette.
+// eslint-disable-next-line no-control-regex
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[@-Z\\-_]/g;
 function clean(text: string): string {
   return text.replace(ANSI, '').replace(/\r(?!\n)/g, '');

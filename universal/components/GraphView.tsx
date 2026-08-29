@@ -124,8 +124,8 @@ function tick(nodes: SimNode[], edges: SimEdge[], alpha: number) {
   const repelRange2 = 280 * 280;
   for (let i = 0; i < N; i++) {
     for (let j = i + 1; j < N; j++) {
-      let dx = nodes[j].x - nodes[i].x;
-      let dy = nodes[j].y - nodes[i].y;
+      const dx = nodes[j].x - nodes[i].x;
+      const dy = nodes[j].y - nodes[i].y;
       let d2 = dx * dx + dy * dy;
       if (d2 > repelRange2) continue;
       if (d2 < 100) d2 = 100;
@@ -142,7 +142,7 @@ function tick(nodes: SimNode[], edges: SimEdge[], alpha: number) {
   const idealLen = 80;
   for (const e of edges) {
     const s = nodes[e.source], t = nodes[e.target];
-    let dx = t.x - s.x, dy = t.y - s.y;
+    const dx = t.x - s.x, dy = t.y - s.y;
     const d = Math.sqrt(dx * dx + dy * dy) || 1;
     const f = (d - idealLen) * spring;
     const fx = (dx / d) * f, fy = (dy / d) * f;

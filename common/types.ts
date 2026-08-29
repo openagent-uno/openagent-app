@@ -214,7 +214,14 @@ export type ServerMessage =
   // without round-tripping through the legacy REST upload. ``source``
   // distinguishes user-typed (no UI update needed; chat already added
   // it) from STT (server-recognised — UI adds it now).
-  | { type: 'turn_complete'; session_id: string }
+  //
+  // ``reason`` says HOW the turn ended — 'completed' | 'error' | 'cancelled' |
+  // 'empty' — with ``error`` carrying the text when it failed. A bare marker
+  // could only say "it's over", so a turn that died and a turn that answered
+  // looked identical and the app had to infer the difference from what did or
+  // did not arrive next. An older gateway omits both fields: absent means
+  // 'completed', which is exactly what the app assumed before.
+  | { type: 'turn_complete'; session_id: string; reason?: 'completed' | 'error' | 'cancelled' | 'empty'; error?: string }
   // ── In-place session compaction (vision §2) ──
   // The agent folds older turns into a recap when the context fills up.
   // ``phase='running'`` fires before the (slow) summariser call so the UI
@@ -697,7 +704,12 @@ const GENERAL_VERBS: { test: RegExp; title: string; icon: string }[] = [
   { test: /(write_file|^write$|str_replace|edit_file|^edit$|apply_patch|create_file)/, title: 'Editing file', icon: 'edit-3' },
   { test: /(list_dir|list_files|^ls$|glob|find_files)/, title: 'Listing files', icon: 'folder' },
   { test: /(grep|ripgrep|search_code|search_files)/, title: 'Searching files', icon: 'search' },
-  { test: /(send_file|send_message|messaging|notify|email)/, title: 'Sending message', icon: 'send' },
+  // Attaching a file is its own act, and the chip is the only place the user
+  // sees it happen: labelling ``send_file_to_user`` "Sending message" read as
+  // if the agent had written to someone, right as it delivered a picture into
+  // the transcript. Keep it ahead of the generic messaging rule below.
+  { test: /send_file/, title: 'Attaching file', icon: 'paperclip' },
+  { test: /(send_message|messaging|notify|email)/, title: 'Sending message', icon: 'send' },
   { test: /(image|media|generate|render|draw)/, title: 'Generating media', icon: 'image' },
 ];
 
@@ -1153,6 +1165,17 @@ export interface SessionContextSection {
  *  One contract shared by the app panel, the CLI table, and chat channels.
  *  See server ``src/core/context_report.py``. Numeric fields default to 0
  *  (the server omits zero/None), so treat absent values as 0. */
+/** A session's durable model pin, as the server stores it.
+ *
+ *  ``runtime_id: null`` means the session is unpinned and the router
+ *  resolves the entry model normally. ``side`` is a legacy field the
+ *  gateway still returns as null; it carries no meaning since v0.14. */
+export interface SessionModelPin {
+  session_id: string;
+  runtime_id: string | null;
+  side?: string | null;
+}
+
 export interface SessionContext {
   session_id: string;
   /** Runtime id of the model that owns this session, e.g. "anthropic:claude-opus-4-8". */
@@ -1250,6 +1273,50 @@ export interface ModelEntry {
   metadata: Record<string, unknown>;
   created_at: number;
   updated_at: number;
+}
+
+// ── Family + effort ──────────────────────────────────────────────────
+//
+// The picker used to be one flat list of every runtime id, which asks the
+// reader to hold two unrelated questions at once: WHOSE subscription pays
+// (the scarce thing — each has its own window, and the "% left" hint next to
+// it is why) and HOW HARD the model should think. Grouping by family answers
+// the first once per group; the effort label answers the second per row.
+//
+// Declared in the model's ``metadata`` when the operator has said so
+// (``family`` / ``effort``); inferred from the runtime id otherwise, so a
+// catalogue nobody has annotated still groups correctly.
+export type ModelEffort = 'light' | 'standard' | 'high' | 'max';
+
+const EFFORT_ORDER: ModelEffort[] = ['light', 'standard', 'high', 'max'];
+
+export function modelEffortRank(effort: ModelEffort): number {
+  const i = EFFORT_ORDER.indexOf(effort);
+  return i < 0 ? EFFORT_ORDER.length : i;
+}
+
+/** Which subscription/pool pays for this row. */
+export function modelFamily(m: { runtime_id: string; provider_name?: string; metadata?: Record<string, unknown> }): string {
+  const declared = (m.metadata?.family as string | undefined)?.trim();
+  if (declared) return declared;
+  const id = (m.runtime_id || '').toLowerCase();
+  if (id.includes('claude')) return 'Claude';
+  if (id.includes('gpt') || id.startsWith('codex:')) return 'GPT';
+  if (id.includes('qwen') || id.startsWith('windows-local:')) return 'Local';
+  if (id.includes('deepseek')) return 'DeepSeek';
+  return m.provider_name || 'Other';
+}
+
+/** How hard this row thinks, within its family. */
+export function modelEffort(m: { runtime_id: string; metadata?: Record<string, unknown> }): ModelEffort {
+  const declared = (m.metadata?.effort as string | undefined)?.trim().toLowerCase();
+  if (declared && (EFFORT_ORDER as string[]).includes(declared)) return declared as ModelEffort;
+  const id = (m.runtime_id || '').toLowerCase();
+  // Ordered longest-match first: "sol-high" must not read as "sol".
+  if (id.includes('-high') || id.includes('opus')) return 'high';
+  if (id.includes('haiku') || id.includes('flash') || id.includes('spark') || id.includes('mini')) return 'light';
+  if (id.includes('sonnet') || id.includes('luna') || id.includes('sol')) return 'standard';
+  return 'standard';
 }
 
 export interface AvailableModel {
@@ -1817,4 +1884,248 @@ export interface WorkflowStats {
   success_rate: number;
   avg_duration_s: number | null;
   last: WorkflowRunSummary[];
+}
+
+// ── Budgets (/api/budgets) ──
+//
+// A budget is a spend cap on a scope, measured over a window. Whether a
+// cap is actually ENFORCED depends on its shape: only `global`/`provider`/
+// `model` scopes over an `hour`/`day`/`month` window can exclude a model
+// from routing. A `task` scope or a `per_run` window is alert-only — the
+// server reports that per rule as `enforced`, and the UI must not imply a
+// hard cap where there is none.
+
+export type BudgetScopeKind = 'global' | 'provider' | 'model' | 'task';
+export type BudgetWindow = 'hour' | 'day' | 'month' | 'per_run';
+export type BudgetMetric = 'cost_usd' | 'tokens';
+
+export interface BudgetRule {
+  id: string;
+  scope_kind: BudgetScopeKind;
+  /** Display form: the scope value, or '*' for a global rule. */
+  scope: string;
+  /** Raw value ('' for global). Send this back on writes. */
+  scope_value: string;
+  metric: BudgetMetric;
+  window: BudgetWindow;
+  amount: number;
+  alert_thresholds: number[] | null;
+  webhook_url: string | null;
+  enabled: boolean;
+  /** 'user' for rules created here, 'yaml' for seeded ones. */
+  source?: string;
+}
+
+/** A rule plus its live meter, from `/api/budgets/usage`. */
+export interface BudgetUsage extends BudgetRule {
+  /** Spend so far in the current window. `null` for `per_run` (no window
+   *  to sum over) or when the aggregation failed — see `error`. */
+  spend: number | null;
+  /** spend / amount, or `null` when spend is unavailable. */
+  ratio: number | null;
+  over: boolean;
+  remaining: number | null;
+  window_start: number | null;
+  window_end: number | null;
+  /** False for `task` scopes and `per_run` windows: the rule alerts but
+   *  cannot stop a turn. */
+  enforced: boolean;
+  /** A `cost_usd` cap on a scope that prices at $0 can never trip. */
+  cost_metric_ineffective?: boolean;
+  warning?: string;
+  error?: string;
+}
+
+export interface CreateBudgetInput {
+  scope_kind: BudgetScopeKind;
+  scope_value?: string;
+  metric: BudgetMetric;
+  window: BudgetWindow;
+  amount: number;
+  alert_thresholds?: number[];
+  webhook_url?: string | null;
+  enabled?: boolean;
+}
+
+export type UpdateBudgetInput = Partial<CreateBudgetInput>;
+
+// ── Event log (/api/logs) ──
+
+/** One line of `events.jsonl`. `ts`, `event` and `level` are always
+ *  present; everything else is per-event payload the writer passed to
+ *  `elog(...)`, so it is deliberately open. */
+export interface LogEntry {
+  ts: number;
+  event: string;
+  level: string;
+  [key: string]: unknown;
+}
+
+// ── Quality report (/api/quality) ──
+//
+// The correctness meter beside the spend meter: where budgets answer "how
+// much did we spend", this answers "were the answers any good". Derived
+// from the event log alone (quality.score, router.cost_recorded,
+// recall.metric), so it is read-only and always renderable — a window with
+// no data returns zeros and nulls, never an error.
+
+export interface QualityReport {
+  window_seconds: number;
+  /** False when the quality monitor is off: the sections are all zero and
+   *  the UI must say "not running" rather than "quality is 0". */
+  enabled?: boolean;
+  quality: {
+    judged: number;
+    avg_score: number | null;
+    verdicts: { good: number; warn: number; bad: number };
+    fabrication_flagged: number;
+  };
+  usage: {
+    turns: number;
+    cost_usd: number;
+    input_tokens: number;
+    output_tokens: number;
+  };
+  recall: {
+    turns: number;
+    used_rate: number | null;
+    hit_rate: number | null;
+    avg_top_score: number | null;
+  };
+}
+
+// ── Slash-command registry (/api/commands) ──
+
+/** One entry of the gateway's introspectable command registry. The server
+ *  exposes this precisely so a rich client does not hardcode the list and
+ *  drift from it — a command added server-side shows up here without an
+ *  app release. */
+export interface GatewayCommandSpec {
+  name: string;
+  description: string;
+  help_text: string;
+  /** False for aliases the menu should not repeat (`reset`, `queue`). */
+  menu_visible: boolean;
+  help_visible: boolean;
+  /** When set, the argument is picked from a list rather than typed —
+   *  `'models'` opens the composer's model picker. */
+  arg_source: string | null;
+}
+
+// ── Skills (/api/skills) ──
+//
+// The agent's file-backed skill library: one folder per skill, a SKILL.md
+// with YAML frontmatter, optional bundled files beside it. Two flags carry
+// real meaning rather than decoration:
+//
+//   `agent_authored` — the agent wrote it via its own tools. That is the
+//   boundary the skill-curator respects: seed and hub skills are off-limits
+//   to consolidation, so it can never merge or retire curated content.
+//
+//   `archived` — retired WITHOUT deleting. The file stays on disk, and the
+//   skill drops out of the index injected into the system prompt.
+
+export interface SkillSummary {
+  name: string;
+  description: string;
+  category: string;
+  path: string;
+  created_by: string | null;
+  status: string | null;
+  agent_authored: boolean;
+  archived: boolean;
+  from_hub: boolean;
+}
+
+export interface SkillDetail {
+  ok: boolean;
+  name: string;
+  description: string;
+  category: string;
+  path: string;
+  /** SKILL.md with the frontmatter stripped — what the agent actually reads. */
+  body: string;
+  /** The raw file, frontmatter included. */
+  content: string;
+  bundled_files: string[];
+}
+
+export interface SkillWriteResult {
+  ok: boolean;
+  action?: string;
+  name: string;
+  path?: string;
+  /** Always false: a write lands on disk, but the skills index inside the
+   *  cached system prompt is a frozen snapshot. The agent picks the change
+   *  up on the next boot/reload, not mid-session — the UI must say so. */
+  index_refreshed?: boolean;
+  error?: string;
+}
+
+export interface CreateSkillInput {
+  name: string;
+  description?: string;
+  category?: string;
+  body: string;
+}
+
+// ── Serving accounts (/api/accounts) ──
+//
+// Which subscription account is actually paying for a provider's traffic,
+// and how much of its window is left. A model row says WHICH model answers;
+// this says WHOSE account it runs on.
+//
+// `quota` is null whenever the upstream does not report one — and that is
+// the common case, not an edge case. A Codex proxy returns a real
+// used-percentage against a real window; a Claude proxy returns only
+// "limited / not limited", because Anthropic never tells it more: it learns
+// an account is spent by receiving a 429. The UI must render that absence as
+// "not reported" and never as 0% used, which is the number an operator would
+// plan around.
+
+export interface AccountQuota {
+  plan?: string;
+  active_limit?: string;
+  primary_used_percent?: number;
+  primary_window_minutes?: number;
+  primary_reset_after_s?: number;
+  secondary_used_percent?: number;
+  secondary_window_minutes?: number;
+  secondary_reset_after_s?: number;
+  credits_balance?: number;
+}
+
+export interface ServingAccount {
+  id: string;
+  name: string;
+  priority?: number;
+  plan?: string;
+  managed?: boolean;
+  /** Rate-limited right now; `limited_until_ms` says until when. */
+  limited?: boolean;
+  limited_until_ms?: number;
+  /** Credential expiry (proxy accounts). */
+  expires_at_ms?: number;
+  has_refresh_token?: boolean;
+  /** Pool accounts only: terminal auth failure, never auto-recovers. */
+  dead?: boolean;
+  status?: string;
+  cooldown_remaining_s?: number | null;
+  request_count?: number;
+  quota: AccountQuota | null;
+  /** 'proxy' = read from a sub-proxy's health; 'pool' = OpenAgent's own
+   *  rotation pool, which tracks health but is never told a quota. */
+  source?: 'proxy' | 'pool';
+}
+
+export interface ProviderAccounts {
+  provider: string;
+  framework?: string;
+  base_url?: string;
+  enabled: boolean;
+  reachable: boolean;
+  accounts: ServingAccount[];
+  metrics: Record<string, number> | null;
+  /** Why there are no accounts: unreachable, not a proxy, no accounts. */
+  error?: string | null;
 }

@@ -10,7 +10,7 @@
  * it always re-prompts for the password — the modal just keeps that flow
  * in one place instead of bouncing the user back to the login route.
  *
- * Two trigger variants:
+ * Trigger variants:
  *   - `wordmark` — the full sidebar: agent name + chevron + hairline rule.
  *   - `icon`     — the icon-density sidebar: a status-dotted avatar.
  *
@@ -35,7 +35,7 @@ import Button from './Button';
 import Input from './Input';
 import { colors, font, radius, spacing, tracking, glassSurface } from '../theme';
 
-type Variant = 'wordmark' | 'icon' | 'compact';
+type Variant = 'wordmark' | 'compact' | 'icon' | 'menu-row';
 
 /** The agent's friendly name is the trailing segment of the saved label
  *  (`handle@network — Agent`), falling back to the whole label. */
@@ -110,7 +110,6 @@ export default function AgentSwitcher({ variant }: { variant: Variant }) {
   // Close the sheet once a switch / join lands.
   useEffect(() => {
     if (attempted && isConnected && !isConnecting) close();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attempted, isConnected, isConnecting]);
 
   // Decode pasted tickets for a friendly "joining X as Y" preview and to
@@ -193,7 +192,14 @@ export default function AgentSwitcher({ variant }: { variant: Variant }) {
     if (ok) void removeAccount(id);
   };
 
-  const statusColor = isConnected ? colors.success : isReconnecting ? colors.warning : colors.textMuted;
+  // Reconnecting wins over connected. The store deliberately keeps
+  // ``isConnected`` latched through a drop so the composer stays usable and
+  // typed messages queue for the reattach — but a green dot next to the
+  // sidebar's "Reconnecting…" reads as a contradiction, and the dot is the
+  // thing people glance at to answer "is it working right now?".
+  const statusColor = isReconnecting
+    ? colors.warning
+    : isConnected ? colors.success : colors.textMuted;
 
   return (
     <>
@@ -230,6 +236,27 @@ export default function AgentSwitcher({ variant }: { variant: Variant }) {
           </View>
           <Text style={styles.compactName} numberOfLines={1}>{activeName}</Text>
           <Feather name="chevron-up" size={13} color={colors.textMuted} />
+        </Pressable>
+      )}
+
+      {/* `menu-row`: the same switcher, shaped to sit at the foot of another
+          menu. The chat's model picker uses it so "which model" and "whose
+          account" are one gesture instead of two screens apart. */}
+      {variant === 'menu-row' && (
+        <Pressable
+          onPress={() => setOpen(true)}
+          // @ts-ignore web hover
+          {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
+          style={styles.menuRowTrigger}
+          accessibilityRole="button"
+          accessibilityLabel="Switch agent"
+        >
+          <Feather name="users" size={11} color={colors.textMuted} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.menuRowTitle} numberOfLines={1}>{activeName}</Text>
+            <Text style={styles.menuRowSub}>Switch agent</Text>
+          </View>
+          <View style={[styles.statusDot, { backgroundColor: statusColor }]} />
         </Pressable>
       )}
 
@@ -605,4 +632,11 @@ const styles = StyleSheet.create({
     paddingTop: spacing.sm,
     lineHeight: 16,
   },
+  menuRowTrigger: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 10, paddingVertical: 7,
+    marginHorizontal: 4, borderRadius: radius.sm,
+  },
+  menuRowTitle: { fontSize: 12, color: colors.text },
+  menuRowSub: { fontSize: 10, color: colors.textMuted, marginTop: 1 },
 });

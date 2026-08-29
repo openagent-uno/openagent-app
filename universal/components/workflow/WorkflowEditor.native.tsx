@@ -60,6 +60,8 @@ export default function WorkflowEditorNative({
     loadBlockTypes,
     updateWorkflow,
     runWorkflow,
+    stopWorkflow,
+    runs,
   } = useWorkflows();
   const router = useRouter();
 
@@ -290,6 +292,12 @@ export default function WorkflowEditorNative({
   );
   const isRunning = runningId === workflow.id;
 
+  // Stop the run this editor is watching — the Run button used to be a
+  // one-way door (see the web editor for the same note).
+  const handleStop = useCallback(async () => {
+    await stopWorkflow(workflow.id, runs[workflow.id]?.id);
+  }, [workflow.id, runs, stopWorkflow]);
+
   return (
     <View style={styles.container}>
       <View style={styles.topBar}>
@@ -354,20 +362,20 @@ export default function WorkflowEditorNative({
             </>
           )}
         </TouchableOpacity>
-        <TouchableOpacity
-          onPress={handleRun}
-          disabled={isRunning}
-          style={[styles.runBtn, isRunning && { opacity: 0.5 }]}
-        >
-          {isRunning ? (
-            <ActivityIndicator size="small" color={colors.textInverse} />
-          ) : (
-            <>
-              <Feather name="play" size={12} color={colors.textInverse} />
-              <Text style={styles.runBtnText}>Run</Text>
-            </>
-          )}
-        </TouchableOpacity>
+        {isRunning ? (
+          <TouchableOpacity
+            onPress={handleStop}
+            style={[styles.runBtn, { backgroundColor: colors.error }]}
+          >
+            <Feather name="square" size={12} color={colors.textInverse} />
+            <Text style={styles.runBtnText}>Stop</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity onPress={handleRun} style={styles.runBtn}>
+            <Feather name="play" size={12} color={colors.textInverse} />
+            <Text style={styles.runBtnText}>Run</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {saveError ? <Text style={styles.errorBanner}>{saveError}</Text> : null}
@@ -492,7 +500,7 @@ function nextEdgeId(existing: WorkflowEdge[]): string {
 }
 
 function defaultConfigFor(type: BlockType): Record<string, unknown> {
-  const meta = NODE_META[type];
+  const _meta = NODE_META[type];
   switch (type) {
     case 'trigger-schedule':
       return { cron_expression: '' };

@@ -43,10 +43,14 @@ interface Props {
   onHistory: () => void;
   onRemove: () => void;
   onRun: () => Promise<unknown> | void;
+  /** Hard-stop the in-flight run. Until this existed the tile could start
+   *  a workflow it had no way to stop — a runaway run could only be killed
+   *  by asking the agent to call its MCP tool. */
+  onStop: () => Promise<unknown> | void;
 }
 
 export default function WorkflowTile({
-  workflow, lastRun, running, onToggle, onEdit, onHistory, onRemove, onRun,
+  workflow, lastRun, running, onToggle, onEdit, onHistory, onRemove, onRun, onStop,
 }: Props) {
   const [busy, setBusy] = useState(false);
   const isRunning = running;
@@ -58,6 +62,19 @@ export default function WorkflowTile({
       await onRun();
     } finally {
       setBusy(false);
+    }
+  };
+
+  const [stopping, setStopping] = useState(false);
+  const handleStop = async () => {
+    if (stopping) return;
+    setStopping(true);
+    try {
+      await onStop();
+    } finally {
+      // The run keeps polling to a terminal status on its own; clearing
+      // here just re-arms the button if the stop did not take.
+      setStopping(false);
     }
   };
 
@@ -138,23 +155,36 @@ export default function WorkflowTile({
             <Text style={styles.removeText}>Remove</Text>
           </TouchableOpacity>
           <View style={styles.footRight}>
-            <TouchableOpacity
-              onPress={handleRun}
-              disabled={busy || isRunning}
-              style={styles.runBtn}
-              hitSlop={8}
-              testID={`run-${workflow.name}`}
-              accessibilityLabel={`Run ${workflow.name} now`}
-            >
-              {busy || isRunning ? (
-                <ActivityIndicator size="small" color={colors.primary} />
-              ) : (
+            {busy || isRunning ? (
+              <TouchableOpacity
+                onPress={handleStop}
+                disabled={stopping}
+                style={styles.runBtn}
+                hitSlop={8}
+                testID={`stop-${workflow.name}`}
+                accessibilityLabel={`Stop the running ${workflow.name}`}
+              >
+                {stopping ? (
+                  <ActivityIndicator size="small" color={colors.error} />
+                ) : (
+                  <Feather name="square" size={12} color={colors.error} />
+                )}
+                <Text style={[styles.runText, { color: colors.error }]}>
+                  {stopping ? 'Stopping…' : 'Stop'}
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                onPress={handleRun}
+                style={styles.runBtn}
+                hitSlop={8}
+                testID={`run-${workflow.name}`}
+                accessibilityLabel={`Run ${workflow.name} now`}
+              >
                 <Feather name="play" size={12} color={colors.primary} />
-              )}
-              <Text style={styles.runText}>
-                {busy || isRunning ? 'Running…' : 'Run now'}
-              </Text>
-            </TouchableOpacity>
+                <Text style={styles.runText}>Run now</Text>
+              </TouchableOpacity>
+            )}
             <TouchableOpacity
               onPress={onHistory}
               style={styles.historyBtn}

@@ -31,6 +31,15 @@ import {
 let nextMsgId = 1;
 const genId = () => `msg-${nextMsgId++}-${Date.now()}`;
 
+// When each session last heard anything at all from the server. Used by
+// ``settleStaleTurns`` to tell a turn that is still running apart from one
+// that died with the agent — see that action for why the timestamp, and not
+// the session listing, is the signal that can answer the question.
+const lastFrameAt = new Map<string, number>();
+function noteFrame(sessionId: string | undefined): void {
+  if (sessionId) lastFrameAt.set(sessionId, Date.now());
+}
+
 // Infer a child session's label/origin from its id shape, so a stub created
 // before any origin-bearing metadata loads (a deep-link, or a live stream
 // frame for an unknown session) is tagged correctly — and stays HIDDEN from
@@ -479,6 +488,20 @@ interface ChatState {
    *  renderer switches from plain-text fallback to full parsing. Safe to call
    *  redundantly — it is a no-op when nothing is stuck. */
   finaliseStreaming: (sessionId: string) => void;
+  /** Settle any turn this client still believes is running but that the
+   *  server, on reattaching at ``attachedAt``, said nothing about. Call it a
+   *  few seconds after ``auth_ok``: the gateway replays a ``live_state``
+   *  snapshot for every turn it still owns immediately after auth, so silence
+   *  past that point means the turn is gone — the agent restarted
+   *  (auto-update, deploy, crash) and no terminal frame is ever coming. */
+  settleStaleTurns: (attachedAt: number) => void;
+  /** Record how a turn ended when it did not simply succeed. The server now
+   *  says so on ``turn_complete`` (reason + error); this puts it where the
+   *  user is looking, instead of letting a failed turn end as quietly as a
+   *  successful one. Only for a turn that produced no visible answer — when
+   *  the assistant did reply, the reply IS the outcome and a banner under it
+   *  would be noise. */
+  noteTurnOutcome: (sessionId: string, reason: string, error?: string) => void;
   /** Remove a session row locally WITHOUT calling the delete API — used when
    *  the server broadcasts that a session was deleted elsewhere (another
    *  device, a prune), so it disappears from this sidebar in realtime. */
@@ -792,6 +815,7 @@ export const useChat = create<ChatState>((set, get) => ({
 
   applyLiveState: (sessionId, frames, active = true) => {
     if (!sessionId || !Array.isArray(frames)) return;
+    noteFrame(sessionId);
     pendingDeltas.delete(sessionId);
     const live = liveMessagesFromFrames(frames, active);
     const contextFrame = [...frames]
@@ -860,6 +884,7 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   handleServerMessage: (msg) => set((s) => {
+    noteFrame((msg as { session_id?: string }).session_id);
     // A streaming frame may arrive for a freshly-spawned child session (a
     // delegated sub-agent streaming live) a beat before the sidebar's
     // session-event refetch lands. Lazy-create a placeholder row so the frame
@@ -1200,6 +1225,78 @@ export const useChat = create<ChatState>((set, get) => ({
         };
       }),
     }));
+  },
+
+  noteTurnOutcome: (sessionId, reason, error) => set((s) => {
+    const ses = s.sessions.find((x) => x.id === sessionId);
+    if (!ses) return {};
+    // Did this turn actually produce something? The last message being an
+    // assistant one with text is the honest test: an errored turn that still
+    // streamed an answer before failing does not need a tombstone.
+    const last = ses.messages[ses.messages.length - 1];
+    if (last && last.role === 'assistant' && (last.text || '').trim()) return {};
+    const text = reason === 'cancelled'
+      ? 'Turn stopped.'
+      : reason === 'empty'
+        ? 'The turn ended without an answer.'
+        : `Turn failed${error ? `: ${error}` : '.'}`;
+    return {
+      sessions: s.sessions.map((x) => (x.id !== sessionId ? x : {
+        ...x,
+        messages: [...x.messages, {
+          id: genId(),
+          role: 'assistant' as const,
+          text,
+          timestamp: Date.now(),
+        }],
+      })),
+    };
+  }),
+
+  settleStaleTurns: (attachedAt) => {
+    // The question this answers is "is that turn still alive?", and neither
+    // the session listing nor a timeout can answer it on their own: a turn
+    // that is genuinely running is absent from the listing until its run is
+    // persisted (which happens at the END of the turn), and a long tool call
+    // is legitimately silent for a while. What IS decisive is the gateway's
+    // reattach contract — right after ``auth_ok`` it replays a ``live_state``
+    // snapshot for every turn it still owns, and prunes the ones it does not.
+    // So: heard nothing since we attached ⇒ nobody is running this turn.
+    const stale = get().sessions.filter((se) => (
+      (se.isProcessing || se.isReasoning)
+      && (lastFrameAt.get(se.id) ?? 0) < attachedAt
+    ));
+    if (stale.length === 0) return;
+    const staleIds = new Set(stale.map((se) => se.id));
+    set((s) => ({
+      sessions: s.sessions.map((se) => {
+        if (!staleIds.has(se.id)) return se;
+        return {
+          ...se,
+          isProcessing: false,
+          isReasoning: false,
+          statusText: undefined,
+          messages: [
+            ...se.messages.map((m) => (
+              m.role === 'assistant' && m.streaming ? { ...m, streaming: false } : m
+            )),
+            {
+              id: genId(),
+              role: 'assistant' as const,
+              text: 'Turn interrupted — the agent restarted or the connection '
+                + 'dropped before it could answer. Send the message again to retry.',
+              timestamp: Date.now(),
+            },
+          ],
+        };
+      }),
+    }));
+    // Now that the flags are clear, ask the database. Two outcomes, both
+    // right: the turn actually finished while we were away and its runs are
+    // stored, so the real transcript replaces the note; or there is nothing
+    // stored, ``reconcileSession`` leaves the optimistic transcript alone,
+    // and the note stands as the explanation.
+    staleIds.forEach((sid) => get().reconcileSession(sid));
   },
 
   reconcileSession: (sessionId) => {

@@ -1,6 +1,6 @@
 {
   "name": "openagent-app",
-  "version": "0.15.1",
+  "version": "0.16.0",
   "private": true,
   "main": "expo-router/entry",
   "scripts": {
@@ -37,6 +37,9 @@
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
-    "typescript": "^5.6.0"
+    "eslint": "^9.39.5",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "typescript": "^5.6.0",
+    "typescript-eslint": "^8.68.0"
   }
 }

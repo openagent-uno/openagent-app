@@ -25,7 +25,7 @@ import {
 import { useConnection } from '../../stores/connection';
 import {
   setBaseUrl,
-  getProviders, addProvider, deleteProvider, testProvider,
+  getProviders, addProvider, deleteProvider, testProvider, updateProvider,
   listDbModels, deleteDbModel, enableDbModel, disableDbModel,
   createDbModel, updateDbModel, listAvailableModels,
   setClassifierModel, unsetClassifierModel,
@@ -33,6 +33,7 @@ import {
 } from '../../services/api';
 import Button from '../../components/Button';
 import Card from '../../components/Card';
+import ThemedSwitch from '../../components/ThemedSwitch';
 import TabStrip from '../../components/TabStrip';
 import { useHeaderInset } from '../../components/screenHeader';
 import { useConfirm } from '../../components/ConfirmDialog';
@@ -40,6 +41,29 @@ import type {
   UsageData, DailyUsageEntry, ModelEntry, AvailableModel,
   ProviderConfig, ModelFramework,
 } from '../../../common/types';
+
+// Sampling params the server reads off a model row. The whitelist is the
+// server's, deliberately narrow: sampling only, never credentials or
+// endpoints — a model row must not be able to redirect traffic.
+//
+// This matters beyond tuning. `extra_kwargs` is keyed by PROVIDER, so two
+// models on one provider could never differ, and a provider that sends no
+// temperature inherits the backend's own default in silence — llama.cpp's
+// is 0.8, which is exactly the setting that turns "I can't verify that"
+// into an invented answer. Leave a field empty to inherit; set it to pin.
+const SAMPLING_FIELDS: {
+  key: string; label: string; placeholder: string; integer?: boolean;
+}[] = [
+  { key: 'temperature', label: 'Temperature', placeholder: 'e.g. 0.2' },
+  { key: 'top_p', label: 'Top P', placeholder: 'e.g. 0.9' },
+  { key: 'top_k', label: 'Top K', placeholder: 'e.g. 40', integer: true },
+  { key: 'min_p', label: 'Min P', placeholder: 'e.g. 0.05' },
+  { key: 'max_tokens', label: 'Max tokens', placeholder: 'e.g. 4096', integer: true },
+  { key: 'presence_penalty', label: 'Presence penalty', placeholder: 'e.g. 0' },
+  { key: 'frequency_penalty', label: 'Frequency penalty', placeholder: 'e.g. 0' },
+  { key: 'repeat_penalty', label: 'Repeat penalty', placeholder: 'e.g. 1.1' },
+  { key: 'seed', label: 'Seed', placeholder: 'e.g. 42', integer: true },
+];
 
 /**
  * Which slice of the model screen to render. The screen is no longer a
@@ -97,12 +121,21 @@ export default function ModelScreen({ view = 'manage', embedded = false }: { vie
   // a time. ``editingModelId`` is the row id; the two draft strings hold
   // the in-flight values until the user hits save.
   const [editingModelId, setEditingModelId] = useState<number | null>(null);
+  // Sampling params, held as raw strings so an empty field is
+  // distinguishable from a zero — clearing one means "drop the override
+  // and inherit the provider default", which is not the same as 0.
+  const [editSampling, setEditSampling] = useState<Record<string, string>>({});
+  // Model id typed by hand. Discovery only works when the endpoint can list
+  // its catalogue; a subscription proxy or a self-hosted server often can't,
+  // and without this the Add Model form was a dead end for exactly the
+  // providers this app is most used with.
+  const [addManualId, setAddManualId] = useState('');
   const [editName, setEditName] = useState('');
   const [editTierHint, setEditTierHint] = useState('');
   const [savingEdit, setSavingEdit] = useState(false);
 
   // Usage
-  const [usage, setUsage] = useState<UsageData | null>(null);
+  const [_usage, setUsage] = useState<UsageData | null>(null);
   const [dailyUsage, setDailyUsage] = useState<DailyUsageEntry[]>([]);
   const [costDays, setCostDays] = useState(7);
 
@@ -222,12 +255,20 @@ export default function ModelScreen({ view = 'manage', embedded = false }: { vie
     setEditingModelId(m.id);
     setEditName(m.display_name ?? '');
     setEditTierHint(m.tier_hint ?? '');
+    const meta = (m.metadata ?? {}) as Record<string, unknown>;
+    const seeded: Record<string, string> = {};
+    for (const f of SAMPLING_FIELDS) {
+      const v = meta[f.key];
+      seeded[f.key] = v === undefined || v === null ? '' : String(v);
+    }
+    setEditSampling(seeded);
   };
 
   const cancelEditModel = () => {
     setEditingModelId(null);
     setEditName('');
     setEditTierHint('');
+    setEditSampling({});
   };
 
   const saveEditModel = async (m: ModelEntry) => {
@@ -235,9 +276,27 @@ export default function ModelScreen({ view = 'manage', embedded = false }: { vie
     try {
       const name = editName.trim();
       const tier = editTierHint.trim();
+      // Merge into the row's existing metadata rather than replacing it:
+      // the same object carries non-sampling keys (a tts row's voice_id,
+      // a self-hosted row's local flag) that must survive an edit here.
+      const metadata: Record<string, unknown> = { ...((m.metadata ?? {}) as Record<string, unknown>) };
+      for (const f of SAMPLING_FIELDS) {
+        const raw = (editSampling[f.key] ?? '').trim();
+        if (!raw) {
+          // Emptied → drop the override so the provider default applies.
+          delete metadata[f.key];
+          continue;
+        }
+        const parsed = Number(raw);
+        if (!Number.isFinite(parsed)) {
+          throw new Error(`${f.label} must be a number (got "${raw}")`);
+        }
+        metadata[f.key] = f.integer ? Math.round(parsed) : parsed;
+      }
       await updateDbModel(m.id, {
         display_name: name ? name : null,
         tier_hint: tier ? tier : null,
+        metadata,
       });
       await reload();
       cancelEditModel();
@@ -245,6 +304,19 @@ export default function ModelScreen({ view = 'manage', embedded = false }: { vie
       setError(e?.message || String(e));
     } finally {
       setSavingEdit(false);
+    }
+  };
+
+  // Disabling a provider takes its whole model set out of routing in one
+  // move, without deleting anything — the credential and the rows stay,
+  // they just stop being reachable. Useful when a key is rotating or a
+  // backend is down, where deleting the provider would cascade its models.
+  const toggleProvider = async (p: ProviderConfig) => {
+    try {
+      await updateProvider(p.id, { enabled: !p.enabled });
+      await reload();
+    } catch (e: any) {
+      setError(e?.message || String(e));
     }
   };
 
@@ -464,14 +536,26 @@ export default function ModelScreen({ view = 'manage', embedded = false }: { vie
 
         {providers.map((p) => {
           const rows = byProviderId.get(p.id) ?? [];
-          if (rows.length === 0) return null;
+          // A provider with no models used to vanish from this list, so a
+          // freshly added one looked like it had failed — and now that the
+          // header carries the enable switch, hiding it would also hide the
+          // only control for that credential. Render it with an empty note.
           return (
             <View key={p.id} style={{ marginBottom: 14 }}>
-              <Text style={styles.frameworkHeader}>
-                {p.name}
-                <Text style={styles.frameworkSub}>  ·  {p.framework}</Text>
-              </Text>
+              <View style={styles.providerHeaderRow}>
+                <Text style={[styles.frameworkHeader, !p.enabled && styles.frameworkHeaderOff]}>
+                  {p.name}
+                  <Text style={styles.frameworkSub}>  ·  {p.framework}</Text>
+                  {!p.enabled && <Text style={styles.providerOffTag}>  ·  off</Text>}
+                </Text>
+                <ThemedSwitch value={!!p.enabled} onValueChange={() => toggleProvider(p)} />
+              </View>
               <Card padded={false}>
+                {rows.length === 0 && (
+                  <Text style={styles.providerEmpty}>
+                    No models registered under this provider yet.
+                  </Text>
+                )}
                 {rows.map((m, i) => {
                   const isEditing = editingModelId === m.id;
                   // Only LLM rows feed the Team-as-router specialist
@@ -575,6 +659,29 @@ export default function ModelScreen({ view = 'manage', embedded = false }: { vie
                             placeholder="best for coding, complex reasoning"
                             placeholderTextColor={colors.textMuted}
                           />
+                          <Text style={styles.label}>Sampling</Text>
+                          <Text style={styles.samplingHint}>
+                            Empty inherits the provider default. Set a value to
+                            pin it for this model only.
+                          </Text>
+                          <View style={styles.samplingGrid}>
+                            {SAMPLING_FIELDS.map((f) => (
+                              <View key={f.key} style={styles.samplingField}>
+                                <Text style={styles.samplingLabel}>{f.label}</Text>
+                                <TextInput
+                                  style={[styles.input, styles.samplingInput]}
+                                  value={editSampling[f.key] ?? ''}
+                                  onChangeText={(v) =>
+                                    setEditSampling((prev) => ({ ...prev, [f.key]: v }))
+                                  }
+                                  placeholder={f.placeholder}
+                                  placeholderTextColor={colors.textMuted}
+                                  keyboardType="numeric"
+                                  autoCapitalize="none"
+                                />
+                              </View>
+                            ))}
+                          </View>
                           <View style={styles.formRow}>
                             <TouchableOpacity onPress={cancelEditModel} disabled={savingEdit}>
                               <Text style={{ color: colors.textMuted }}>Cancel</Text>
@@ -643,7 +750,9 @@ export default function ModelScreen({ view = 'manage', embedded = false }: { vie
                 {loadingAvailable ? (
                   <Text style={styles.emptyText}>Loading…</Text>
                 ) : available.length === 0 ? (
-                  <Text style={styles.emptyText}>No models returned.</Text>
+                  <Text style={styles.emptyText}>
+                    This endpoint didn't list a catalogue — add the model id by hand below.
+                  </Text>
                 ) : (
                   <View style={{ gap: 4 }}>
                     {available.map((a) => (
@@ -666,6 +775,32 @@ export default function ModelScreen({ view = 'manage', embedded = false }: { vie
                     ))}
                   </View>
                 )}
+                <Text style={styles.label}>Or enter a model id</Text>
+                <View style={styles.manualRow}>
+                  <TextInput
+                    style={[styles.input, styles.manualInput]}
+                    value={addManualId}
+                    onChangeText={setAddManualId}
+                    placeholder="gpt-5.6-sol"
+                    placeholderTextColor={colors.textMuted}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                  <Button
+                    variant="secondary"
+                    size="md"
+                    label="Add"
+                    disabled={!addManualId.trim()}
+                    onPress={() => {
+                      const id = addManualId.trim();
+                      if (!id) return;
+                      // Typed ids are always llm: the tts/stt inference is a
+                      // property of discovery's naming, not of a free string.
+                      void registerModel({ id, display_name: '', kind: 'llm' });
+                      setAddManualId('');
+                    }}
+                  />
+                </View>
               </>
             )}
 
@@ -911,4 +1046,27 @@ const styles = StyleSheet.create({
 
   statusDot: { width: 8, height: 8, borderRadius: 4 },
   statusText: { fontSize: 12, color: colors.textSecondary },
+  samplingHint: {
+    fontSize: 11, color: colors.textMuted, marginTop: -2, marginBottom: 6, lineHeight: 15,
+  },
+  samplingGrid: {
+    flexDirection: 'row', flexWrap: 'wrap', gap: 8,
+  },
+  samplingField: { minWidth: 108, flexGrow: 1, flexBasis: '30%' },
+  samplingLabel: {
+    fontSize: 10, color: colors.textMuted,
+    textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 3,
+  },
+  samplingInput: { marginBottom: 0 },
+  providerHeaderRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12,
+  },
+  frameworkHeaderOff: { opacity: 0.5 },
+  providerOffTag: { color: colors.textMuted, fontWeight: '400' },
+  providerEmpty: {
+    fontSize: 12, color: colors.textMuted,
+    paddingHorizontal: 14, paddingVertical: 12,
+  },
+  manualRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  manualInput: { flex: 1, marginBottom: 0 },
 });

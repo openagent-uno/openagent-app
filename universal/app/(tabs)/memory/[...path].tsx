@@ -214,8 +214,8 @@ export default function MemoryNoteScreen() {
     });
   }, [notePath, moveNote, router]);
 
-  const selectedNote = notes.find((n) => n.path === notePath);
-  const titleFallback = notePath.split('/').pop()?.replace('.md', '') ?? '';
+  const _selectedNote = notes.find((n) => n.path === notePath);
+  const _titleFallback = notePath.split('/').pop()?.replace('.md', '') ?? '';
 
   // Screen-name title in the nav header (homogeneous; not the note's name).
   useLayoutEffect(() => {

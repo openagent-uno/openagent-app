@@ -4,10 +4,16 @@
  * Claude-Code ``/context`` composition the CLI and chat channels show: a
  * stacked overview bar of section shares (system prompt / tools+MCP /
  * messages / summary / free) against the model's context window, followed by
- * an always-open per-section breakdown — each category gets its own labelled
- * progress bar with its token count and percentage on their own line — plus
- * the cumulative session cost. The panel is always fully expanded; only the
- * header show/hide toggle (``useUI.contextPanelVisible``) can dismiss it.
+ * a per-section breakdown — each category gets its own labelled progress bar
+ * with its token count and percentage on their own line — plus the cumulative
+ * session cost.
+ *
+ * Floating, the card shows the percentage and the stacked bar, and opens the
+ * breakdown on tap: it is an overlay, and an always-open 264x760 card sits on
+ * top of whatever the transcript is showing (measured on a generated image, it
+ * covered a third of the picture). Inline it stays fully open — nothing is
+ * underneath it there. The header show/hide toggle
+ * (``useUI.contextPanelVisible``) dismisses it entirely.
  *
  * Data source is ``ChatSession.contextUsage`` (a ``SessionContext``), fed by
  * the ``context_report`` push frame each turn and by the
@@ -17,9 +23,9 @@
  * mount of this panel serves all of them.
  */
 
-import { memo } from 'react';
+import { memo, useState } from 'react';
 import Feather from '@expo/vector-icons/Feather';
-import { View, Text, StyleSheet, Platform } from 'react-native';
+import { View, Text, StyleSheet, Platform, Pressable } from 'react-native';
 import type { SessionContext } from '../../common/types';
 import { colors, radius, font, glassSurface } from '../theme';
 import { useLayout } from '../hooks/useLayout';
@@ -86,6 +92,10 @@ const ContextPanel = memo(function ContextPanel({
 }: ContextPanelProps) {
   const { isPhone } = useLayout();
   const visible = useUI((s) => s.contextPanelVisible);
+  // Every hook runs before any early return below — React counts them per
+  // render, so a hook placed after "if (!visible) return null" would change
+  // the count the moment the user hid the panel.
+  const [expanded, setExpanded] = useState(false);
 
   // Hidden by the user's toggle (chat header menu / run screen) → render
   // nothing regardless of data.
@@ -109,9 +119,10 @@ const ContextPanel = memo(function ContextPanel({
     </View>
   );
 
-  // Always-open breakdown: one block per section — label on its own line, a
+  // The breakdown: one block per section — label on its own line, a
   // per-category progress bar (filled to that section's share of the window),
   // then its token count and percentage wrapped onto their own line below.
+  // Floating, it waits for a tap (see the module docstring).
   const detail = (
     <View style={styles.detail}>
       <View style={styles.modelRow}>
@@ -164,9 +175,23 @@ const ContextPanel = memo(function ContextPanel({
       // @ts-ignore — web entrance animation
       {...(Platform.OS === 'web' ? { className: 'oa-msg-in' } : {})}
     >
-      {summaryRow}
+      {variant === 'floating' ? (
+        <Pressable
+          onPress={() => setExpanded((v) => !v)}
+          accessibilityRole="button"
+          accessibilityLabel={expanded ? 'Collapse context details' : 'Expand context details'}
+          style={styles.summaryPress}
+        >
+          <View style={styles.summaryPressInner}>{summaryRow}</View>
+          <Feather
+            name={expanded ? 'chevron-up' : 'chevron-down'}
+            size={14}
+            color={colors.textMuted}
+          />
+        </Pressable>
+      ) : summaryRow}
       <StackedBar ctx={context} />
-      {detail}
+      {variant === 'inline' || expanded ? detail : null}
     </View>
   );
 
@@ -185,6 +210,14 @@ const ContextPanel = memo(function ContextPanel({
 export default ContextPanel;
 
 const styles = StyleSheet.create({
+  summaryPress: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  summaryPressInner: {
+    flex: 1,
+  },
   floatWrap: {
     position: 'absolute',
     zIndex: 6,

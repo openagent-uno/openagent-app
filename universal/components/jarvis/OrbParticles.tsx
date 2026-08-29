@@ -5,8 +5,7 @@ import Animated, {
   useAnimatedProps,
   withRepeat,
   withTiming,
-  withSequence,
-  Easing,
+    Easing,
 } from 'react-native-reanimated';
 import { colors } from '../../theme';
 

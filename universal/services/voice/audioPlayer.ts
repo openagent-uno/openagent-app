@@ -32,7 +32,7 @@ export interface AudioPlayerOptions {
   onChunkError?: (info: { seq: number; reason: string }) => void;
 }
 
-interface QueuedChunk {
+interface _QueuedChunk {
   seq: number;
   blob: Blob;
 }

@@ -13,7 +13,7 @@
 import Feather from '@expo/vector-icons/Feather';
 import { Handle, Position } from 'reactflow';
 import { memo } from 'react';
-import { colors, font, radius, shadows } from '../../../theme';
+import { colors, font, radius } from '../../../theme';
 
 export interface BaseNodeProps {
   icon: any; // Feather icon name

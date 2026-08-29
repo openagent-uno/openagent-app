@@ -5,7 +5,6 @@
  * same across screens.
  */
 
-import type { ReactNode } from 'react';
 import Feather from '@expo/vector-icons/Feather';
 import type { StyleProp, ViewStyle } from 'react-native';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';

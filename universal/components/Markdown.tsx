@@ -15,7 +15,6 @@ import Feather from '@expo/vector-icons/Feather';
 // Metro/Webpack pick this up at bundle time on web; on native it's a
 // no-op since the import resolves to an empty module.
 if (Platform.OS === 'web') {
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, global-require
   try { require('katex/dist/katex.min.css'); } catch { /* css optional in dev */ }
 }
 
@@ -36,7 +35,7 @@ interface Props {
 // frame where streaming flips off.
 const MAX_MARKDOWN_CHARS = 80000;
 
-function MarkdownBase({ text, streaming }: Props) {
+function MarkdownBase({ text, streaming: _streaming }: Props) {
   const blocks = useMemo(
     () => (text.length > MAX_MARKDOWN_CHARS ? null : parseBlocks(text)),
     [text],
