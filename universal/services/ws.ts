@@ -27,6 +27,7 @@ export class OpenAgentWS {
   private ws: WebSocket | null = null;
   private url: string;
   private token: string;
+  private clientInstanceId: string;
   private handlers: Set<MessageHandler> = new Set();
   private closeHandlers: Set<CloseHandler> = new Set();
   private errorHandlers: Set<ErrorHandler> = new Set();
@@ -45,9 +46,10 @@ export class OpenAgentWS {
   private static MAX_POST_AUTH_RECONNECT = 5;
   private _transport: any = null; // IpcWebSocket in Electron child windows
 
-  constructor(url: string, token?: string) {
+  constructor(url: string, token?: string, clientInstanceId?: string) {
     this.url = url;
     this.token = token ?? '';
+    this.clientInstanceId = clientInstanceId ?? '';
   }
 
   setTransport(transport: any): void {
@@ -73,7 +75,12 @@ export class OpenAgentWS {
       this.authed = false;
       // Auth is the only frame the server accepts pre-auth; everything
       // else has to wait for ``auth_ok`` before draining.
-      this.ws?.send(JSON.stringify({ type: 'auth', token: this.token }));
+      this.ws?.send(JSON.stringify({
+        type: 'auth',
+        token: this.token,
+        client_kind: this.clientInstanceId ? 'desktop' : 'webapp',
+        ...(this.clientInstanceId ? { client_instance_id: this.clientInstanceId } : {}),
+      }));
     };
 
     this.ws.onmessage = (event) => {
@@ -363,6 +370,7 @@ export class OpenAgentWS {
       tts_pin: options?.ttsPin,
       language: options?.language,
       client_kind: options?.clientKind,
+      client_instance_id: this.clientInstanceId || undefined,
       coalesce_window_ms: options?.coalesceWindowMs,
       speak,
     });

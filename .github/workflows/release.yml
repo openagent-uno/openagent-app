@@ -10,35 +10,75 @@ permissions:
   id-token: write
 
 jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Run Desktop security, capability and runtime tests
+        working-directory: desktop
+        run: |
+          npm ci
+          npm test
+
   desktop:
+    needs: test
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: macos-latest
-            build_flag: --mac
-          - os: windows-latest
-            build_flag: --win
-          - os: ubuntu-latest
-            build_flag: --linux
+          - os: macos-15
+            package_script: build:mac
+            arch_flag: --arm64
+            platform_key: darwin-arm64
+          - os: macos-15-intel
+            package_script: build:mac
+            arch_flag: --x64
+            platform_key: darwin-x64
+          - os: windows-2025
+            package_script: build:win
+            arch_flag: --x64
+            platform_key: win32-x64
+          - os: windows-11-arm
+            package_script: build:win
+            arch_flag: --arm64
+            platform_key: win32-arm64
+          - os: ubuntu-24.04
+            package_script: build:linux
+            arch_flag: --x64
+            platform_key: linux-x64
+          - os: ubuntu-24.04-arm
+            package_script: build:linux
+            arch_flag: --arm64
+            platform_key: linux-arm64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: '24'
+      - name: Install desktop deps
+        working-directory: desktop
+        run: npm ci
       - name: Install Linux build deps
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y rpm libarchive-tools
+      # This consumes one immutable, version-pinned native artifact. The
+      # following staging step independently verifies its complete manifest.
+      - name: Acquire pinned host-tools release bundle
+        run: node desktop/scripts/fetch-host-tools-release.js ${{ matrix.platform_key }} .release-deps/host-tools-dist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Install universal deps
         working-directory: universal
         run: npm install
       - name: Build web app
         working-directory: universal
         run: npx expo export --platform web
-      - name: Install desktop deps
-        working-directory: desktop
-        run: npm install
       - name: Copy web build and fix paths
         run: |
           rm -rf desktop/web-build
@@ -46,19 +86,28 @@ jobs:
           sed -i.bak 's|href="/|href="./|g; s|src="/|src="./|g' desktop/web-build/index.html
           rm -f desktop/web-build/index.html.bak
         shell: bash
-      - name: Import macOS signing certificate
+      - name: Require macOS signing and notarization credentials
         if: runner.os == 'macOS'
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [ -z "$CSC_LINK" ]; then
-            echo "CSC_LINK not set — build will be unsigned"
-          fi
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing required macOS release secret: $name" >&2
+              exit 1
+            fi
+          done
       - name: Build Electron app
         working-directory: desktop
-        run: npx tsc && node ./scripts/bundle-main.js && npx electron-builder ${{ matrix.build_flag }} --publish never
+        run: npm run ${{ matrix.package_script }} -- ${{ matrix.arch_flag }} --publish never
         env:
+          OPENAGENT_REQUIRE_HOST_TOOLS: '1'
+          OPENAGENT_HOST_TOOLS_PLATFORM_KEY: ${{ matrix.platform_key }}
+          OPENAGENT_HOST_TOOLS_DIST: ${{ github.workspace }}/.release-deps/host-tools-dist
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ runner.os == 'macOS' && secrets.CSC_LINK || '' }}
           CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.CSC_KEY_PASSWORD || '' }}
@@ -67,7 +116,7 @@ jobs:
           APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
       - uses: actions/upload-artifact@v4
         with:
-          name: desktop-${{ matrix.os }}
+          name: desktop-${{ matrix.platform_key }}
           path: |
             desktop/release/*.dmg
             desktop/release/*.zip

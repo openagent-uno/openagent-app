@@ -7,6 +7,7 @@
 
 import { app, BrowserWindow, Menu, MenuItemConstructorOptions } from 'electron';
 import { getPrimaryWindow, getCreateWindowFactory } from './window-manager';
+import { sendToTrustedRenderer } from './security/trusted-renderers';
 
 // ── Globals ──
 
@@ -37,7 +38,7 @@ function buildDockMenu(): Menu {
       click: () => {
         const primary = getPrimaryWindow();
         if (primary && !primary.isDestroyed()) {
-          primary.webContents.send('menu:navigate', '/vault');
+          sendToTrustedRenderer(primary.webContents, 'menu:navigate', '/vault');
         }
       },
     },
@@ -46,7 +47,7 @@ function buildDockMenu(): Menu {
       click: () => {
         const primary = getPrimaryWindow();
         if (primary && !primary.isDestroyed()) {
-          primary.webContents.send('menu:navigate', '/scheduled');
+          sendToTrustedRenderer(primary.webContents, 'menu:navigate', '/scheduled');
         }
       },
     },
@@ -60,7 +61,7 @@ function buildDockMenu(): Menu {
         click: () => {
           const primary = getPrimaryWindow();
           if (primary && !primary.isDestroyed()) {
-            primary.webContents.send('menu:openAgent', agent);
+            sendToTrustedRenderer(primary.webContents, 'menu:openAgent', agent);
           }
         },
       });

@@ -1,0 +1,55 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  desktop-unit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+      - name: Install Desktop dependencies
+        working-directory: desktop
+        run: npm ci
+      - name: Run Electron main/network/capability tests
+        working-directory: desktop
+        run: npm test
+
+  desktop-local-tools-e2e:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            desktop/package-lock.json
+            universal/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install application dependencies
+        run: |
+          npm --prefix universal ci
+          npm --prefix desktop ci
+      - name: Acquire the immutable host-tools release used by Desktop
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node desktop/scripts/fetch-host-tools-release.js darwin-arm64 .e2e-deps/host-tools-dist
+      - name: Run the real Electron/host-tools release E2E twice
+        working-directory: desktop
+        env:
+          OPENAGENT_E2E_HOST_TOOLS_BIN: ${{ github.workspace }}/.e2e-deps/host-tools-dist/darwin-arm64/openagent-host-tools
+          OPENAGENT_E2E_PYTHON: python
+        run: npm run test:e2e:twice

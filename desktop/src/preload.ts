@@ -4,11 +4,18 @@
  */
 
 import { contextBridge, ipcRenderer } from 'electron';
+import type { DesktopCapabilityStatus } from './capabilities/protocol';
 
 const isChild = (() => {
   try {
     return new URLSearchParams(window.location.search).get('child') === '1';
   } catch { return false; }
+})();
+
+const clientInstanceId = (() => {
+  const prefix = '--openagent-client-instance-id=';
+  const raw = process.argv.find((arg) => arg.startsWith(prefix))?.slice(prefix.length) ?? '';
+  return /^[0-9a-f]{8}-[0-9a-f-]{27,}$/i.test(raw) ? raw : '';
 })();
 
 /**
@@ -55,6 +62,22 @@ contextBridge.exposeInMainWorld('desktop', {
   platform: process.platform,
   isDesktop: true,
   isChild,
+  // Read-only boot identity. It binds renderer-originated session_open frames
+  // to the Electron-main capability channel; it grants no local authority.
+  clientInstanceId,
+
+  // Local capability control plane. No tool invocation method is exposed.
+  getCapabilityStatus: (): Promise<DesktopCapabilityStatus> =>
+    ipcRenderer.invoke('capabilities:getStatus'),
+  setCapabilityEnabled: (enabled: boolean): Promise<DesktopCapabilityStatus> =>
+    ipcRenderer.invoke('capabilities:setEnabled', enabled),
+  emergencyDisableCapabilities: (): Promise<DesktopCapabilityStatus> =>
+    ipcRenderer.invoke('capabilities:emergencyDisable'),
+  onCapabilityStatus: (cb: (status: DesktopCapabilityStatus) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, status: DesktopCapabilityStatus) => cb(status);
+    ipcRenderer.on('capabilities:status', handler);
+    return () => { ipcRenderer.removeListener('capabilities:status', handler); };
+  },
 
   // Storage (electron-store based, persists across restarts)
   getItem: (key: string): Promise<string | null> =>

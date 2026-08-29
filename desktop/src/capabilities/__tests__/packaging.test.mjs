@@ -1,0 +1,216 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import test from 'node:test';
+import { createRequire } from 'node:module';
+import { fileURLToPath } from 'node:url';
+
+const desktop = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
+const stageScript = path.join(desktop, 'scripts', 'stage-host-tools.js');
+const fetchScript = path.join(desktop, 'scripts', 'fetch-host-tools-release.js');
+const require = createRequire(import.meta.url);
+const tar = require('tar');
+
+test('committed host-tools lock is the complete immutable public release index', () => {
+  const lockPath = path.join(desktop, 'host-tools.lock.json');
+  const bytes = fs.readFileSync(lockPath);
+  const lock = JSON.parse(bytes.toString('utf8'));
+  assert.equal(
+    createHash('sha256').update(bytes).digest('hex'),
+    '9bbfd7a094c8d1b3238e8a580caba768af7d6b455f42a41f05dd9bfc8d7f727f',
+  );
+  assert.equal(lock.source_commit, '660225c8e8bbf6488173d4e6d4d1b3ba04e8f194');
+  assert.deepEqual(Object.keys(lock.platforms).sort(), [
+    'darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64',
+    'win32-arm64', 'win32-x64',
+  ]);
+  assert.equal(
+    lock.python_wheel.sha256,
+    '415f294201edacdf5b71d635df8e4f910f60b43d4c2afb92b8bfe29a11d20a84',
+  );
+});
+
+test('macOS packaging preserves and re-verifies upstream host-tool signatures', () => {
+  const pkg = JSON.parse(fs.readFileSync(path.join(desktop, 'package.json'), 'utf8'));
+  assert.equal(pkg.build.afterSign, 'scripts/after-sign-host-tools.js');
+  assert.equal(pkg.build.mac.forceCodeSigning, true);
+  const ignored = pkg.build.mac.signIgnore.join('\n');
+  assert.match(ignored, /openagent-host-tools/);
+  assert.match(ignored, /\/node\$/);
+  assert.match(ignored, /openagent-computer-control/);
+  const hook = fs.readFileSync(path.join(desktop, 'scripts', 'after-sign-host-tools.js'), 'utf8');
+  assert.match(hook, /bundle_manifest_sha256/);
+  assert.match(hook, /TeamIdentifier/);
+  assert.match(hook, /com\.openagent\.computer-control/);
+});
+
+test('release staging verifies the complete consumer-pinned bundle', () => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'openagent-host-stage-'));
+  try {
+    const source = path.join(temporary, 'dist');
+    const bundle = path.join(source, 'darwin-arm64');
+    const target = path.join(temporary, 'stage', 'host-tools');
+    const executable = Buffer.from('synthetic frozen host');
+    const nodeTool = Buffer.from('synthetic node tool');
+    fs.mkdirSync(path.join(bundle, 'node_modules', 'which'), { recursive: true });
+    fs.writeFileSync(path.join(bundle, 'openagent-host-tools'), executable);
+    fs.writeFileSync(path.join(bundle, 'node_modules', 'which', 'node-which'), nodeTool);
+    const digest = (value) => createHash('sha256').update(value).digest('hex');
+    const manifestPath = path.join(bundle, 'bundle-manifest.json');
+    fs.writeFileSync(manifestPath, JSON.stringify({
+      manifest_version: 1,
+      version: '0.1.0',
+      platform: 'darwin-arm64',
+      files: {
+        'openagent-host-tools': { size: executable.length, sha256: digest(executable) },
+        'node_modules/which/node-which': { size: nodeTool.length, sha256: digest(nodeTool) },
+      },
+    }));
+    const lockPath = writeLock(temporary, manifestPath);
+
+    const result = runStage(source, target, lockPath);
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const manifest = JSON.parse(fs.readFileSync(path.join(target, 'manifest.json'), 'utf8'));
+    assert.equal(manifest.version, 2);
+    assert.equal(manifest.host_tools_version, '0.1.0');
+    assert.equal(manifest.source.commit, 'a'.repeat(40));
+    assert.equal(manifest.bundles['darwin-arm64'].file_count, 2);
+    assert.match(manifest.bundles['darwin-arm64'].bundle_manifest_sha256, /^[a-f0-9]{64}$/);
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test('release staging rejects links even if a manifest attempts to pin their target bytes', () => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'openagent-host-link-'));
+  try {
+    const source = path.join(temporary, 'dist');
+    const bundle = path.join(source, 'darwin-arm64');
+    const target = path.join(temporary, 'stage', 'host-tools');
+    fs.mkdirSync(path.join(bundle, 'real'), { recursive: true });
+    const value = Buffer.from('target');
+    fs.writeFileSync(path.join(bundle, 'openagent-host-tools'), value);
+    fs.writeFileSync(path.join(bundle, 'real', 'tool'), value);
+    fs.symlinkSync('real/tool', path.join(bundle, 'linked-tool'));
+    const digest = createHash('sha256').update(value).digest('hex');
+    const manifestPath = path.join(bundle, 'bundle-manifest.json');
+    fs.writeFileSync(manifestPath, JSON.stringify({
+      manifest_version: 1, version: '0.1.0', platform: 'darwin-arm64',
+      files: {
+        'openagent-host-tools': { size: value.length, sha256: digest },
+        'real/tool': { size: value.length, sha256: digest },
+        'linked-tool': { size: value.length, sha256: digest },
+      },
+    }));
+    const result = runStage(source, target, writeLock(temporary, manifestPath));
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /unsupported bundle entry/i);
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test('safe release acquisition verifies archive then manifest before staging', async () => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'openagent-host-fetch-'));
+  try {
+    const source = path.join(temporary, 'source');
+    const bundle = path.join(source, 'darwin-arm64');
+    fs.mkdirSync(bundle, { recursive: true });
+    const executable = Buffer.from('verified host executable');
+    fs.writeFileSync(path.join(bundle, 'openagent-host-tools'), executable);
+    const manifestPath = path.join(bundle, 'bundle-manifest.json');
+    fs.writeFileSync(manifestPath, JSON.stringify({
+      manifest_version: 1, version: '0.1.0', platform: 'darwin-arm64',
+      files: {
+        'openagent-host-tools': {
+          size: executable.length,
+          sha256: createHash('sha256').update(executable).digest('hex'),
+        },
+      },
+    }));
+    const archive = path.join(temporary, 'openagent-host-tools-darwin-arm64.tar.gz');
+    await tar.c({ gzip: true, file: archive, cwd: source }, ['darwin-arm64']);
+    const lockPath = writeLock(temporary, manifestPath, archive);
+    const output = path.join(temporary, 'verified', 'host-tools-dist');
+    const acquired = runFetch(archive, output, lockPath);
+    assert.equal(acquired.status, 0, acquired.stderr || acquired.stdout);
+    assert.equal(
+      fs.readFileSync(path.join(output, 'darwin-arm64', 'openagent-host-tools'), 'utf8'),
+      executable.toString(),
+    );
+
+    fs.appendFileSync(archive, 'tampered');
+    const rejectedOutput = path.join(temporary, 'rejected', 'host-tools-dist');
+    const rejected = runFetch(archive, rejectedOutput, lockPath);
+    assert.notEqual(rejected.status, 0);
+    assert.match(rejected.stderr, /archive SHA-256/i);
+    assert.equal(fs.readdirSync(rejectedOutput).length, 0);
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+test('required release staging fails without an exact platform bundle and writes no manifest', () => {
+  const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'openagent-host-missing-'));
+  try {
+    const source = path.join(temporary, 'missing-dist');
+    const target = path.join(temporary, 'stage', 'host-tools');
+    const manifestPath = path.join(temporary, 'missing-manifest');
+    fs.writeFileSync(manifestPath, 'missing');
+    const result = runStage(source, target, writeLock(temporary, manifestPath));
+    assert.notEqual(result.status, 0);
+    assert.equal(fs.existsSync(path.join(target, 'manifest.json')), false);
+  } finally {
+    fs.rmSync(temporary, { recursive: true, force: true });
+  }
+});
+
+function writeLock(temporary, manifestPath, archive = null) {
+  const digestFile = (file) => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  const lockPath = path.join(temporary, `host-tools-${Math.random().toString(16).slice(2)}.lock.json`);
+  fs.writeFileSync(lockPath, JSON.stringify({
+    schema: 1,
+    version: '0.1.0',
+    source_repository: 'openagent-uno/openagent-host-tools',
+    source_ref: 'v0.1.0',
+    source_commit: 'a'.repeat(40),
+    platforms: {
+      'darwin-arm64': {
+        asset: 'openagent-host-tools-darwin-arm64.tar.gz',
+        archive_sha256: archive ? digestFile(archive) : 'b'.repeat(64),
+        bundle_manifest_sha256: digestFile(manifestPath),
+      },
+    },
+  }));
+  return lockPath;
+}
+
+function runStage(source, target, lockPath) {
+  return spawnSync(process.execPath, [stageScript], {
+    cwd: desktop,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      OPENAGENT_HOST_TOOLS_DIST: source,
+      OPENAGENT_HOST_TOOLS_STAGE_DIR: target,
+      OPENAGENT_HOST_TOOLS_LOCK: lockPath,
+      OPENAGENT_REQUIRE_HOST_TOOLS: '1',
+      OPENAGENT_HOST_TOOLS_PLATFORM_KEY: 'darwin-arm64',
+    },
+  });
+}
+
+function runFetch(archive, output, lockPath) {
+  return spawnSync(process.execPath, [fetchScript, 'darwin-arm64', output], {
+    cwd: desktop,
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      OPENAGENT_HOST_TOOLS_ARCHIVE: archive,
+      OPENAGENT_HOST_TOOLS_LOCK: lockPath,
+    },
+  });
+}

@@ -15,6 +15,8 @@ import {
   focusWindow,
   getCreateWindowFactory,
 } from './window-manager';
+import type { DesktopCapabilityStatus } from './capabilities/protocol';
+import { sendToTrustedRenderer } from './security/trusted-renderers';
 
 // ── Globals ──
 
@@ -22,6 +24,8 @@ let tray: Tray | null = null;
 
 /** Cached agent list shared between tray and dock. */
 let recentAgentList: string[] = [];
+let capabilityStatus: DesktopCapabilityStatus | null = null;
+let emergencyDisable: (() => void | Promise<void>) | null = null;
 
 // ── Icon ──
 
@@ -99,6 +103,16 @@ function buildTrayMenu(): Menu {
     },
     { type: 'separator' },
     {
+      label: capabilityTrayLabel(capabilityStatus),
+      enabled: false,
+    },
+    {
+      label: 'Emergency Disable Local Access',
+      enabled: !!capabilityStatus?.consent.enabled,
+      click: () => { void emergencyDisable?.(); },
+    },
+    { type: 'separator' },
+    {
       label: 'New Window',
       click: () => {
         const factory = getCreateWindowFactory();
@@ -119,7 +133,7 @@ function buildTrayMenu(): Menu {
         const focused = BrowserWindow.getFocusedWindow();
         const target = focused ?? primary;
         if (target && !target.isDestroyed()) {
-          target.webContents.send('menu:navigate', '/vault');
+          sendToTrustedRenderer(target.webContents, 'menu:navigate', '/vault');
         }
       },
     },
@@ -129,7 +143,7 @@ function buildTrayMenu(): Menu {
         const focused = BrowserWindow.getFocusedWindow();
         const target = focused ?? primary;
         if (target && !target.isDestroyed()) {
-          target.webContents.send('menu:navigate', '/scheduled');
+          sendToTrustedRenderer(target.webContents, 'menu:navigate', '/scheduled');
         }
       },
     },
@@ -139,7 +153,7 @@ function buildTrayMenu(): Menu {
         const focused = BrowserWindow.getFocusedWindow();
         const target = focused ?? primary;
         if (target && !target.isDestroyed()) {
-          target.webContents.send('menu:navigate', '/workflows');
+          sendToTrustedRenderer(target.webContents, 'menu:navigate', '/workflows');
         }
       },
     },
@@ -149,7 +163,7 @@ function buildTrayMenu(): Menu {
         const focused = BrowserWindow.getFocusedWindow();
         const target = focused ?? primary;
         if (target && !target.isDestroyed()) {
-          target.webContents.send('menu:navigate', '/sessions');
+          sendToTrustedRenderer(target.webContents, 'menu:navigate', '/sessions');
         }
       },
     },
@@ -165,7 +179,7 @@ function buildTrayMenu(): Menu {
           const focused = BrowserWindow.getFocusedWindow();
           const target = focused ?? primary;
           if (target && !target.isDestroyed()) {
-            target.webContents.send('menu:openAgent', agent);
+            sendToTrustedRenderer(target.webContents, 'menu:openAgent', agent);
           }
         },
       })),
@@ -239,6 +253,24 @@ export function updateTrayAgentList(agents: string[]): void {
   }
 }
 
+/** Configure the tray's device-access kill switch once main is ready. */
+export function configureCapabilityTray(onEmergencyDisable: () => void | Promise<void>): void {
+  emergencyDisable = onEmergencyDisable;
+  refreshTrayMenu();
+}
+
+/** Reflect capability connectivity/activity without exposing execution IPC. */
+export function updateTrayCapabilityStatus(status: DesktopCapabilityStatus): void {
+  capabilityStatus = status;
+  if (tray) {
+    const suffix = status.phase === 'active'
+      ? ` — ${status.activeCalls} local tool${status.activeCalls === 1 ? '' : 's'} active`
+      : status.consent.enabled ? ` — local access ${status.phase}` : ' — local access disabled';
+    tray.setToolTip(`OpenAgent${suffix}`);
+    tray.setContextMenu(buildTrayMenu());
+  }
+}
+
 /**
  * Get the current tray instance (null if not created).
  */
@@ -263,4 +295,14 @@ export function destroyTray(): void {
     tray.destroy();
     tray = null;
   }
+}
+
+function capabilityTrayLabel(status: DesktopCapabilityStatus | null): string {
+  if (!status) return 'Local Access: Loading…';
+  if (!status.consent.enabled) return 'Local Access: Disabled';
+  if (status.phase === 'active') return `Local Access: ${status.activeCalls} Active`;
+  if (status.phase === 'connected') return 'Local Access: Connected';
+  if (status.phase === 'unavailable') return 'Local Access: Unavailable';
+  if (status.phase === 'starting' || status.phase === 'connecting') return 'Local Access: Connecting…';
+  return 'Local Access: Ready';
 }

@@ -3,6 +3,8 @@
  * Used by both the universal app and the desktop Electron wrapper.
  */
 
+import type { ToolExecutionHost } from './client-capabilities';
+
 // ── WebSocket Protocol ──
 
 export type ClientMessage =
@@ -10,7 +12,13 @@ export type ClientMessage =
   // Iroh transport layer via the device cert), but we keep sending one
   // for back-compat with code that waits for AUTH_OK as a "ready"
   // signal. ``token`` is no longer required.
-  | { type: 'auth'; token?: string; client_id?: string }
+  | {
+      type: 'auth';
+      token?: string;
+      client_id?: string;
+      client_kind?: string;
+      client_instance_id?: string;
+    }
   // ``input_was_voice``: true when the user just spoke (mic + ASR via
   // /api/upload). The gateway responds via the streaming TTS pipeline
   // when a TTS provider is configured, falling through to text-only
@@ -57,6 +65,10 @@ export type ClientMessage =
       tts_pin?: string;
       language?: string;
       client_kind?: string;
+      /** Boot-scoped interactive client identity. The server only attaches
+       *  client-local tools when this exact instance has a live, certified
+       *  capability channel; absent means server-only execution. */
+      client_instance_id?: string;
       // Debounce window for typed-text bursts. Server-side StreamSession
       // coalesces messages arriving during an in-flight turn into a
       // single merged turn. ``0`` = disabled (preempt-on-each-message).
@@ -289,6 +301,10 @@ export interface ToolInfo {
   tool_args?: Record<string, any>;
   tool_call_error?: boolean | null;
   result?: string | null;
+  /** Physical execution boundary, stamped by the server. Client-hosted calls
+   *  always identify the exact certified device + boot instance; ordinary
+   *  calls explicitly identify the OpenAgent server. */
+  execution_host?: ToolExecutionHost;
   /** When this tool call spawned a delegated sub-agent that runs as its own
    *  full session, the server stamps the child session id (+ optional title /
    *  model). MessageList renders such a tool call as a DelegationCard that

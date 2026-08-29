@@ -15,6 +15,7 @@ import { GATEWAY_ALPN } from './coordinator-rpc.js';
 import { dialWithTimeout } from './dial-helpers.js';
 import type {
   IrohConnection,
+  IrohBiStream,
   IrohEndpoint,
   IrohNodeAddr,
   IrohSendStream,
@@ -64,8 +65,25 @@ export class SessionDialer {
 
   /** Open one bi-stream to ``targetNodeId`` with the cert prefix attached. */
   async openGatewayStream(targetNodeId: string): Promise<GatewayStream> {
-    const conn = await this.getOrOpenConnection(targetNodeId);
-    const bi = await conn.openBi();
+    let cached = await this.getOrOpenConnection(targetNodeId);
+    let bi: IrohBiStream;
+    try {
+      bi = await cached.connection.openBi();
+    } catch {
+      // A successfully-dialled QUIC connection can die later. Keeping that
+      // resolved Promise in the pool makes every WebSocket reconnect reuse the
+      // same dead connection forever. Evict only the entry this attempt used
+      // (another concurrent caller may already have installed a replacement),
+      // then make one bounded redial attempt.
+      this.evictConnection(targetNodeId, cached);
+      cached = await this.getOrOpenConnection(targetNodeId);
+      try {
+        bi = await cached.connection.openBi();
+      } catch (error) {
+        this.evictConnection(targetNodeId, cached);
+        throw error;
+      }
+    }
     const cert = this.certWire;
     const prefix = new Uint8Array(4 + cert.length);
     new DataView(prefix.buffer).setUint32(0, cert.length, false);
@@ -87,7 +105,9 @@ export class SessionDialer {
     };
   }
 
-  private async getOrOpenConnection(nodeId: string): Promise<IrohConnection> {
+  private async getOrOpenConnection(
+    nodeId: string,
+  ): Promise<{ connection: IrohConnection; entry: Promise<IrohConnection> }> {
     let p = this.connections.get(nodeId);
     if (p === undefined) {
       const hint = this.addrHints.get(nodeId);
@@ -104,7 +124,21 @@ export class SessionDialer {
         }
       });
     }
-    return p;
+    return { connection: await p, entry: p };
+  }
+
+  private evictConnection(
+    nodeId: string,
+    cached: { connection: IrohConnection; entry: Promise<IrohConnection> },
+  ): void {
+    if (this.connections.get(nodeId) === cached.entry) {
+      this.connections.delete(nodeId);
+    }
+    try {
+      cached.connection.close(0n, new Uint8Array());
+    } catch {
+      // The failed openBi commonly means the connection is already closed.
+    }
   }
 
   async close(): Promise<void> {

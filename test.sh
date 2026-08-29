@@ -8,7 +8,8 @@ set -euo pipefail
 #   ./test.sh               Run all checks
 #   ./test.sh lint          ESLint only
 #   ./test.sh types         TypeScript type check only
-#   ./test.sh unit          Jest unit tests only
+#   ./test.sh unit          Universal + Electron unit/contract tests
+#   ./test.sh e2e           Two real Electron/host-tools E2E passes
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TARGET="${1:-all}"
@@ -32,9 +33,20 @@ run_types() {
 }
 
 run_unit() {
-    echo "🧪 Jest..."
+    echo "🧪 Universal unit tests..."
     cd "$SCRIPT_DIR/universal"
     npx jest --passWithNoTests || FAILURES=$((FAILURES + 1))
+
+    echo "🧪 Electron main/network/capability tests..."
+    cd "$SCRIPT_DIR/desktop"
+    npm test || FAILURES=$((FAILURES + 1))
+    echo ""
+}
+
+run_e2e() {
+    echo "🧪 Electron + real local host-tools E2E (two passes)..."
+    cd "$SCRIPT_DIR/desktop"
+    npm run test:e2e:twice || FAILURES=$((FAILURES + 1))
     echo ""
 }
 
@@ -47,9 +59,10 @@ case "$TARGET" in
     lint)   run_lint ;;
     types)  run_types ;;
     unit)   run_unit ;;
+    e2e)    run_e2e ;;
     *)
         echo "❌ Unknown target: $TARGET"
-        echo "Usage: ./test.sh [all|lint|types|unit]"
+        echo "Usage: ./test.sh [all|lint|types|unit|e2e]"
         exit 1
         ;;
 esac

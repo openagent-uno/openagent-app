@@ -8,12 +8,12 @@
  * shape is unchanged: the renderer still calls ``loopback:start`` /
  * ``loopback:stop`` and gets a port back.
  */
-import { ipcMain } from 'electron';
 import {
   startNativeLoopback,
   type RunningLoopback,
   type StartLoopbackArgs as NativeStartArgs,
 } from '../network/start.js';
+import { handleTrustedIpc } from '../security/trusted-ipc';
 
 interface LoopbackHandle {
   id: string;
@@ -22,6 +22,37 @@ interface LoopbackHandle {
 }
 
 const handles = new Map<string, LoopbackHandle>();
+
+export interface LoopbackLifecycleHooks {
+  onStarted?: (accountId: string, loopback: RunningLoopback) => void;
+  onStopping?: (accountId: string) => void | Promise<void>;
+}
+
+let lifecycleHooks: LoopbackLifecycleHooks = {};
+
+/** Main-process integration point for services that reuse the same tunnel. */
+export function configureLoopbackLifecycleHooks(hooks: LoopbackLifecycleHooks): void {
+  lifecycleHooks = hooks;
+}
+
+/**
+ * Install a loopback that is already bound by the Desktop E2E harness.
+ *
+ * This is deliberately unavailable outside ``NODE_ENV=test``. It lets
+ * Playwright exercise the real renderer, preload, capability manager and
+ * host broker against a deterministic loopback endpoint without exposing a
+ * renderer IPC that could bypass device authentication in production.
+ */
+export function installTestLoopback(accountId: string, loopback: RunningLoopback): void {
+  if (process.env.NODE_ENV !== 'test') {
+    throw new Error('installTestLoopback is available only in NODE_ENV=test');
+  }
+  if (!accountId || handles.has(accountId)) {
+    throw new Error(`invalid or duplicate Desktop E2E loopback: ${accountId}`);
+  }
+  handles.set(accountId, { id: accountId, loopback, startedAt: Date.now() });
+  lifecycleHooks.onStarted?.(accountId, loopback);
+}
 
 /** Hard cap on the whole sidecar bring-up: iroh dial + SRP login +
  *  list_agents + proxy bind. iroh-js exposes no AbortSignal, so we can't
@@ -89,12 +120,14 @@ export async function startLoopback(args: StartLoopbackArgs): Promise<number> {
     loopback,
     startedAt: Date.now(),
   });
+  lifecycleHooks.onStarted?.(args.accountId, loopback);
   return loopback.port;
 }
 
 export async function stopLoopback(accountId: string): Promise<void> {
   const h = handles.get(accountId);
   if (!h) return;
+  await lifecycleHooks.onStopping?.(accountId);
   handles.delete(accountId);
   try {
     await h.loopback.stop();
@@ -109,7 +142,7 @@ export async function stopAllLoopbacks(): Promise<void> {
 }
 
 export function registerLoopbackHandlers(): void {
-  ipcMain.handle('loopback:start', async (_event, raw: unknown) => {
+  handleTrustedIpc('loopback:start', async (_event, raw: unknown) => {
     const args = raw as StartLoopbackArgs;
     if (!args || typeof args.accountId !== 'string' || typeof args.password !== 'string') {
       throw new Error('loopback:start: accountId + password are required');
@@ -130,7 +163,7 @@ export function registerLoopbackHandlers(): void {
     return await startLoopback(args);
   });
 
-  ipcMain.handle('loopback:stop', async (_event, raw: unknown) => {
+  handleTrustedIpc('loopback:stop', async (_event, raw: unknown) => {
     const args = raw as { accountId: string };
     if (!args || typeof args.accountId !== 'string') {
       throw new Error('loopback:stop: accountId required');
@@ -138,7 +171,7 @@ export function registerLoopbackHandlers(): void {
     await stopLoopback(args.accountId);
   });
 
-  ipcMain.handle('loopback:getPort', async (_event, accountId: string) => {
+  handleTrustedIpc('loopback:getPort', async (_event, accountId: string) => {
     if (typeof accountId !== 'string' || !accountId) {
       throw new Error('loopback:getPort: accountId required');
     }
