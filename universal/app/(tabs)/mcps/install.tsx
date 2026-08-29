@@ -546,7 +546,7 @@ const styles = StyleSheet.create({
   },
   title: {
     fontSize: 32, color: colors.text,
-    fontFamily: font.serif, fontStyle: 'italic',
+    fontFamily: font.sans, fontStyle: 'italic',
     marginTop: 4, letterSpacing: tracking.tight, lineHeight: 38,
   },
   registryName: {
@@ -667,7 +667,7 @@ const styles = StyleSheet.create({
     alignItems: 'center', paddingVertical: 48, gap: 10,
   },
   errorBlockTitle: {
-    fontSize: 15, fontFamily: font.serif, fontStyle: 'italic',
+    fontSize: 15, fontFamily: font.sans, fontStyle: 'italic',
     color: colors.text, marginTop: 6,
   },
   errorBlockMessage: {

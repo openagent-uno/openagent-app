@@ -16,7 +16,7 @@
 
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -28,17 +28,21 @@ import {
 } from 'react-native';
 import { colors, font, radius } from '../theme';
 import {
-  getWorkflowRun, getScheduledTaskRuns, getEventDelivery,
+  getWorkflowRun, getScheduledRunDetail, getEventDelivery,
   fetchSessionRuns, runMsgToChat, getSessionContext,
+  listSessionMessages, getToolInvocationDetail,
 } from '../services/api';
-import { runRoutePath, type SessionContext } from '../../common/types';
+import { runRoutePath } from '../../common/types';
+import {
+  normalizeLegacyRunDates,
+  type WithNormalizedRunDates,
+} from '../../common/run-date-normalization';
 import { openDetached } from '../services/windows';
 import { useChat } from '../stores/chat';
 import { useConnection } from '../stores/connection';
 import { useAutoScroll } from '../hooks/useAutoScroll';
 import Markdown from './Markdown';
 import MessageList from './MessageList';
-import ContextPanel from './ContextPanel';
 import MessageComposer from './MessageComposer';
 import type {
   BlockType,
@@ -73,10 +77,12 @@ function sameChatStart(a: ChatMessage | undefined, b: ChatMessage | undefined): 
     && (a.author?.handle ?? '') === (b.author?.handle ?? '');
 }
 
-export function SessionTranscript({ sessionId, live }: {
+export function SessionTranscript({ sessionId, live, messageId, toolInvocationId }: {
   sessionId: string;
   /** The owning run is still in flight — keep polling so the transcript grows. */
   live?: boolean;
+  messageId?: string;
+  toolInvocationId?: string;
 }) {
   const router = useRouter();
   const [messages, setMessages] = useState<ChatMessage[] | null>(null);
@@ -92,6 +98,28 @@ export function SessionTranscript({ sessionId, live }: {
   const liveMessages = liveSession?.messages;
   const liveProcessing = liveSession?.isProcessing;
   const hasLive = !!liveMessages?.length;
+  const mergeMessageWindow = useChat((s) => s.mergeMessageWindow);
+
+  useEffect(() => {
+    if (!messageId) return;
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const [page, tool] = await Promise.all([
+          listSessionMessages(sessionId, { around: messageId, before: 30, after: 30 }, controller.signal),
+          toolInvocationId
+            ? getToolInvocationDetail(toolInvocationId, controller.signal)
+            : Promise.resolve(undefined),
+        ]);
+        if (!controller.signal.aborted && page.anchor_found !== false) {
+          mergeMessageWindow(page, tool);
+        }
+      } catch {
+        // The enclosing run remains useful even when a stale anchor vanished.
+      }
+    })();
+    return () => controller.abort();
+  }, [mergeMessageWindow, messageId, sessionId, toolInvocationId]);
 
   // Hard reset only when the session itself changes (or on an explicit Retry).
   // A ``live`` flip (running → done) must NOT blank the already-loaded
@@ -177,6 +205,8 @@ export function SessionTranscript({ sessionId, live }: {
     <MessageList
       messages={display}
       isProcessing={streaming}
+      anchorMessageId={messageId}
+      anchorToolInvocationId={toolInvocationId}
       onOpenChild={(id) => openDetached(router, `chat?session=${encodeURIComponent(id)}`)}
       onOpenRun={(target) => {
         const path = runRoutePath(target);
@@ -186,44 +216,9 @@ export function SessionTranscript({ sessionId, live }: {
   );
 }
 
-/** The context-window panel for a run's owning session, floated top-right of
- *  the run screen — the SAME placement and ContextPanel component as the chat
- *  screen. Fetches the report directly (not via the chat store): a run session
- *  (``scheduler:{task}:{run}``) usually isn't a row in the chat store, so the
- *  store-scoped ``refreshContext`` would drop it. Polls while the run is live
- *  so the panel grows with the firing, mirroring SessionTranscript. */
-function RunContextPanel({ sessionId, live }: { sessionId?: string; live?: boolean }) {
-  const [context, setContext] = useState<SessionContext | null>(null);
-  useEffect(() => {
-    if (!sessionId) { setContext(null); return; }
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let attempts = 0;
-    const tick = async () => {
-      try {
-        const rep = await getSessionContext(sessionId);
-        if (cancelled) return;
-        // A valid report has a real window; ignore the empty pre-first-turn
-        // shape so we keep the last good state rather than blanking.
-        if (rep && rep.context_window) setContext(rep);
-      } catch { /* ignore transient fetch errors */ }
-      attempts += 1;
-      if (live && attempts < LIVE_POLL_MAX && !cancelled) {
-        timer = setTimeout(tick, POLL_MS);
-      }
-    };
-    tick();
-    return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [sessionId, live]);
-  if (!sessionId || !context) return null;
-  // ``topInset={0}``: RunDetailView already sits below the navigator header
-  // (the run screen applies the header inset as padding), so top:0 floats the
-  // panel just under the header — same visual position as the chat screen.
-  return <ContextPanel context={context} variant="floating" topInset={0} />;
-}
-
 type IconName = keyof typeof Feather.glyphMap;
 type RunKind = 'workflow' | 'task' | 'event';
+type NormalizedEventDelivery = WithNormalizedRunDates<EventDelivery>;
 
 const STATUS_COLOR: Record<string, string> = {
   running: colors.warning,
@@ -342,16 +337,24 @@ export function RunDetailView({
   parentId,
   runId,
   name,
+  traceStepId,
+  messageId,
+  toolInvocationId,
+  targetSessionId,
 }: {
   kind: RunKind;
   parentId: string;
   runId: string;
   /** Parent workflow / task name, shown in the header banner. */
   name?: string;
+  traceStepId?: string;
+  messageId?: string;
+  toolInvocationId?: string;
+  targetSessionId?: string;
 }) {
   const [wfRun, setWfRun] = useState<WorkflowRun | null>(null);
   const [taskRun, setTaskRun] = useState<TaskRun | null>(null);
-  const [delivery, setDelivery] = useState<EventDelivery | null>(null);
+  const [delivery, setDelivery] = useState<NormalizedEventDelivery | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const router = useRouter();
@@ -364,7 +367,11 @@ export function RunDetailView({
     event: 'events',
   };
   const openParent = () => {
-    const id = kind === 'event' ? (delivery?.event_id || parentId) : parentId;
+    const id = kind === 'event'
+      ? (delivery?.event_id || parentId)
+      : kind === 'workflow'
+        ? (wfRun?.workflow_id || parentId)
+        : (taskRun?.task_id || parentId);
     if (!id) return;
     openDetached(router, `${PARENT_SECTION[kind]}/${id}`);
   };
@@ -388,7 +395,7 @@ export function RunDetailView({
       try {
         let status: string | undefined;
         if (kind === 'workflow') {
-          const run = await getWorkflowRun(runId);
+          const run = normalizeLegacyRunDates(await getWorkflowRun(runId));
           if (cancelled) return;
           setWfRun(run);
           gotData = !!run;
@@ -397,21 +404,37 @@ export function RunDetailView({
           // An event delivery IS the run: one inbound trigger, its payload,
           // and the unit of work it produced (a child session for a chat
           // prompt; a workflow / task run otherwise).
-          const d = await getEventDelivery(runId);
+          const d = normalizeLegacyRunDates(await getEventDelivery(runId));
           if (cancelled) return;
           setDelivery(d);
           gotData = !!d;
           if (!d) { setError('This delivery could not be found.'); return; }
           status = d.status;
         } else {
-          // No single-firing endpoint for tasks — pull the recent window
-          // and narrow to the requested run.
-          const runs = await getScheduledTaskRuns(parentId, { limit: 50 });
+          // Exact resolver: an old search hit remains addressable even after
+          // it falls outside the parent's recent-run window.
+          const detail = await getScheduledRunDetail(runId);
           if (cancelled) return;
-          const found = runs.find((r) => r.id === runId) ?? null;
+          // Some compatibility gateways include *_iso mirrors on this
+          // canonical response too. Passing the complete wire object lets the
+          // shared boundary prefer them without widening the public type.
+          const dates = normalizeLegacyRunDates(detail);
+          const found: TaskRun = {
+            id: detail.id,
+            task_id: detail.task_id,
+            trigger: detail.trigger || 'schedule',
+            status: detail.status === 'success'
+              ? 'success' : detail.status === 'running' ? 'running' : 'failed',
+            started_at: dates.started_at,
+            finished_at: dates.finished_at,
+            output: detail.output_summary_safe || null,
+            error: detail.error_safe || null,
+            started_at_iso: dates.started_at_iso,
+            finished_at_iso: dates.finished_at_iso,
+            session_id: detail.session_id || null,
+          };
           setTaskRun(found);
-          gotData = !!found;
-          if (!found) { setError('This run could not be found.'); return; }
+          gotData = true;
           status = found.status;
         }
         setError(null);
@@ -459,6 +482,17 @@ export function RunDetailView({
     isPinned,
     scrollToBottom,
   } = useAutoScroll({ trackDeps: scrollTrackDeps });
+  const scrolledTraceAnchor = useRef<string | null>(null);
+  useEffect(() => {
+    scrolledTraceAnchor.current = null;
+  }, [runId, traceStepId]);
+  const onTraceAnchorLayout = useCallback((y: number) => {
+    if (!traceStepId || scrolledTraceAnchor.current === traceStepId) return;
+    scrolledTraceAnchor.current = traceStepId;
+    setTimeout(() => {
+      scrollRef.current?.scrollTo({ y: Math.max(0, y - 72), animated: false });
+    }, 80);
+  }, [scrollRef, traceStepId]);
 
   const fallbackEventSessionId = eventSessionId(delivery);
   const hasLiveEventSession = useChat((s) =>
@@ -490,9 +524,12 @@ export function RunDetailView({
     task: { icon: 'clock', label: 'Scheduled task' },
     event: { icon: 'zap', label: 'Event' },
   };
-  // The session that owns this run — drives the floating context panel.
+  // The session that owns this run. Its context and related-session metadata
+  // live in the shared right navigation drawer; the transcript/composer still
+  // use this id directly.
   const ownerSessionId =
-    taskRun?.session_id
+    targetSessionId
+    ?? taskRun?.session_id
     ?? delivery?.session_id
     ?? (hasLiveEventSession ? fallbackEventSessionId : undefined);
   const ownerLive = (taskRun ?? delivery)
@@ -520,17 +557,31 @@ export function RunDetailView({
             kindLabel={KIND_META[kind].label}
             status={run.status}
             trigger={triggerText}
-            startedIso={(run as TaskRun).started_at_iso}
+            startedIso={run.started_at_iso}
             startedAt={run.started_at}
             finishedAt={run.finished_at ?? null}
             onPress={openParent}
           />
           {wfRun ? (
-            <WorkflowBody run={wfRun} />
+            <WorkflowBody
+              run={wfRun}
+              traceStepId={traceStepId}
+              toolInvocationId={toolInvocationId}
+              onAnchorLayout={onTraceAnchorLayout}
+            />
           ) : taskRun ? (
-            <TaskBody run={taskRun} />
+            <TaskBody
+              run={{ ...taskRun, session_id: targetSessionId || taskRun.session_id }}
+              messageId={messageId}
+              toolInvocationId={toolInvocationId}
+            />
           ) : delivery ? (
-            <DeliveryBody delivery={delivery} sessionId={ownerSessionId} onOpenRun={(rid, k) =>
+            <DeliveryBody
+              delivery={delivery}
+              sessionId={ownerSessionId}
+              messageId={messageId}
+              toolInvocationId={toolInvocationId}
+              onOpenRun={(rid, k) =>
               router.push(`/runs/${encodeURIComponent(rid)}?kind=${k}` as any)} />
           ) : null}
         </View>
@@ -549,12 +600,6 @@ export function RunDetailView({
           <Feather name="chevron-down" size={14} color={colors.text} />
         </TouchableOpacity>
       )}
-      {/* Floating context panel, top-right — same placement as the chat screen.
-          A scheduled firing has one owning session; workflow runs surface it per
-          AI node instead (open the node to see that session's panel). */}
-      {ownerSessionId ? (
-        <RunContextPanel sessionId={ownerSessionId} live={ownerLive} />
-      ) : null}
       {ownerSessionId ? (
         <RunSessionComposer sessionId={ownerSessionId} live={ownerLive} />
       ) : null}
@@ -670,10 +715,14 @@ function MetaItem({ icon, text }: { icon: IconName; text: string }) {
 function DeliveryBody({
   delivery,
   sessionId,
+  messageId,
+  toolInvocationId,
   onOpenRun,
 }: {
   delivery: EventDelivery;
   sessionId?: string | null;
+  messageId?: string;
+  toolInvocationId?: string;
   onOpenRun: (runId: string, kind: 'workflow' | 'task') => void;
 }) {
   const live = delivery.status === 'running' || delivery.status === 'received';
@@ -704,7 +753,12 @@ function DeliveryBody({
       ) : null}
 
       {sessionId ? (
-        <SessionTranscript sessionId={sessionId} live={live} />
+        <SessionTranscript
+          sessionId={sessionId}
+          live={live}
+          messageId={messageId}
+          toolInvocationId={toolInvocationId}
+        />
       ) : !delivery.error && !delivery.workflow_run_id && !delivery.task_run_id ? (
         <EmptyNote text="This delivery produced no output." />
       ) : null}
@@ -734,7 +788,11 @@ function RunLink({
   );
 }
 
-function TaskBody({ run }: { run: TaskRun }) {
+function TaskBody({ run, messageId, toolInvocationId }: {
+  run: TaskRun;
+  messageId?: string;
+  toolInvocationId?: string;
+}) {
   // A durable firing renders as its full child-session transcript (same
   // surface as a chat). Legacy firings (no session) keep the output preview.
   if (run.session_id) {
@@ -742,7 +800,12 @@ function TaskBody({ run }: { run: TaskRun }) {
     // inline here, so it stays fixed while the transcript scrolls.
     return (
       <>
-        <SessionTranscript sessionId={run.session_id} live={run.status === 'running'} />
+        <SessionTranscript
+          sessionId={run.session_id}
+          live={run.status === 'running'}
+          messageId={messageId}
+          toolInvocationId={toolInvocationId}
+        />
         {run.error ? <ErrorBlock text={run.error} /> : null}
       </>
     );
@@ -761,7 +824,12 @@ function TaskBody({ run }: { run: TaskRun }) {
 
 // ── Workflow run body ────────────────────────────────────────────────
 
-function WorkflowBody({ run }: { run: WorkflowRun }) {
+function WorkflowBody({ run, traceStepId, toolInvocationId, onAnchorLayout }: {
+  run: WorkflowRun;
+  traceStepId?: string;
+  toolInvocationId?: string;
+  onAnchorLayout?: (y: number) => void;
+}) {
   const router = useRouter();
   const result = useMemo(() => {
     if (!run.outputs || Object.keys(run.outputs).length === 0) return null;
@@ -792,21 +860,34 @@ function WorkflowBody({ run }: { run: WorkflowRun }) {
         // An ai-prompt node ran as its own durable child session → render it
         // through the same StepRow shell as every other node (AiNodeCard), so
         // it reads as part of the same family — but tapping it deep-links into
-        // that node's full conversation (where the reused ContextPanel shows
-        // its context-window usage) instead of expanding inline. Every other
+        // that node's full conversation (where the session-details drawer
+        // shows its context-window usage) instead of expanding inline. Every other
         // node type has no session to open, so it stays a StepCard.
-        run.trace.map((entry, i) => (
-          <View key={`${entry.node_id}-${i}`}>
+        run.trace.map((entry, i) => {
+          const stableId = entry.id || entry.trace_step_id || `${entry.node_id}-${i}`;
+          const anchored = !!traceStepId && stableId === traceStepId;
+          return (
+          <View
+            key={stableId}
+            nativeID={`workflow-step-${encodeURIComponent(stableId)}`}
+            style={anchored ? styles.anchorStep : undefined}
+            onLayout={anchored
+              ? (event) => onAnchorLayout?.(event.nativeEvent.layout.y)
+              : undefined}
+          >
             {entry.child_session_id ? (
               <AiNodeCard
                 entry={entry}
                 onOpen={(id) => openDetached(router, `chat?session=${encodeURIComponent(id)}`)}
               />
             ) : (
-              <StepCard entry={entry} />
+              <StepCard entry={entry} forceExpanded={anchored || (
+                !!toolInvocationId && entry.tool_invocation_ids?.includes(toolInvocationId)
+              )} />
             )}
           </View>
-        ))
+          );
+        })
       )}
       {run.error ? <ErrorBlock text={run.error} /> : null}
       {result ? (
@@ -868,8 +949,11 @@ function StepRow({
   );
 }
 
-function StepCard({ entry }: { entry: WorkflowTraceEntry }) {
-  const [expanded, setExpanded] = useState(false);
+function StepCard({ entry, forceExpanded }: { entry: WorkflowTraceEntry; forceExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(!!forceExpanded);
+  useEffect(() => {
+    if (forceExpanded) setExpanded(true);
+  }, [forceExpanded]);
   const meta = nodeMeta(entry.type);
   const color = STATUS_COLOR[entry.status] ?? colors.textMuted;
   const summary = nodeSummary(entry);
@@ -1143,6 +1227,10 @@ function safeJson(v: unknown): string {
 }
 
 const styles = StyleSheet.create({
+  anchorStep: {
+    backgroundColor: colors.hover,
+    borderRadius: radius.md,
+  },
   runLink: {
     flexDirection: 'row',
     alignItems: 'center',

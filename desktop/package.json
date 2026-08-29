@@ -1,7 +1,7 @@
 {
   "name": "openagent-desktop",
   "description": "Persistent AI agent framework with MCP tools, long-term memory, and multi-channel support.",
-  "version": "0.16.0",
+  "version": "0.17.0",
   "private": true,
   "engines": {
     "node": ">=22.12.0"
@@ -23,7 +23,7 @@
     "start": "tsc && node ./scripts/bundle-main.js && electron .",
     "build:test": "tsc && node ./scripts/bundle-main.js",
     "build:e2e": "npm --prefix ../universal run build:web && npm run build:test",
-    "test": "npm run test:iroh-runtime && npm run build:test && node --test src/capabilities/__tests__/*.test.mjs src/network/__tests__/*.test.mjs",
+    "test": "npm run test:iroh-runtime && npm run build:test && node --test src/capabilities/__tests__/*.test.mjs src/network/__tests__/*.test.mjs scripts/__tests__/*.test.mjs",
     "test:iroh-runtime": "node ./scripts/smoke-iroh-electron.js",
     "test:capabilities": "npm run build:test && node --test src/capabilities/__tests__/*.test.mjs",
     "test:e2e": "npm run build:e2e && playwright test --config=playwright.config.mjs",
@@ -42,17 +42,24 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
+    "@electron/asar": "^4.3.0",
     "@playwright/test": "^1.62.1",
     "@types/ws": "^8.18.1",
     "electron": "^43.4.1",
-    "electron-builder": "^26.15.3",
+    "electron-builder": "26.15.3",
     "esbuild": "^0.28.2",
-    "js-yaml": "^4.1.0",
+    "js-yaml": "^4.3.1",
     "typescript": "^5.6.0"
+  },
+  "overrides": {
+    "app-builder-lib": {
+      "@noble/hashes": "1.8.0"
+    }
   },
   "build": {
     "appId": "ai.openagent.desktop",
     "productName": "OpenAgent",
+    "detectUpdateChannel": true,
     "protocols": [
       {
         "name": "OpenAgent",

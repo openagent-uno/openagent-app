@@ -2,9 +2,8 @@
  * Card — JARVIS-themed bordered surface with an optional cyan top rail.
  *
  * `padded` adds default interior padding (16); omit for list-style cards
- * where inner rows handle their own padding. `rail` (default true) shows
- * the glowing cyan accent line at the top edge — set false on dense
- * lists where the rail would be too busy.
+ * where inner rows handle their own padding. `rail` opts into the cyan
+ * accent line only when it communicates a real selected/progress state.
  */
 
 import type { ReactNode } from 'react';
@@ -25,7 +24,7 @@ export default function Card({
   children,
   padded = true,
   tight = false,
-  rail = true,
+  rail = false,
   style,
 }: CardProps) {
   // NOTE: no web backdrop-filter here. `colors.surface` is already ~72%

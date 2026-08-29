@@ -18,10 +18,15 @@ import { randomUUID } from 'crypto';
 import { registerStorageHandlers } from './services/storage';
 import {
   configureLoopbackLifecycleHooks,
+  getVerifiedLoopbackTarget,
   installTestLoopback,
   registerLoopbackHandlers,
+  releaseLoopbackReservation,
   stopAllLoopbacks,
+  transferLoopbackAttempt,
 } from './services/loopback';
+import { registerCredentialHandlers } from './services/credentials';
+import { findWindowForVerifiedTarget } from './network/agent-window-routing';
 import { decodeTicket } from './network/ticket';
 import { CapabilityConsentStore } from './capabilities/consent-store';
 import { discoverHostTools } from './capabilities/host-bridge';
@@ -38,6 +43,11 @@ import {
   unregisterTrustedRenderer,
 } from './security/trusted-renderers';
 import { handleTrustedIpc, onTrustedIpc } from './security/trusted-ipc';
+import {
+  applyLocalE2EProfile,
+  desktopRuntimePolicy,
+  resolveLocalE2EProfile,
+} from './local-e2e-profile';
 
 // ── New desktop-controls modules ──
 import {
@@ -45,6 +55,7 @@ import {
   unregisterWindow,
   getPrimaryWindow as getPrimaryFromRegistry,
   getAllWindows,
+  getWindowsByAccount,
   focusWindow,
   closeWindow,
   getWindowCount,
@@ -60,6 +71,11 @@ import {
   destroyTray,
 } from './tray';
 import { setupDockMenu, updateDockAgentList } from './dock';
+import { configureAutoUpdater, shouldAcceptUpdate } from './update-policy';
+import {
+  PRODUCTION_CSP,
+  resolveDevServerUrl,
+} from './security-policy';
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.heic', '.tiff']);
 // Random for every Electron-main boot, shared by every window and every
@@ -167,6 +183,21 @@ function registerDialogHandlers(): void {
 }
 
 const isDev = !app.isPackaged;
+const packagedSmoke = process.argv.includes('--packaged-smoke');
+const localE2EProfile = resolveLocalE2EProfile(process.argv);
+const localE2E = localE2EProfile != null;
+const runtimePolicy = desktopRuntimePolicy({
+  isPackaged: app.isPackaged,
+  packagedSmoke,
+  localE2E,
+});
+const expectedSmokeVersion = process.argv
+  .find((value) => value.startsWith('--expected-version='))
+  ?.slice('--expected-version='.length);
+
+if (localE2EProfile) {
+  applyLocalE2EProfile(localE2EProfile, (value) => app.setPath('userData', value));
+}
 
 app.setAboutPanelOptions({
   applicationName: 'OpenAgent',
@@ -178,7 +209,7 @@ if (process.platform === 'win32') {
   app.setAppUserModelId('ai.openagent.desktop');
 }
 
-const gotLock = app.requestSingleInstanceLock();
+const gotLock = runtimePolicy.bypassSingleInstanceLock || app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 }
@@ -268,7 +299,9 @@ function startStaticServer(): Promise<number> {
         const content = fs.readFileSync(filePath);
         res.writeHead(200, {
           'Content-Type': contentType,
+          'Content-Security-Policy': PRODUCTION_CSP,
           'X-Content-Type-Options': 'nosniff',
+          'Referrer-Policy': 'no-referrer',
           'Cross-Origin-Opener-Policy': 'same-origin',
           'Cross-Origin-Resource-Policy': 'same-origin',
         });
@@ -354,7 +387,9 @@ function createWindow(opts: CreateWindowOptions = {}): BrowserWindow {
     ? process.env.OPENAGENT_DESKTOP_E2E_RENDERER_URL?.trim()
     : undefined;
   const baseUrl = testRendererUrl
-    || (isDev ? 'http://localhost:8081' : `http://127.0.0.1:${staticPort}`);
+    || (runtimePolicy.useStaticRenderer
+      ? `http://127.0.0.1:${staticPort}`
+      : resolveDevServerUrl(process.env.OPENAGENT_DEV_SERVER_PORT));
   const rendererPolicy = createRendererUrlPolicy(baseUrl);
   // Register authority and navigation guards before the first document load.
   registerTrustedRenderer(win, rendererPolicy, (url) => shell.openExternal(url));
@@ -459,7 +494,8 @@ function installConfiguredTestLoopback(): void {
     throw new Error('OPENAGENT_DESKTOP_E2E_LOOPBACK must be a JSON object');
   }
   const required = [
-    'account_id', 'base_url', 'network_id', 'device_id', 'agent_node_id', 'agent_handle',
+    'account_id', 'base_url', 'network_name', 'network_id', 'device_id',
+    'handle', 'coordinator_node_id', 'agent_node_id', 'agent_handle',
   ] as const;
   for (const key of required) {
     if (typeof value[key] !== 'string' || !(value[key] as string).length) {
@@ -486,6 +522,14 @@ function installConfiguredTestLoopback(): void {
     deviceId: value.device_id as string,
     agentNodeId: value.agent_node_id as string,
     agentHandle: value.agent_handle as string,
+    verifiedTarget: {
+      networkName: value.network_name as string,
+      networkId: value.network_id as string,
+      handle: value.handle as string,
+      coordinatorNodeId: value.coordinator_node_id as string,
+      agentHandle: value.agent_handle as string,
+      agentNodeId: value.agent_node_id as string,
+    },
     stop: async () => {},
   });
 }
@@ -496,12 +540,22 @@ setCreateWindowFactory(createWindow);
 // ── Auto-updater ──
 
 function setupAutoUpdater(): void {
-  if (isDev) return;
+  if (!runtimePolicy.enableAutoUpdater) return;
   const { autoUpdater } = require('electron-updater');
-  autoUpdater.autoDownload = true;
-  autoUpdater.autoInstallOnAppQuit = true;
+  const installedVersion = app.getVersion();
+  const policy = configureAutoUpdater(autoUpdater, installedVersion);
+  autoUpdater.autoDownload = policy.automaticCheck;
+  autoUpdater.autoInstallOnAppQuit = policy.installOnQuit;
 
   autoUpdater.on('update-downloaded', (info: any) => {
+    if (!shouldAcceptUpdate(installedVersion, info.version)) {
+      // A stale or malformed provider response must never become a queued
+      // downgrade on quit, even if electron-updater's own guard changes.
+      autoUpdater.autoInstallOnAppQuit = false;
+      console.error(`Rejected updater candidate ${info.version} for ${installedVersion}`);
+      return;
+    }
+    autoUpdater.autoInstallOnAppQuit = policy.installOnQuit;
     dialog.showMessageBox({
       type: 'info',
       title: 'Update Ready',
@@ -517,7 +571,9 @@ function setupAutoUpdater(): void {
     console.error('Auto-updater error:', err.message);
   });
 
-  autoUpdater.checkForUpdatesAndNotify();
+  // Beta builds stay on an explicit, user-initiated update path until the
+  // desktop app has launch-crash recovery. Stable behavior is unchanged.
+  if (policy.automaticCheck) autoUpdater.checkForUpdatesAndNotify();
 }
 
 // ── IPC: Window-control handlers (module-level so they're registered
@@ -644,11 +700,59 @@ handleTrustedIpc('window:open', (_event, route: string) => {
 // full app window bound to a specific account that opens its OWN
 // connection (its own loopback + WS), independent of the primary. This is
 // what powers "open another agent in a new window" from the switcher.
-handleTrustedIpc('window:openAgent', (_event, accountId: string) => {
+handleTrustedIpc('window:openAgent', async (
+  event,
+  accountId: string,
+  attemptToken?: number,
+  sourceAccountId?: string,
+) => {
   if (typeof accountId !== 'string' || !accountId) {
     throw new Error('window:openAgent requires a non-empty accountId string');
   }
+  if (
+    attemptToken !== undefined &&
+    (!Number.isSafeInteger(attemptToken) || attemptToken <= 0)
+  ) {
+    throw new Error('window:openAgent attemptToken must be a positive safe integer');
+  }
+  if (sourceAccountId !== undefined && (typeof sourceAccountId !== 'string' || !sourceAccountId)) {
+    throw new Error('window:openAgent sourceAccountId must be a non-empty string');
+  }
+
+  const requestedTarget = getVerifiedLoopbackTarget(accountId);
+  const targetMatch = findWindowForVerifiedTarget(
+    requestedTarget,
+    getAllWindows()
+      .filter((entry) => !entry.win.isDestroyed())
+      .map((entry) => {
+        const boundAccountId = entry.id === event.sender.id
+          ? sourceAccountId ?? entry.accountId
+          : entry.accountId;
+        return {
+          value: entry,
+          target: boundAccountId ? getVerifiedLoopbackTarget(boundAccountId) : null,
+        };
+      }),
+  );
+  // A target may be temporarily unavailable during an older/manual flow;
+  // retain the pre-existing same-account guard as a conservative fallback.
+  const existing = targetMatch ?? getWindowsByAccount(accountId)[0] ?? null;
+  if (existing) {
+    focusWindow(existing.id);
+    const sourceAlreadyUsesThisAccount = existing.id === event.sender.id
+      && sourceAccountId === accountId;
+    if (!sourceAlreadyUsesThisAccount) {
+      await releaseLoopbackReservation(accountId, event.sender.id, attemptToken);
+    }
+    rebuildMenu();
+    return existing.id;
+  }
+
   const win = createWindow({ connectAccountId: accountId });
+  // Both remembered/manual opens (session reservation) and background joins
+  // (numbered attempt reservation) hand ownership to the destination. The
+  // source window was only the launcher and must not pin the loopback alive.
+  transferLoopbackAttempt(accountId, event.sender.id, attemptToken, win.webContents);
   rebuildMenu();
   return win.webContents.id;
 });
@@ -711,7 +815,29 @@ handleTrustedIpc('network:decode-ticket', (_event, ticket: unknown) => {
 // ── Lifecycle ──
 
 app.whenReady().then(async () => {
+  if (packagedSmoke) {
+    try {
+      if (!app.isPackaged) throw new Error('packaged smoke was started from an unpackaged app');
+      if (!expectedSmokeVersion || app.getVersion() !== expectedSmokeVersion) {
+        throw new Error(`version mismatch: expected ${expectedSmokeVersion || '<missing>'}, got ${app.getVersion()}`);
+      }
+      for (const required of [
+        path.join(process.resourcesPath, 'app.asar'),
+        path.join(process.resourcesPath, 'web-build', 'index.html'),
+      ]) {
+        if (!fs.existsSync(required)) throw new Error(`missing packaged resource: ${required}`);
+      }
+      console.log(`packaged-smoke ok ${app.getVersion()} ${process.platform} ${process.arch}`);
+      app.exit(0);
+    } catch (error) {
+      console.error(`packaged-smoke failed: ${error instanceof Error ? error.message : String(error)}`);
+      app.exit(1);
+    }
+    return;
+  }
+
   registerStorageHandlers();
+  registerCredentialHandlers();
   registerDialogHandlers();
 
   capabilityManager = new CapabilityManager({
@@ -764,7 +890,7 @@ app.whenReady().then(async () => {
 
   // In production, start a local HTTP server for the web build
   // (Expo Router needs proper URL routing that file:// can't do)
-  if (!isDev) {
+  if (runtimePolicy.useStaticRenderer) {
     staticPort = await startStaticServer();
   }
 

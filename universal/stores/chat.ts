@@ -20,16 +20,105 @@ import {
   type ToolInfo,
 } from '../../common/types';
 import type { SessionEntry } from '../services/api';
+import type { SessionMessage, SessionMessagePage, ToolInvocationDetail } from '../../common/unified-history';
+import { normalizeAttachmentRefs, normalizeMessageContent } from '../../common/ui-views';
+import { attachmentKey } from '../../common/attachments';
+import {
+  toolInfoFromInvocationDetail,
+  toolInfoFromSummary,
+} from '../../common/tool-presentation';
 import {
   deleteSession as deleteSessionApi,
   fetchSessionRuns,
   getSessionContext,
+  listSessionMessages,
   runMsgToChat,
   updateSessionMetadata,
 } from '../services/api';
 
+export type SessionHistoryMode = 'unknown' | 'legacy' | 'v2';
+const SESSION_MESSAGE_PAGE_SIZE = 60;
+const earlierPageLoads = new Map<string, Promise<void>>();
+
 let nextMsgId = 1;
 const genId = () => `msg-${nextMsgId++}-${Date.now()}`;
+
+function canonicalMessageToChat(message: SessionMessage): ChatMessage {
+  // Feed the server payload straight through the canonical normalizer so
+  // additive CAS metadata is never lost while projecting history into chat.
+  const attachments = normalizedAttachments(message.attachments);
+  return {
+    id: message.id,
+    role: message.role,
+    text: message.text,
+    timestamp: Date.parse(message.created_at) || Date.now(),
+    ordinal: message.ordinal,
+    durableStatus: message.status,
+    completeness: message.completeness,
+    toolInvocationId: message.tool_invocation_id || undefined,
+    toolInfo: message.role === 'tool'
+      ? toolInfoFromSummary(message.tool_summary, message.tool_invocation_id || undefined)
+      : undefined,
+    streaming: message.status === 'streaming',
+    author: {
+      kind: message.author.kind === 'user' ? 'human' : 'agent',
+      handle: message.author.handle || undefined,
+      display: message.author.display || undefined,
+    },
+    attachments,
+    parts: normalizeMessageContent(message.parts, message.artifacts, message.text, attachments ?? []),
+  };
+}
+
+function normalizedAttachments(raw: unknown): Attachment[] | undefined {
+  const attachments = normalizeAttachmentRefs(raw);
+  return attachments.length ? attachments : undefined;
+}
+
+type LoadedTranscript =
+  | { kind: 'v2'; page: SessionMessagePage }
+  | { kind: 'legacy'; messages: ChatMessage[] };
+
+async function loadSessionTranscript(
+  sessionId: string,
+  mode: SessionHistoryMode,
+): Promise<LoadedTranscript> {
+  if (mode === 'v2') {
+    return {
+      kind: 'v2',
+      page: await listSessionMessages(sessionId, { limit: SESSION_MESSAGE_PAGE_SIZE }),
+    };
+  }
+  const raw = await fetchSessionRuns(sessionId);
+  return { kind: 'legacy', messages: (raw || []).map(runMsgToChat) };
+}
+
+function transcriptPatch(
+  loaded: LoadedTranscript,
+  previous: readonly ChatMessage[],
+): Pick<ChatSession, 'messages' | 'messageWindow'> {
+  if (loaded.kind === 'legacy') {
+    return { messages: loaded.messages, messageWindow: undefined };
+  }
+  const priorById = new Map(previous.map((message) => [message.id, message]));
+  const messages = loaded.page.messages.map((wire) => {
+    const message = canonicalMessageToChat(wire);
+    const prior = priorById.get(message.id);
+    return prior?.toolInfo && !message.toolInfo
+      ? { ...message, toolInfo: prior.toolInfo }
+      : message;
+  });
+  return {
+    messages,
+    messageWindow: {
+      revision: loaded.page.revision,
+      beforeCursor: loaded.page.before_cursor,
+      afterCursor: loaded.page.after_cursor,
+      hasMoreBefore: loaded.page.has_more_before,
+      hasMoreAfter: loaded.page.has_more_after,
+    },
+  };
+}
 
 // When each session last heard anything at all from the server. Used by
 // ``settleStaleTurns`` to tell a turn that is still running apart from one
@@ -127,6 +216,9 @@ function sessionMetaFromEntry(e: SessionEntry): Partial<ChatSession> {
     parentSessionId: e.parent_session_id || undefined,
     origin,
     originLabel: e.kind || undefined,
+    createdAt: e.created_at ?? undefined,
+    model: e.model ?? undefined,
+    framework: e.framework ?? undefined,
   };
 }
 
@@ -271,6 +363,8 @@ function appendOrPatchTool(messages: ChatMessage[], toolInfo: ToolInfo): ChatMes
       ? (d.detail ? `${d.title} ${d.detail}` : d.title)
       : phase === 'error'
         ? `✗ ${toolInfo.tool_name} failed`
+        : phase === 'stopped'
+          ? `${toolInfo.tool_name} stopped`
         : `✓ ${toolInfo.tool_name} done`,
     timestamp: Date.now(),
     toolInfo,
@@ -293,9 +387,12 @@ function liveMessagesFromFrames(
   let statusText: string | undefined;
 
   const pushUser = (text: string, attachments?: Attachment[], author?: ChatMessage['author']) => {
-    if (!text) return;
+    if (!text && !attachments?.length) return;
     const last = messages[messages.length - 1];
-    if (last?.role === 'user' && last.text === text && (last.author?.kind ?? '') === (author?.kind ?? '')) {
+    if (last?.role === 'user'
+        && last.text === text
+        && attachmentSignature(last.attachments) === attachmentSignature(attachments)
+        && (last.author?.kind ?? '') === (author?.kind ?? '')) {
       return;
     }
     messages.push({
@@ -311,7 +408,7 @@ function liveMessagesFromFrames(
   for (const frame of frames) {
     if (!frame || typeof frame !== 'object') continue;
     if (frame.type === 'text_final') {
-      pushUser(frame.text || '', frame.attachments, undefined);
+      pushUser(frame.text || '', normalizedAttachments(frame.attachments), undefined);
       isProcessing = true;
       continue;
     }
@@ -379,12 +476,14 @@ function liveMessagesFromFrames(
       continue;
     }
     if (frame.type === 'response') {
+      const attachments = normalizedAttachments(frame.attachments);
       const last = messages[messages.length - 1];
       if (last?.role === 'assistant' && last.streaming) {
         messages[messages.length - 1] = {
           ...last,
           text: frame.text,
-          attachments: frame.attachments ?? undefined,
+          attachments,
+          parts: normalizeMessageContent(frame.parts, frame.artifacts, frame.text, attachments ?? []),
           model: frame.model,
           streaming: false,
         };
@@ -394,7 +493,8 @@ function liveMessagesFromFrames(
           role: 'assistant',
           text: frame.text,
           timestamp: Date.now(),
-          attachments: frame.attachments ?? undefined,
+          attachments,
+          parts: normalizeMessageContent(frame.parts, frame.artifacts, frame.text, attachments ?? []),
           model: frame.model,
         });
       }
@@ -428,11 +528,19 @@ function liveMessagesFromFrames(
   return { messages, isProcessing, isReasoning, statusText };
 }
 
+function attachmentSignature(attachments?: Attachment[]): string {
+  return (attachments ?? []).map((item) => `${item.type}:${attachmentKey(item)}:${item.filename}`).join('|');
+}
+
 interface ChatState {
   sessions: ChatSession[];
   activeSessionId: string | null;
-  /** True after the first successful fetch from /api/sessions. */
+  /** True once either the first v2 summary page or the legacy flat session
+   * list has resolved. */
   sessionsHydrated: boolean;
+  /** Chooses canonical paged messages for v2 agents and preserves the old
+   * runs endpoint only as a compatibility path for legacy agents. */
+  sessionHistoryMode: SessionHistoryMode;
 
   createSession: () => string;
   setActiveSession: (id: string) => void;
@@ -443,6 +551,11 @@ interface ChatState {
   hydrateFromServer: (entries: SessionEntry[]) => void;
   /** Mark hydration as done even when the server returned no sessions. */
   markHydrated: () => void;
+  setSessionHistoryMode: (mode: SessionHistoryMode) => void;
+  /** Merge a stable-ID v2 transcript window without replacing live tail rows. */
+  mergeMessageWindow: (page: SessionMessagePage, tool?: ToolInvocationDetail) => void;
+  /** Fetch the previous canonical message page for the focused v2 session. */
+  loadEarlierMessages: (sessionId: string) => Promise<void>;
   addUserMessage: (sessionId: string, text: string, attachments?: Attachment[]) => void;
   /** Replace a previous user message in place (Edit & retry).
    *  Truncates everything after the edited message so the new turn
@@ -518,6 +631,7 @@ export const useChat = create<ChatState>((set, get) => ({
   sessions: [],
   activeSessionId: null,
   sessionsHydrated: false,
+  sessionHistoryMode: 'unknown',
 
   createSession: () => {
     const id = sessionId();
@@ -561,16 +675,19 @@ export const useChat = create<ChatState>((set, get) => ({
     if (state.sessionsHydrated) {
       const ses = sessions.find((s) => s.id === id);
       if (ses && ses.messages.length === 0) {
-        fetchSessionRuns(id)
-          .then((raw) => {
-            if (raw && raw.length > 0) {
-              const msgs: ChatMessage[] = raw.map(runMsgToChat);
-              set((s) => ({
-                sessions: s.sessions.map((se) =>
-                  se.id !== id || se.messages.length > 0 ? se : { ...se, messages: msgs },
-                ),
-              }));
-            }
+        loadSessionTranscript(id, state.sessionHistoryMode)
+          .then((loaded) => {
+            const hasMessages = loaded.kind === 'v2'
+              ? loaded.page.messages.length > 0
+              : loaded.messages.length > 0;
+            if (!hasMessages) return;
+            set((s) => ({
+              sessions: s.sessions.map((se) =>
+                se.id !== id || se.messages.length > 0
+                  ? se
+                  : { ...se, ...transcriptPatch(loaded, se.messages) },
+              ),
+            }));
           })
           .catch(() => {});
       }
@@ -677,23 +794,28 @@ export const useChat = create<ChatState>((set, get) => ({
       get().reconcileSession(sid);
       get().refreshContext(sid);
     });
-    // Fetch run history for the auto-selected session so the chat screen
-    // shows prior messages immediately — but ONLY when it's a freshly
+    // Fetch only the newest canonical message page for the auto-selected
+    // v2 session (legacy agents keep their old runs loader) — but ONLY when
+    // it's a freshly
     // imported, message-less session. On a metadata-only re-hydrate (e.g.
     // triggered by a child-session ``resource_event``), refetching an active
     // session here would clobber its in-flight streaming transcript.
     const importedIds = new Set(imported.map((i) => i.id));
     if (autoSelectId && importedIds.has(autoSelectId)) {
-      fetchSessionRuns(autoSelectId)
-        .then((raw) => {
-          if (raw && raw.length > 0) {
-            const msgs: ChatMessage[] = raw.map(runMsgToChat);
-            set((s) => ({
-              sessions: s.sessions.map((se) =>
-                se.id !== autoSelectId || se.messages.length > 0 ? se : { ...se, messages: msgs },
-              ),
-            }));
-          }
+      const mode = get().sessionHistoryMode;
+      loadSessionTranscript(autoSelectId, mode)
+        .then((loaded) => {
+          const hasMessages = loaded.kind === 'v2'
+            ? loaded.page.messages.length > 0
+            : loaded.messages.length > 0;
+          if (!hasMessages) return;
+          set((s) => ({
+            sessions: s.sessions.map((se) =>
+              se.id !== autoSelectId || se.messages.length > 0
+                ? se
+                : { ...se, ...transcriptPatch(loaded, se.messages) },
+            ),
+          }));
         })
         .catch(() => {});
     }
@@ -708,6 +830,92 @@ export const useChat = create<ChatState>((set, get) => ({
   },
 
   markHydrated: () => set({ sessionsHydrated: true }),
+
+  setSessionHistoryMode: (sessionHistoryMode) => set({ sessionHistoryMode }),
+
+  mergeMessageWindow: (page, tool) => set((state) => {
+    const incoming = page.messages.map(canonicalMessageToChat);
+    if (tool) {
+      const messageId = tool.message_id;
+      for (let index = 0; index < incoming.length; index += 1) {
+        const message = incoming[index];
+        if (message.id !== messageId && message.toolInvocationId !== tool.id) continue;
+        incoming[index] = {
+          ...message,
+          role: 'tool',
+          toolInvocationId: tool.id,
+          toolInfo: toolInfoFromInvocationDetail(tool),
+        };
+      }
+    }
+    const known = state.sessions.some((session) => session.id === page.session_id);
+    const sessions = known
+      ? state.sessions
+      : [...state.sessions, {
+          id: page.session_id,
+          messages: [],
+          isProcessing: false,
+          ...childStubFor(page.session_id),
+        } as ChatSession];
+    return {
+      sessions: sessions.map((session) => {
+        if (session.id !== page.session_id) return session;
+        const byId = new Map(session.messages.map((message) => [message.id, message]));
+        for (const message of incoming) {
+          const prior = byId.get(message.id);
+          byId.set(message.id, {
+            ...prior,
+            ...message,
+            toolInfo: message.toolInfo || prior?.toolInfo,
+          });
+        }
+        const messages = [...byId.values()].sort((a, b) => {
+          if (a.ordinal != null && b.ordinal != null) return a.ordinal - b.ordinal;
+          if (a.ordinal != null) return -1;
+          if (b.ordinal != null) return 1;
+          return a.timestamp - b.timestamp;
+        });
+        return {
+          ...session,
+          messages,
+          messageWindow: {
+            revision: page.revision,
+            beforeCursor: page.before_cursor,
+            afterCursor: page.after_cursor,
+            hasMoreBefore: page.has_more_before,
+            hasMoreAfter: page.has_more_after,
+          },
+        };
+      }),
+    };
+  }),
+
+  loadEarlierMessages: async (sessionId) => {
+    const current = get().sessions.find((session) => session.id === sessionId);
+    const cursor = current?.messageWindow?.beforeCursor;
+    if (get().sessionHistoryMode !== 'v2'
+        || !current?.messageWindow?.hasMoreBefore || !cursor) return;
+    const running = earlierPageLoads.get(sessionId);
+    if (running) return running;
+    const request = listSessionMessages(sessionId, {
+      cursor,
+      direction: 'before',
+      limit: SESSION_MESSAGE_PAGE_SIZE,
+    })
+      .then((page) => {
+        // Ignore a page for a cursor superseded by an anchor navigation or a
+        // reconnect refresh while this request was in flight.
+        const latest = get().sessions.find((session) => session.id === sessionId);
+        if (latest?.messageWindow?.beforeCursor !== cursor) return;
+        get().mergeMessageWindow(page);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (earlierPageLoads.get(sessionId) === request) earlierPageLoads.delete(sessionId);
+      });
+    earlierPageLoads.set(sessionId, request);
+    return request;
+  },
 
   addUserMessage: (sessionId, text, attachments) => {
     const state = get();
@@ -923,12 +1131,15 @@ export const useChat = create<ChatState>((set, get) => ({
 
     if (msg.type === 'text_final') {
       const text = msg.text || '';
-      if (!text) return stubAdded ? { sessions: s.sessions } : {};
+      const attachments = normalizedAttachments(msg.attachments);
+      if (!text && !attachments?.length) return stubAdded ? { sessions: s.sessions } : {};
       return {
         sessions: s.sessions.map((ses) => {
           if (ses.id !== msg.session_id) return ses;
           const last = ses.messages[ses.messages.length - 1];
-          if (last?.role === 'user' && last.text === text) return ses;
+          if (last?.role === 'user'
+              && last.text === text
+              && attachmentSignature(last.attachments) === attachmentSignature(attachments)) return ses;
           return {
             ...ses,
             isProcessing: true,
@@ -939,7 +1150,7 @@ export const useChat = create<ChatState>((set, get) => ({
               role: 'user' as const,
               text,
               timestamp: Date.now(),
-              attachments: msg.attachments && msg.attachments.length ? msg.attachments : undefined,
+              attachments,
             }],
           };
         }),
@@ -1130,6 +1341,7 @@ export const useChat = create<ChatState>((set, get) => ({
     }
 
     if (msg.type === 'response') {
+      const attachments = normalizedAttachments(msg.attachments);
       // Drop any buffered deltas for this session — the response
       // frame is canonical, applying them on top would duplicate
       // content.
@@ -1148,7 +1360,8 @@ export const useChat = create<ChatState>((set, get) => ({
             msgs[msgs.length - 1] = {
               ...last,
               text: msg.text,
-              attachments: msg.attachments ?? undefined,
+              attachments,
+              parts: normalizeMessageContent(msg.parts, msg.artifacts, msg.text, attachments ?? []),
               model: msg.model,
               streaming: false,
             };
@@ -1158,7 +1371,8 @@ export const useChat = create<ChatState>((set, get) => ({
               role: 'assistant' as const,
               text: msg.text,
               timestamp: Date.now(),
-              attachments: msg.attachments ?? undefined,
+              attachments,
+              parts: normalizeMessageContent(msg.parts, msg.artifacts, msg.text, attachments ?? []),
               model: msg.model,
             });
           }
@@ -1305,18 +1519,21 @@ export const useChat = create<ChatState>((set, get) => ({
     // turn flips isProcessing true; clobbering it would drop the just-typed
     // message.)
     if (!ses || ses.isProcessing) return;
-    fetchSessionRuns(sessionId)
-      .then((raw) => {
+    const mode = get().sessionHistoryMode;
+    loadSessionTranscript(sessionId, mode)
+      .then((loaded) => {
         // Empty result → keep the optimistic transcript (the runs may not be
         // flushed yet); never wipe a visible conversation to nothing.
-        if (!raw || raw.length === 0) return;
-        const msgs: ChatMessage[] = raw.map(runMsgToChat);
+        const hasMessages = loaded.kind === 'v2'
+          ? loaded.page.messages.length > 0
+          : loaded.messages.length > 0;
+        if (!hasMessages) return;
         set((s) => ({
           sessions: s.sessions.map((se) => {
             if (se.id !== sessionId) return se;
             // Re-check at apply time: a turn may have started during the fetch.
             if (se.isProcessing) return se;
-            return { ...se, messages: msgs };
+            return { ...se, ...transcriptPatch(loaded, se.messages) };
           }),
         }));
       })
@@ -1356,7 +1573,12 @@ export const useChat = create<ChatState>((set, get) => ({
     return { sessions, activeSessionId };
   }),
 
-  clearAll: () => set({ sessions: [], activeSessionId: null, sessionsHydrated: false }),
+  clearAll: () => set({
+    sessions: [],
+    activeSessionId: null,
+    sessionsHydrated: false,
+    sessionHistoryMode: 'unknown',
+  }),
 
   loadSession: (id, title, history) => {
     const buildToolInfo = (entry: typeof history[0]): ToolInfo | undefined => {

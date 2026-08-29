@@ -14,7 +14,7 @@
  */
 
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
-import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View,
 } from 'react-native';
@@ -66,7 +66,7 @@ const EMPTY: Form = {
 };
 
 export default function EventEditScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, field } = useLocalSearchParams<{ id: string; field?: string }>();
   const navigation = useNavigation();
   const router = useRouter();
   const headerInset = useHeaderInset();
@@ -88,6 +88,8 @@ export default function EventEditScreen() {
   const [typeMenu, setTypeMenu] = useState(false);
   const [targetMenu, setTargetMenu] = useState(false);
   const [modelMenu, setModelMenu] = useState(false);
+  const nameRef = useRef<TextInput>(null);
+  const promptRef = useRef<TextInput>(null);
 
   const typeList = types.length ? types.map((t) => ({ key: t.key, label: t.label })) : FALLBACK_TYPES;
 
@@ -129,6 +131,22 @@ export default function EventEditScreen() {
     })();
     return () => { cancelled = true; };
   }, [connConfig, id, isNew]);
+
+  useEffect(() => {
+    if (loading || !field) return;
+    const tail = field.split('.').pop() || field;
+    const normalized = tail === 'prompt' ? 'prompt_template' : tail;
+    const timer = setTimeout(() => {
+      if (normalized === 'name') nameRef.current?.focus();
+      if (normalized === 'prompt_template') promptRef.current?.focus();
+      if (Platform.OS === 'web' && typeof document !== 'undefined') {
+        const element = document.getElementById(`event-field-${normalized}`);
+        element?.scrollIntoView({ block: 'center' });
+        element?.focus?.({ preventScroll: true });
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [field, loading]);
 
   const modelLabel = useMemo(() => {
     if (!form.model) return 'Auto (default)';
@@ -234,6 +252,8 @@ export default function EventEditScreen() {
         {/* Name */}
         <Text style={styles.label}>Name</Text>
         <TextInput
+          ref={nameRef}
+          nativeID="event-field-name"
           style={styles.input}
           value={form.name}
           onChangeText={(v) => setForm({ ...form, name: v })}
@@ -287,6 +307,7 @@ export default function EventEditScreen() {
             <Text style={styles.label}>Prompt</Text>
             {Platform.OS === 'web' ? (
               <textarea
+                id="event-field-prompt_template"
                 value={form.prompt_template}
                 onChange={(e: any) => setForm({ ...form, prompt_template: e.target.value })}
                 placeholder="What should the agent do? Reference the payload with {{payload.field}}"
@@ -299,6 +320,8 @@ export default function EventEditScreen() {
               />
             ) : (
               <TextInput
+                ref={promptRef}
+                nativeID="event-field-prompt_template"
                 style={[styles.input, { height: 120, textAlignVertical: 'top' }]}
                 value={form.prompt_template}
                 onChangeText={(v) => setForm({ ...form, prompt_template: v })}
@@ -376,7 +399,9 @@ export default function EventEditScreen() {
 
         {/* Model pin */}
         <Text style={styles.label}>Model</Text>
-        <Picker value={modelLabel} muted={!form.model} open={modelMenu} onToggle={() => setModelMenu((o) => !o)} />
+        <View nativeID="event-field-model">
+          <Picker value={modelLabel} muted={!form.model} open={modelMenu} onToggle={() => setModelMenu((o) => !o)} />
+        </View>
         {modelMenu && (
           <View style={styles.menu}>
             <Option label="Auto (default)" active={!form.model} onPress={() => { setForm({ ...form, model: null }); setModelMenu(false); }} />

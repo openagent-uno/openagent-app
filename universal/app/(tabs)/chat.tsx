@@ -17,18 +17,25 @@ import {
 } from 'react-native';
 
 import type { Attachment } from '../../../common/types';
-import { isHiddenChildSession, runRoutePath, type RunLaunchTarget, type MemoryTarget } from '../../../common/types';
+import { runRoutePath, type RunLaunchTarget, type MemoryTarget } from '../../../common/types';
+import { attachmentsForSend } from '../../../common/attachments';
+import { resolveChatAnchor } from '../../../common/search-navigation';
 import { useConnection } from '../../stores/connection';
 import { useChat } from '../../stores/chat';
-import { useUI } from '../../stores/ui';
 import { useEvents } from '../../stores/events';
-import { fetchSessions } from '../../services/api';
+import { useSearch } from '../../stores/search';
+import { fetchChildSessions, fetchSessions } from '../../services/api';
 import MessageComposer, { type PendingFile, type SlashCommand } from '../../components/MessageComposer';
 import MessageList from '../../components/MessageList';
-import ContextPanel from '../../components/ContextPanel';
-import CommandPalette, { type PaletteEntry } from '../../components/CommandPalette';
+import SessionDetailsDrawerShell from '../../components/SessionDetailsDrawer';
 import BrandLogo from '../../components/BrandLogo';
-import { useHeaderInset, HeaderBack, HeaderMenu, HeaderRight } from '../../components/screenHeader';
+import {
+  useHeaderInset,
+  HeaderMenuAndBack,
+  HeaderMenu,
+  HeaderRight,
+  HeaderSessionDetails,
+} from '../../components/screenHeader';
 import PopupMenu from '../../components/PopupMenu';
 import Notice from '../../components/Notice';
 import { NO_DRAG } from '../../components/DragRegion';
@@ -40,7 +47,7 @@ import { useConfirm } from '../../components/ConfirmDialog';
 import {
   uploadFile, guessMimeType, listDbModels,
   getSessionModelPin, pinSessionModel, unpinSessionModel, isAgentUnreachable,
-  getGatewayCommands, listServingAccounts,
+  getGatewayCommands, listServingAccounts, listSessionMessages, getToolInvocationDetail,
 } from '../../services/api';
 import { modelEffort, modelFamily } from '../../../common/types';
 import type { ModelEntry, GatewayCommandSpec, ProviderAccounts } from '../../../common/types';
@@ -89,7 +96,11 @@ export default function ChatScreen() {
   const currentUserHandle = useConnection((s) => s.config?.handle);
   const router = useRouter();
   const navigation = useNavigation<any>();
-  const routeParams = useLocalSearchParams<{ session?: string }>();
+  const routeParams = useLocalSearchParams<{
+    session?: string;
+    message?: string;
+    toolInvocation?: string;
+  }>();
   // Fine-grained selectors instead of the whole-store `useChat()`. The
   // no-arg form returns a freshly-merged state object on EVERY mutation,
   // so this ~1600-line screen used to re-render on every store change —
@@ -99,8 +110,6 @@ export default function ChatScreen() {
   const sessions = useChat((s) => s.sessions);
   const activeSessionId = useChat((s) => s.activeSessionId);
   const sessionsHydrated = useChat((s) => s.sessionsHydrated);
-  const contextPanelVisible = useUI((s) => s.contextPanelVisible);
-  const toggleContextPanel = useUI((s) => s.toggleContextPanel);
   const createSession = useChat((s) => s.createSession);
   const setActiveSession = useChat((s) => s.setActiveSession);
   const removeSession = useChat((s) => s.removeSession);
@@ -111,6 +120,10 @@ export default function ChatScreen() {
   const setLlmPin = useChat((s) => s.setLlmPin);
   const setSystemPrompt = useChat((s) => s.setSystemPrompt);
   const hydrateFromServer = useChat((s) => s.hydrateFromServer);
+  const mergeMessageWindow = useChat((s) => s.mergeMessageWindow);
+  const loadEarlierMessages = useChat((s) => s.loadEarlierMessages);
+  const chatSearchDestination = useSearch((s) => s.chatDestination);
+  const clearChatSearchDestination = useSearch((s) => s.clearChatDestination);
   // Delete a chat session behind a confirmation dialog (vision §16: sessions
   // are durable — removal is an explicit, confirmed action). The server
   // cascades the delete to every sub-agent session this chat spawned, so the
@@ -131,30 +144,14 @@ export default function ChatScreen() {
     },
     [confirm, removeSession],
   );
-  // The app shell sidebar owns the visible session history. Chat keeps this
-  // sorted list only for the command palette / quick switcher.
-  const chatSessions = useMemo(() => {
-    // Sub-agent (delegation) sessions are navigable only from their parent's
-    // transcript card — never the sidebar/recent list. The active session view
-    // reads from the full ``sessions`` list, so a child opened from a card
-    // still renders even though it's filtered out here.
-    const visible = sessions.filter((s) => !isHiddenChildSession(s));
-    return [...visible].sort((a, b) => {
-      if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
-      const at = a.messages[a.messages.length - 1]?.timestamp ?? 0;
-      const bt = b.messages[b.messages.length - 1]?.timestamp ?? 0;
-      return bt - at;
-    });
-  }, [sessions]);
-
   const [input, setInput] = useState('');
   const [pendingFiles, setPendingFiles] = useState<PendingFile[]>([]);
   const [dragActive, setDragActive] = useState(false);
-  const [paletteOpen, setPaletteOpen] = useState(false);
   const [llmModels, setLlmModels] = useState<ModelEntry[]>([]);
   // Set when the server refuses a model pin, so the composer can say why
   // the chip snapped back instead of leaving the rejection invisible.
   const [modelPinError, setModelPinError] = useState<string | null>(null);
+  const [anchorError, setAnchorError] = useState<string | null>(null);
   // The gateway's command registry. `null` until it loads (or if it fails),
   // in which case the composer falls back to the local handlers alone.
   const [gatewayCommands, setGatewayCommands] = useState<GatewayCommandSpec[] | null>(null);
@@ -256,6 +253,10 @@ export default function ChatScreen() {
   wsRef.current = ws;
   const routerRef = useRef(router);
   routerRef.current = router;
+  const handleLoadEarlier = useCallback(async () => {
+    const sessionId = activeSessionIdRef.current;
+    if (sessionId) await loadEarlierMessages(sessionId);
+  }, [loadEarlierMessages]);
   // Mirrors the live composer text so the session-switch handler can flush the
   // outgoing draft synchronously (the persist write itself is debounced).
   const inputValueRef = useRef('');
@@ -365,11 +366,85 @@ export default function ChatScreen() {
   const appliedParamRef = useRef<string | null>(null);
   useEffect(() => {
     const want = typeof routeParams.session === 'string' ? routeParams.session : undefined;
-    if (!want || want === activeSessionId) return;
+    if (!want) {
+      appliedParamRef.current = null;
+      return;
+    }
     if (appliedParamRef.current === want) return;
     appliedParamRef.current = want;
+    if (want === activeSessionId) return;
     setActiveSession(want);
   }, [routeParams.session, activeSessionId, setActiveSession]);
+
+  // Expo Router v5 can drop changed query parameters when a Drawer replaces
+  // its already-focused Chat route. Search therefore carries the exact
+  // in-app message/tool destination in account-scoped memory as well. Clear a
+  // stale anchor as soon as the user intentionally switches to another chat.
+  useEffect(() => {
+    if (!chatSearchDestination || chatSearchDestination.sessionId === activeSessionId) return;
+    clearChatSearchDestination();
+  }, [activeSessionId, chatSearchDestination, clearChatSearchDestination]);
+
+  const routeAnchorSession = typeof routeParams.session === 'string'
+    ? routeParams.session : undefined;
+  const routeAnchorMessage = typeof routeParams.message === 'string'
+    ? routeParams.message : undefined;
+  const routeAnchorTool = typeof routeParams.toolInvocation === 'string'
+    ? routeParams.toolInvocation : undefined;
+  // A fresh in-app destination wins over possibly stale route params. Root
+  // chat destinations are explicit too, so opening a conversation clears an
+  // earlier message/tool highlight even if the Drawer drops the new params.
+  const resolvedAnchor = resolveChatAnchor({
+    sessionId: routeAnchorSession,
+    messageId: routeAnchorMessage,
+    toolInvocationId: routeAnchorTool,
+  }, chatSearchDestination, activeSessionId);
+  const anchorSession = resolvedAnchor.sessionId;
+  const anchorMessage = resolvedAnchor.messageId;
+  const anchorToolInvocation = resolvedAnchor.toolInvocationId;
+  const anchorGeneration = resolvedAnchor.generation;
+
+  // Exact operational-search anchor. The search overlay only navigates; Chat
+  // owns the authorized messages-around/tool-detail fetch and range merge.
+  useEffect(() => {
+    if (!anchorSession || !anchorMessage) return;
+    const controller = new AbortController();
+    setAnchorError(null);
+    void (async () => {
+      try {
+        const [page, tool] = await Promise.all([
+          listSessionMessages(
+            anchorSession,
+            { around: anchorMessage, before: 30, after: 30 },
+            controller.signal,
+          ),
+          anchorToolInvocation
+            ? getToolInvocationDetail(anchorToolInvocation, controller.signal)
+            : Promise.resolve(undefined),
+        ]);
+        if (controller.signal.aborted) return;
+        if (page.anchor_found === false) {
+          setAnchorError('This result is no longer available.');
+          return;
+        }
+        mergeMessageWindow(page, tool);
+      } catch (error) {
+        if (controller.signal.aborted) return;
+        setAnchorError(
+          error instanceof Error && /404|not found/i.test(error.message)
+            ? 'This result is no longer available.'
+            : 'Could not load this message. Try opening the result again.',
+        );
+      }
+    })();
+    return () => controller.abort();
+  }, [
+    anchorGeneration,
+    anchorMessage,
+    anchorSession,
+    anchorToolInvocation,
+    mergeMessageWindow,
+  ]);
 
   // Navigate into a child session (delegation card / run node) by swapping
   // the active session and reflecting it in the URL so it's deep-linkable.
@@ -428,7 +503,7 @@ export default function ChatScreen() {
     navigation.setOptions({
       headerLeft: () =>
         isChildSession ? (
-          <HeaderBack
+          <HeaderMenuAndBack
             onPress={() => {
               // If this child was drilled into from a NON-chat screen (e.g. a
               // run detail's sub-agent card), return to that screen via the
@@ -444,45 +519,53 @@ export default function ChatScreen() {
         ) : (
           <HeaderMenu />
         ),
-      // Overflow menu for the open chat. Every session (incl. sub-agent / run
-      // views) gets the context-panel toggle; only a top-level manual chat is
-      // deletable, so the Delete row is appended just for those.
+      // Session details live in the right navigation drawer. The overflow menu
+      // remains only for destructive chat actions, while the drawer button is
+      // always available for every open session (including child/run sessions).
       headerRight: () =>
         activeSession ? (
           <HeaderRight>
-            <PopupMenu
-              triggerIcon="more-vertical"
-              triggerSize={18}
-              triggerColor={colors.textSecondary}
-              triggerStyle={[styles.headerMenuBtn, NO_DRAG]}
-              accessibilityLabel="Chat options"
-              items={[
-                {
-                  label: contextPanelVisible ? 'Hide context panel' : 'Show context panel',
-                  icon: 'pie-chart',
-                  onPress: toggleContextPanel,
-                },
-                ...(!isChildSession ? [{
-                  label: 'Delete chat',
-                  icon: 'trash-2' as const,
-                  destructive: true,
-                  onPress: () => confirmAndRemove(activeSession),
-                }] : []),
-              ]}
-            />
+            {!isChildSession ? (
+              <PopupMenu
+                triggerIcon="more-vertical"
+                triggerSize={18}
+                triggerColor={colors.textSecondary}
+                triggerStyle={[styles.headerMenuBtn, NO_DRAG]}
+                accessibilityLabel="Chat options"
+                items={[
+                  {
+                    label: 'Delete chat',
+                    icon: 'trash-2' as const,
+                    destructive: true,
+                    onPress: () => confirmAndRemove(activeSession),
+                  },
+                ]}
+              />
+            ) : null}
+            <HeaderSessionDetails />
           </HeaderRight>
         ) : null,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigation, isChildSession, parentSession?.id, activeSession?.id, activeSession?.title, contextPanelVisible, toggleContextPanel]);
+  }, [navigation, isChildSession, parentSession?.id, activeSession?.id, activeSession?.title]);
 
-  // A freshly-spawned child session (delegation / scheduled firing / workflow
-  // node) fires a ``session`` resource_event — refetch so it appears in the
-  // sidebar and its streaming stub gets real metadata. hydrateFromServer
-  // merges metadata onto existing rows without clobbering live transcripts.
+  // A freshly-spawned child session fires a resource_event. V2 normally gets
+  // its exact summary from history_changed; gateways without that realtime
+  // feature fetch only this open parent's children. The unbounded flat list
+  // remains a legacy-only fallback.
   useEffect(() => {
     const off = useEvents.getState().subscribe('session', () => {
-      fetchSessions().then(hydrateFromServer).catch(() => {});
+      const search = useSearch.getState();
+      const chat = useChat.getState();
+      if (chat.sessionHistoryMode === 'v2') {
+        if (search.capabilities?.features.history?.realtime_event === 'history_changed') return;
+        const parentId = chat.activeSessionId;
+        if (parentId) fetchChildSessions(parentId).then(hydrateFromServer).catch(() => {});
+        return;
+      }
+      if (chat.sessionHistoryMode === 'legacy') {
+        fetchSessions().then(hydrateFromServer).catch(() => {});
+      }
     });
     return off;
   }, [hydrateFromServer]);
@@ -522,20 +605,24 @@ export default function ChatScreen() {
     const controller = new AbortController();
     const retry = () => runUpload(file, id, kind, previewUrl);
     setPendingFiles((prev) => prev.map((p) => p.id === id
-      ? { id, filename: file.name, remotePath: '', kind, uploading: true, previewUrl, abort: () => controller.abort(), retry }
+      ? { id, filename: file.name, kind, uploading: true, previewUrl, abort: () => controller.abort(), retry }
       : p));
     (async () => {
       try {
-        const result = await uploadFile(file, undefined, { signal: controller.signal });
+        const result = await uploadFile(file, undefined, {
+          kind,
+          sessionId: activeSessionIdRef.current ?? undefined,
+          signal: controller.signal,
+        });
         setPendingFiles((prev) => prev.map((p) => p.id === id
-          ? { id, filename: result.filename, remotePath: result.path, kind, previewUrl, retry }
+          ? { id, filename: result.filename, attachment: result, kind, previewUrl, retry }
           : p));
       } catch (e: any) {
         if (e?.name === 'AbortError' || controller.signal.aborted) return;
         const msg = e instanceof Error ? e.message : String(e);
         console.error('Upload failed:', file.name, msg);
         setPendingFiles((prev) => prev.map((p) => p.id === id
-          ? { id, filename: file.name, remotePath: '', kind, error: msg, previewUrl, retry }
+          ? { id, filename: file.name, kind, error: msg, previewUrl, retry }
           : p));
       }
     })();
@@ -554,7 +641,7 @@ export default function ChatScreen() {
       // runUpload then transitions it through uploading → ok/error.
       setPendingFiles((prev) => [
         ...prev,
-        { id, filename: file.name, remotePath: '', kind, uploading: true, previewUrl },
+        { id, filename: file.name, kind, uploading: true, previewUrl },
       ]);
       runUpload(file, id, kind, previewUrl);
     }
@@ -704,13 +791,6 @@ export default function ChatScreen() {
         return;
       }
 
-      // Cmd/Ctrl+P (or Cmd+Shift+O à la VS Code) — open quick switcher.
-      if (mod && !e.altKey && (e.key === 'p' || e.key === 'P')) {
-        e.preventDefault();
-        setPaletteOpen(true);
-        return;
-      }
-
       // Cmd/Ctrl+Backspace — clear composer text + abort any in-flight
       // upload chips. Only when the focus is on the composer textarea
       // so the user doesn't lose chat sidebar context unexpectedly.
@@ -843,11 +923,14 @@ export default function ChatScreen() {
     const sid = activeSessionIdRef.current;
     const ses = activeSessionRef.current;
     if (!conn || !sid) return;
+    const original = ses?.messages.find((message) => message.id === messageId);
+    const attachments = attachmentsForSend(original?.attachments);
     const ok = editUserMessage(sid, messageId, newText);
     if (!ok) return;
     conn.sendMessage(newText, sid, {
       llmPin: ses?.llmPin,
       systemPrompt: ses?.systemPrompt,
+      attachments,
     });
   }, [editUserMessage]);
 
@@ -875,14 +958,12 @@ export default function ChatScreen() {
     if (!conn || !sid || !ses) return;
     const lastUser = [...ses.messages].reverse().find((m) => m.role === 'user');
     if (!lastUser) return;
-    const attachments = lastUser.attachments;
-    addUserMessage(sid, lastUser.text || '(regenerate)', attachments);
+    const attachments = attachmentsForSend(lastUser.attachments);
+    addUserMessage(sid, lastUser.text || '(regenerate)', lastUser.attachments);
     conn.sendMessage(lastUser.text, sid, {
       llmPin: ses.llmPin,
       systemPrompt: ses.systemPrompt,
-      attachments: attachments?.map((a) => ({
-        type: a.type, path: a.path, filename: a.filename,
-      })),
+      attachments,
     });
   }, [addUserMessage]);
 
@@ -924,7 +1005,6 @@ export default function ChatScreen() {
         if (e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
         // Only single printable characters; keep Space free to scroll.
         if (e.key.length !== 1 || e.key === ' ') return;
-        if (paletteOpen) return;
         // Don't hijack a keystroke already destined for a field.
         const el = document.activeElement as HTMLElement | null;
         const tag = el?.tagName?.toLowerCase();
@@ -939,7 +1019,7 @@ export default function ChatScreen() {
       };
       window.addEventListener('keydown', onKey);
       return () => window.removeEventListener('keydown', onKey);
-    }, [paletteOpen]),
+    }, []),
   );
 
   const swState: SoundWavesState =
@@ -961,7 +1041,9 @@ export default function ChatScreen() {
     // Failed uploads stay in pendingFiles as visible error chips so the
     // user knows the file didn't make it; they must dismiss explicitly.
     // Filter them out of the WS message + attachment list here.
-    const sendableFiles = pendingFiles.filter((f) => !f.error && f.remotePath);
+    const sendableFiles = pendingFiles.filter(
+      (f) => !f.error && !f.uploading && (f.attachment || f.remotePath),
+    );
     if (!text && sendableFiles.length === 0) return;
 
     // Intercept gateway slash-commands typed with an argument (e.g.
@@ -988,17 +1070,16 @@ export default function ChatScreen() {
       }
     }
 
-    const attachments: Attachment[] = sendableFiles.map((f) => ({
-      type: f.kind,
-      path: f.remotePath,
-      filename: f.filename,
-    }));
+    const attachments: Attachment[] = sendableFiles.flatMap((f) => {
+      if (f.attachment) return [f.attachment];
+      return f.remotePath ? [{ type: f.kind, path: f.remotePath, filename: f.filename }] : [];
+    });
 
     addUserMessage(activeSessionId, text, attachments.length ? attachments : undefined);
     ws.sendMessage(text, activeSessionId, {
       llmPin: activeSession?.llmPin,
       systemPrompt: activeSession?.systemPrompt,
-      attachments: attachments.length ? attachments : undefined,
+      attachments: attachmentsForSend(attachments),
     });
     setInput('');
     // Drop only the chips we actually sent; keep failed + still-uploading
@@ -1032,7 +1113,6 @@ export default function ChatScreen() {
           ...oversized.map((p) => ({
             id: newPendingId(),
             filename: p.filename,
-            remotePath: '',
             kind: p.kind,
             error: `File too large (${(p.size / 1024 / 1024).toFixed(1)} MB; limit ${Math.round(p.maxBytes / 1024 / 1024)} MB)`,
           })),
@@ -1051,7 +1131,6 @@ export default function ChatScreen() {
         ...items.map(({ id, meta, controller }) => ({
           id,
           filename: meta.filename,
-          remotePath: '',
           kind: meta.kind,
           uploading: true,
           abort: () => controller.abort(),
@@ -1063,16 +1142,20 @@ export default function ChatScreen() {
           if (controller.signal.aborted) return;
           const blob = new Blob([bytes as BlobPart], { type: guessMimeType(meta.filename, meta.kind) });
           const file = new File([blob], meta.filename, { type: blob.type });
-          const result = await uploadFile(file, undefined, { signal: controller.signal });
+          const result = await uploadFile(file, undefined, {
+            kind: meta.kind,
+            sessionId: activeSessionIdRef.current ?? undefined,
+            signal: controller.signal,
+          });
           setPendingFiles((prev) => prev.map((p) => p.id === id
-            ? { id, filename: result.filename, remotePath: result.path, kind: meta.kind }
+            ? { id, filename: result.filename, attachment: result, kind: meta.kind }
             : p));
         } catch (e: any) {
           if (e?.name === 'AbortError' || controller.signal.aborted) return;
           const msg = e instanceof Error ? e.message : String(e);
           console.error('Desktop upload failed:', meta.filename, msg);
           setPendingFiles((prev) => prev.map((p) => p.id === id
-            ? { id, filename: meta.filename, remotePath: '', kind: meta.kind, error: msg }
+            ? { id, filename: meta.filename, kind: meta.kind, error: msg }
             : p));
         }
       }));
@@ -1131,13 +1214,17 @@ export default function ChatScreen() {
         if (!activeSessionId || !ws) return;
         try {
           const langHint2 = voiceLanguage && voiceLanguage !== 'auto' ? voiceLanguage : undefined;
-          const result = await uploadFile(file, undefined, { language: langHint2 });
-          const transcription = (result as any).transcription;
-          const msg = transcription
-            ? transcription
-            : `The user sent a voice message:\n- audio: ${result.filename} — local path: ${result.path}\nUse Read to inspect it.`;
-          addUserMessage(activeSessionId, 'Voice message');
-          ws.sendMessage(msg, activeSessionId, { source: 'stt' });
+          const result = await uploadFile(file, undefined, {
+            kind: 'voice',
+            language: langHint2,
+            sessionId: activeSessionId,
+          });
+          const msg = result.transcription || 'The user sent a voice message.';
+          addUserMessage(activeSessionId, msg, [result]);
+          ws.sendMessage(msg, activeSessionId, {
+            source: 'stt',
+            attachments: attachmentsForSend([result]),
+          });
         } catch (e: any) {
           console.error('Voice upload failed:', e);
         }
@@ -1391,20 +1478,8 @@ export default function ChatScreen() {
     [llmModels, providerHints],
   );
 
-  const paletteEntries: PaletteEntry[] = useMemo(() => chatSessions.map((s) => {
-    const last = s.messages[s.messages.length - 1];
-    return {
-      id: s.id,
-      title: s.title || 'Untitled chat',
-      subtitle: last ? `${last.role}: ${last.text.slice(0, 80)}` : 'Empty chat',
-      icon: 'message-circle',
-      pinned: s.pinned,
-      onSelect: () => setActiveSession(s.id),
-    };
-  }), [chatSessions, setActiveSession]);
-
   return (
-    <>
+    <SessionDetailsDrawerShell topInset={headerInset}>
       <View style={[styles.chatArea, { paddingTop: headerInset }]}>
         {dragActive && (
           <View style={styles.dropOverlay} pointerEvents="none">
@@ -1417,15 +1492,6 @@ export default function ChatScreen() {
             </View>
           </View>
         )}
-        {/* Context-window gauge, pinned top-right. Bound to the active session
-            so it also serves sub-agent / scheduled-firing / workflow-AI-node
-            sessions opened on this same screen. Honours the header menu's
-            show/hide: the flag was read (to label the menu item) and persisted,
-            but never consulted here, so "Hide context panel" changed the menu
-            wording and nothing else. */}
-        {activeSession && contextPanelVisible ? (
-          <ContextPanel context={activeSession.contextUsage} topInset={headerInset} />
-        ) : null}
         {activeSession ? (
           <>
             {/* TTS banner */}
@@ -1562,6 +1628,11 @@ export default function ChatScreen() {
                   onOpenRun={openRun}
                   onOpenMemory={openMemory}
                   currentUserHandle={currentUserHandle}
+                  anchorMessageId={anchorMessage}
+                  anchorToolInvocationId={anchorToolInvocation}
+                  onAnchorLayout={(y) => scrollRef.current?.scrollTo({ y: Math.max(0, y - 96), animated: true })}
+                  hasMoreBefore={activeSession.messageWindow?.hasMoreBefore}
+                  onLoadEarlier={handleLoadEarlier}
                 />
               </View>
             </ScrollView>
@@ -1599,6 +1670,11 @@ export default function ChatScreen() {
             {modelPinError && (
               <Notice style={styles.pinErrorBar} onDismiss={() => setModelPinError(null)}>
                 {`Could not switch model — ${modelPinError}`}
+              </Notice>
+            )}
+            {anchorError && (
+              <Notice style={styles.pinErrorBar} onDismiss={() => setAnchorError(null)}>
+                {anchorError}
               </Notice>
             )}
 
@@ -1684,12 +1760,7 @@ export default function ChatScreen() {
           </View>
         )}
       </View>
-      <CommandPalette
-        visible={paletteOpen}
-        onClose={() => setPaletteOpen(false)}
-        entries={paletteEntries}
-      />
-    </>
+    </SessionDetailsDrawerShell>
   );
 }
 
@@ -1763,7 +1834,7 @@ const styles = StyleSheet.create({
   },
   heroGlyph: {
     fontSize: 26, color: colors.primary, marginBottom: 12,
-    fontFamily: font.serif,
+    fontFamily: font.display,
   },
   heroLogo: {
     width: 56, height: 56, marginBottom: 14,

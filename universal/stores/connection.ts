@@ -9,26 +9,121 @@
  * and ``WebSocket`` against ``http://127.0.0.1:<sidecarPort>`` exactly
  * like before — auth + transport are below the visible layer.
  *
- * Passwords are never persisted: the user is prompted on every
- * connect (the cert TTL bounds re-prompt frequency to ~30 days when
- * the cached cert is still valid).
+ * Passwords are never written to renderer storage. On Electron, an opted-in
+ * credential is encrypted by safeStorage in the main process (Keychain /
+ * DPAPI / a real Linux secret service). Automatic login asks the main
+ * process to start the loopback without ever returning plaintext to JS UI.
  */
 
 import { create } from 'zustand';
 import type { ConnectionConfig, SavedAccount } from '../../common/types';
+import type { CapabilitiesResponse } from '../../common/unified-history';
+import { sessionDiscoveryStrategy } from '../../common/history-feed-policy';
+import { createLatestAttemptGate } from '../../common/latest-attempt';
+import { persistAccountAdditionWhileCurrent } from '../../common/guarded-account-persistence';
+import {
+  accountLoopbackTarget,
+  withVerifiedAccountTarget,
+  type PublicAccountTarget,
+} from '../../common/account-target-recovery';
 import { OpenAgentWS } from '../services/ws';
-import { setBaseUrl, fetchSessions } from '../services/api';
+import {
+  setBaseUrl,
+  fetchSessions,
+  getUnifiedCapabilities,
+  isExplicitlyUnsupported,
+  isUnsupportedByAgent,
+  listUnifiedHistory,
+  sessionEntryFromActivity,
+} from '../services/api';
 import * as storage from '../services/storage';
 import { useChat } from './chat';
 
 const STORAGE_KEY = 'openagent:accounts';
 const ACTIVE_CONNECTION_KEY = 'openagent:activeConnection';
 
+// Account mutations can overlap (join completion, auth metadata repair,
+// removal, another window action). Serialize renderer storage writes so an
+// older slow write can never land after and erase a newer in-memory list.
+let accountStorageTail: Promise<void> = Promise.resolve();
+
+function persistAccountsSerialized(accounts: SavedAccount[]): Promise<void> {
+  const payload = JSON.stringify(accounts);
+  const write = accountStorageTail
+    .catch(() => {})
+    .then(() => storage.setItem(STORAGE_KEY, payload));
+  accountStorageTail = write.catch(() => {});
+  return write;
+}
+
 function genId(): string {
   if (typeof crypto !== 'undefined' && crypto.randomUUID) {
     return crypto.randomUUID();
   }
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+}
+
+/** Bootstrap only enough session metadata to choose the initial chat. V2
+ * agents return one filtered history row and then load messages on demand;
+ * the unpaginated flat list remains strictly a legacy compatibility path. */
+async function discoverSessionsAfterAuth(
+  inlineCapabilities: CapabilitiesResponse | undefined,
+  stillCurrent: () => boolean,
+): Promise<void> {
+  let capabilities = inlineCapabilities;
+  try {
+    capabilities ??= await getUnifiedCapabilities();
+  } catch (error) {
+    if (!isUnsupportedByAgent(error) && !isExplicitlyUnsupported(error)) {
+      // Do not guess "legacy" on a transient failure: that would turn one
+      // missed capability response into the expensive flat-list request on a
+      // v2 agent. The authenticated shell retries discovery independently.
+      if (stillCurrent()) useChat.getState().markHydrated();
+      return;
+    }
+    // Old agents do not expose capability discovery.
+    capabilities = undefined;
+  }
+  if (!stillCurrent()) return;
+
+  const strategy = sessionDiscoveryStrategy(capabilities?.features.history?.version);
+  if (strategy === 'history_page') {
+    const chat = useChat.getState();
+    chat.setSessionHistoryMode('v2');
+    // Reconnects keep the small set of sessions the user actually opened.
+    // live_state + settleStaleTurns below reconcile their running status.
+    if (chat.sessions.length > 0) {
+      chat.markHydrated();
+      return;
+    }
+    try {
+      const page = await listUnifiedHistory({
+        kinds: ['chat'],
+        include_children: false,
+        limit: 1,
+      });
+      if (!stillCurrent()) return;
+      const entry = page.items.map(sessionEntryFromActivity).find((item) => item != null);
+      const latestChat = useChat.getState();
+      if (entry) latestChat.hydrateFromServer([entry]);
+      else latestChat.markHydrated();
+    } catch {
+      if (stillCurrent()) useChat.getState().markHydrated();
+    }
+    return;
+  }
+
+  const chat = useChat.getState();
+  chat.setSessionHistoryMode('legacy');
+  try {
+    const entries = await fetchSessions();
+    if (stillCurrent()) chat.hydrateFromServer(entries);
+  } catch {
+    // Keep the old offline/error behaviour: the chat shell becomes usable
+    // even if the compatibility listing failed.
+  } finally {
+    if (stillCurrent()) chat.markHydrated();
+  }
 }
 
 /**
@@ -87,6 +182,9 @@ function humanizeLoginError(raw: string | undefined | null): string {
   if (lower.includes('econnrefused') || lower.includes('connection refused')) {
     return 'Can’t reach the agent server. Make sure it’s running and reachable.';
   }
+  if (lower.includes('secure tunnel') && (lower.includes('timed out') || lower.includes('timeout'))) {
+    return 'The previous secure tunnel is still shutting down. Wait a moment and try again.';
+  }
   if (lower.includes('timed out') || lower.includes('timeout')) {
     return 'The agent didn’t respond in time. Check that the server is running and try again.';
   }
@@ -112,12 +210,50 @@ interface DesktopAPI {
     handle?: string;
     network?: string;
     agent?: string;
-  }) => Promise<number>;
+    remember?: boolean;
+    attemptToken?: number;
+  }) => Promise<LoopbackStartResult>;
+  startRememberedLoopback?: (args: {
+    accountId: string;
+    ticket?: string;
+    handle?: string;
+    network?: string;
+    agent?: string;
+    attemptToken?: number;
+  }) => Promise<RememberedLoopbackResult>;
+  credentialsAvailable?: () => Promise<boolean>;
+  forgetCredential?: (accountId: string) => Promise<void>;
+  releaseLoopbackAttempt?: (args: { accountId: string; attemptToken: number }) => Promise<void>;
   stopLoopback: (args: { accountId: string }) => Promise<void>;
   getLoopbackPort: (accountId: string) => Promise<number | null>;
   /** Open a standalone agent window bound to ``accountId`` (own
    *  connection). Present only in Electron; used for multi-window. */
-  openAgentWindow?: (accountId: string) => Promise<void>;
+  openAgentWindow?: (
+    accountId: string,
+    attemptToken?: number,
+    sourceAccountId?: string,
+  ) => Promise<void>;
+}
+
+export type RememberedLoopbackResult =
+  | { status: 'started'; port: number; target: PublicAccountTarget }
+  | { status: 'missing' }
+  | { status: 'invalid'; error: string; target?: PublicAccountTarget }
+  | { status: 'retryable_error'; error: string; target?: PublicAccountTarget };
+
+export interface LoopbackStartResult {
+  port: number;
+  target: PublicAccountTarget;
+}
+
+export type RememberedConnectionResult =
+  | RememberedLoopbackResult
+  | { status: 'stale' };
+
+export interface RememberedCredentialFailure {
+  accountId: string;
+  kind: 'missing' | 'invalid' | 'retryable';
+  error?: string;
 }
 
 function desktop(): DesktopAPI | null {
@@ -172,6 +308,7 @@ export interface JoinNetworkArgs {
   // it from the ticket on its end either way.
   handle: string;
   password: string;
+  remember?: boolean;
   isLocal?: boolean;
   displayName?: string;
 }
@@ -194,14 +331,27 @@ interface ConnectionState {
   agentVersion: string | null;
   error: string | null;
   isLoading: boolean;
+  /** Boot remains visually gated until the live loopback or remembered
+   * credential path reaches a terminal result. */
+  isRestoringSession: boolean;
+  credentialStorageAvailable: boolean;
+  rememberedFailure: RememberedCredentialFailure | null;
 
   // Account management
   loadAccounts: () => Promise<void>;
   removeAccount: (id: string) => Promise<void>;
+  refreshCredentialAvailability: () => Promise<boolean>;
 
   // Onboarding & connection
   joinNetwork: (args: JoinNetworkArgs) => Promise<void>;
-  connectAccount: (accountId: string, password: string) => Promise<void>;
+  joinNetworkInNewWindow: (args: JoinNetworkArgs) => Promise<boolean>;
+  connectAccount: (
+    accountId: string,
+    password: string,
+    remember?: boolean,
+    selectedAgentHandle?: string,
+  ) => Promise<void>;
+  connectRememberedAccount: (accountId: string) => Promise<RememberedConnectionResult>;
   disconnect: () => Promise<void>;
   resumeConnection: () => Promise<void>;
 
@@ -212,14 +362,83 @@ interface ConnectionState {
    *  process to open a window bound to that account — which connects to the
    *  now-running loopback passwordlessly. Returns ``{ ok }`` so the caller
    *  can surface a humanised error inline. */
-  openAccountWindow: (accountId: string, password?: string) => Promise<{ ok: boolean; error?: string }>;
+  openAccountWindow: (
+    accountId: string,
+    password?: string,
+    remember?: boolean,
+    selectedAgentHandle?: string,
+  ) => Promise<{ ok: boolean; needsPassword?: boolean; retryable?: boolean; error?: string }>;
   /** Boot path for a standalone window (``?connect=<id>``): connect to the
    *  account's already-running loopback with no password. No-op when the
    *  loopback isn't up (the window falls back to the login screen). */
   connectDirected: (accountId: string) => Promise<void>;
 }
 
-export const useConnection = create<ConnectionState>((set, get) => ({
+export const useConnection = create<ConnectionState>((set, get) => {
+  // Renderer-local by construction: every BrowserWindow evaluates this store
+  // in its own JS realm. One window's A→B switch cannot cancel another
+  // window's independent connection attempt.
+  const connectionAttempts = createLatestAttemptGate<string>();
+  const backgroundJoinAttempts = createLatestAttemptGate<string>();
+
+  const beginConnectionAttempt = (accountId: string) => {
+    const attempt = connectionAttempts.begin(accountId);
+    const old = get().ws;
+    // Make the old WS stale before disconnecting it; synchronous close/error
+    // callbacks then fail `_openWebsocket`'s identity guard.
+    set({
+      ws: null,
+      config: null,
+      isConnected: false,
+      isConnecting: true,
+      isReconnecting: false,
+      activeAccountId: accountId,
+      agentName: null,
+      agentVersion: null,
+      error: null,
+      rememberedFailure: null,
+    });
+    old?.disconnect();
+    useChat.getState().clearAll();
+    return attempt;
+  };
+
+  const discardStaleLoopback = async (
+    d: DesktopAPI,
+    accountId: string,
+    attemptToken: number,
+  ) => {
+    try {
+      if (d.releaseLoopbackAttempt) {
+        await d.releaseLoopbackAttempt({ accountId, attemptToken });
+      } else {
+        await d.stopLoopback({ accountId });
+      }
+    } catch { /* best effort */ }
+  };
+
+  const persistVerifiedTarget = async (
+    accountId: string,
+    target: PublicAccountTarget,
+  ): Promise<SavedAccount | null> => {
+    let repaired: SavedAccount | null = null;
+    const accounts = get().accounts.map((account) => {
+      if (account.id !== accountId) return account;
+      repaired = withVerifiedAccountTarget(account, target);
+      return repaired;
+    });
+    if (!repaired) return null;
+    set({ accounts });
+    try {
+      await persistAccountsSerialized(accounts);
+    } catch {
+      // State still contains the trusted target for an immediate explicit
+      // retry; a later account write will persist it again.
+    }
+    return repaired;
+  };
+
+  return ({
   accounts: [],
   activeAccountId: null,
   config: null,
@@ -231,6 +450,9 @@ export const useConnection = create<ConnectionState>((set, get) => ({
   agentVersion: null,
   error: null,
   isLoading: true,
+  isRestoringSession: true,
+  credentialStorageAvailable: false,
+  rememberedFailure: null,
 
   // ── persistence ──
 
@@ -258,12 +480,33 @@ export const useConnection = create<ConnectionState>((set, get) => ({
     }
     const filtered = accounts.filter((a) => a.id !== id);
     set({ accounts: filtered });
-    await storage.setItem(STORAGE_KEY, JSON.stringify(filtered));
+    await persistAccountsSerialized(filtered);
     // Best-effort cleanup of any lingering sidecar for this account.
     try {
       await desktop()?.stopLoopback({ accountId: id });
     } catch {
       // ignore
+    }
+    try {
+      await desktop()?.forgetCredential?.(id);
+    } catch {
+      // ignore
+    }
+  },
+
+  refreshCredentialAvailability: async () => {
+    const d = desktop();
+    if (!d?.credentialsAvailable) {
+      set({ credentialStorageAvailable: false });
+      return false;
+    }
+    try {
+      const available = await d.credentialsAvailable();
+      set({ credentialStorageAvailable: available });
+      return available;
+    } catch {
+      set({ credentialStorageAvailable: false });
+      return false;
     }
   },
 
@@ -275,93 +518,313 @@ export const useConnection = create<ConnectionState>((set, get) => ({
   // password and reuse the persisted ``coordinatorNodeId``.
 
   joinNetwork: async (args) => {
+    const accountId = genId();
+    const previousAccountId = get().activeAccountId;
+    const attempt = beginConnectionAttempt(accountId);
     const d = desktop();
     if (!d) {
-      set({ error: 'Joining a network requires the desktop app — the loopback sidecar is unavailable here.' });
+      if (attempt.isCurrent()) {
+        set({
+          isConnecting: false,
+          error: 'Joining a network requires the desktop app — the loopback sidecar is unavailable here.',
+        });
+      }
       return;
     }
-    set({ isConnecting: true, error: null });
-
-    const accountId = genId();
+    if (previousAccountId && previousAccountId !== accountId) {
+      try { await d.stopLoopback({ accountId: previousAccountId }); } catch { /* ignore */ }
+      if (!attempt.isCurrent()) return;
+    }
 
     // Spawn the loopback in ticket mode. The Python CLI parses the
     // ticket, registers/logs in via SRP-6a, mints the cert, persists
     // the network in the user store, and prints the bound port. We
     // don't see the ticket bits at all — just hand them off.
-    let port: number;
+    let started: LoopbackStartResult;
     try {
-      port = await d.startLoopback({
+      started = await d.startLoopback({
         accountId,
         password: args.password,
         ticket: args.ticket,
         handle: args.handle,
+        remember: args.remember === true,
+        attemptToken: attempt.token,
       });
     } catch (e: any) {
+      if (!attempt.isCurrent()) return;
       set({ isConnecting: false, error: humanizeLoginError(e?.message || String(e)) });
       return;
     }
 
-    // We don't yet know the network name the ticket points at — the
-    // ``auth_ok`` frame from the gateway will tell us. Save a
-    // placeholder row; ``_openWebsocket`` patches it on connect.
-    const newAccount: SavedAccount = {
+    // Main returns only non-secret metadata derived after coordinator auth.
+    // Persist it even if this UI attempt was superseded: coordinator success
+    // has already consumed the invite and created the membership. A stale
+    // attempt may release its loopback, but deleting this row would orphan
+    // both the membership and any remembered credential.
+    const newAccount = withVerifiedAccountTarget<SavedAccount>({
       id: accountId,
-      name: args.displayName ?? args.handle,
+      name: args.displayName ?? started.target.handle,
       network: '',
       handle: args.handle,
       isLocal: !!args.isLocal,
       createdAt: Date.now(),
       inviteCode: args.ticket,
-    };
-    const accounts = [...get().accounts, newAccount];
-    set({ accounts });
-    await storage.setItem(STORAGE_KEY, JSON.stringify(accounts));
-
-    _openWebsocket(get, set, { ...newAccount, sidecarPort: port }, accountId);
+    }, started.target);
+    const persisted = await persistAccountAdditionWhileCurrent({
+      account: newAccount,
+      isCurrent: attempt.isCurrent,
+      readAccounts: () => get().accounts,
+      commitAccounts: (accounts) => set({ accounts }),
+      persistAccounts: persistAccountsSerialized,
+    });
+    if (!persisted) {
+      await discardStaleLoopback(d, accountId, attempt.token);
+      return;
+    }
+    _openWebsocket(get, set, { ...newAccount, sidecarPort: started.port }, accountId);
   },
 
-  connectAccount: async (accountId, password) => {
+  joinNetworkInNewWindow: async (args) => {
+    const d = desktop();
+    if (!d?.openAgentWindow) {
+      set({ error: 'Adding an agent in a separate window requires the desktop app.' });
+      return false;
+    }
+    const accountId = genId();
+    const attempt = backgroundJoinAttempts.begin(accountId);
+    set({ isConnecting: true, error: null, rememberedFailure: null });
+
+    let started: LoopbackStartResult;
+    try {
+      started = await d.startLoopback({
+        accountId,
+        password: args.password,
+        ticket: args.ticket,
+        handle: args.handle,
+        remember: args.remember === true,
+        attemptToken: attempt.token,
+      });
+    } catch (e: any) {
+      if (attempt.isCurrent()) {
+        set({ isConnecting: false, error: humanizeLoginError(e?.message || String(e)) });
+      }
+      return false;
+    }
+
+    const newAccount = withVerifiedAccountTarget<SavedAccount>({
+      id: accountId,
+      name: args.displayName ?? started.target.handle,
+      network: '',
+      handle: args.handle,
+      isLocal: !!args.isLocal,
+      createdAt: Date.now(),
+      inviteCode: args.ticket,
+    }, started.target);
+    const current = await persistAccountAdditionWhileCurrent({
+      account: newAccount,
+      isCurrent: attempt.isCurrent,
+      readAccounts: () => get().accounts,
+      commitAccounts: (accounts) => set({ accounts }),
+      persistAccounts: persistAccountsSerialized,
+    });
+    if (!current) {
+      await discardStaleLoopback(d, accountId, attempt.token);
+      return false;
+    }
+
+    try {
+      // Main transfers this specific startup reservation to the new
+      // BrowserWindow before releasing the source renderer, eliminating the
+      // race where the sidecar could stop before connectDirected() runs.
+      await d.openAgentWindow(accountId, attempt.token, get().activeAccountId ?? undefined);
+      if (attempt.isCurrent()) set({ isConnecting: false, error: null });
+      return true;
+    } catch (e: any) {
+      await discardStaleLoopback(d, accountId, attempt.token);
+      if (attempt.isCurrent()) {
+        set({ isConnecting: false, error: humanizeLoginError(e?.message || String(e)) });
+      }
+      return false;
+    }
+  },
+
+  connectAccount: async (
+    accountId,
+    password,
+    remember = false,
+    selectedAgentHandle,
+  ) => {
+    const previousAccountId = get().activeAccountId;
+    const attempt = beginConnectionAttempt(accountId);
     const d = desktop();
     if (!d) {
-      set({ error: 'Connecting requires the desktop app — the loopback sidecar is unavailable here.' });
+      if (attempt.isCurrent()) {
+        set({
+          isConnecting: false,
+          error: 'Connecting requires the desktop app — the loopback sidecar is unavailable here.',
+        });
+      }
       return;
     }
     const account = get().accounts.find((a) => a.id === accountId);
     if (!account) {
-      set({ error: 'Account not found' });
+      if (attempt.isCurrent()) set({ isConnecting: false, error: 'Account not found' });
       return;
     }
-    set({ isConnecting: true, error: null });
 
-    // Tear down any prior connection first so a switch from A→B
-    // doesn't leave A's sidecar running.
-    const old = get().ws;
-    if (old) {
-      old.disconnect();
+    // Tear down any prior connection first so a switch from A→B doesn't
+    // leave A's sidecar running. Every await is followed by a token guard:
+    // an older attempt must not proceed to start after a newer click.
+    if (previousAccountId && previousAccountId !== accountId) {
+      try { await d.stopLoopback({ accountId: previousAccountId }); } catch { /* ignore */ }
+      if (!attempt.isCurrent()) return;
     }
-    if (get().activeAccountId && get().activeAccountId !== accountId) {
-      try { await d.stopLoopback({ accountId: get().activeAccountId! }); } catch { /* ignore */ }
-    }
-    useChat.getState().clearAll();
-
-    let port: number;
+    // Explicit password entry must perform a real coordinator login before
+    // main stores the credential. Reusing a stale same-account loopback
+    // would accept (and remember) an unverified replacement password.
     try {
-      port = await d.startLoopback({
+      await d.stopLoopback({ accountId });
+    } catch (error: any) {
+      // Main keeps the real teardown behind its per-account barrier even when
+      // the IPC deadline expires. Do not issue a start that would only wait on
+      // the same stuck barrier; return control to the form so retry is possible
+      // once native cleanup eventually finishes.
+      if (attempt.isCurrent()) {
+        set({
+          isConnecting: false,
+          isRestoringSession: false,
+          error: humanizeLoginError(error?.message || String(error)),
+        });
+      }
+      return;
+    }
+    if (!attempt.isCurrent()) return;
+
+    let started: LoopbackStartResult;
+    try {
+      started = await d.startLoopback({
         accountId,
         password,
         handle: account.handle,
         network: account.network,
-        agent: account.agentHandle,
+        agent: accountLoopbackTarget(account, selectedAgentHandle).agent,
+        remember,
+        attemptToken: attempt.token,
       });
     } catch (e: any) {
+      if (!attempt.isCurrent()) return;
       set({ isConnecting: false, error: humanizeLoginError(e?.message || String(e)) });
       return;
     }
+    if (!attempt.isCurrent()) {
+      await discardStaleLoopback(d, accountId, attempt.token);
+      return;
+    }
+    const repaired = await persistVerifiedTarget(accountId, started.target);
+    if (!attempt.isCurrent()) {
+      await discardStaleLoopback(d, accountId, attempt.token);
+      return;
+    }
+    _openWebsocket(
+      get,
+      set,
+      { ...(repaired ?? account), sidecarPort: started.port },
+      accountId,
+    );
+  },
 
-    _openWebsocket(get, set, { ...account, sidecarPort: port }, accountId);
+  connectRememberedAccount: async (accountId) => {
+    const d = desktop();
+    const account = get().accounts.find((candidate) => candidate.id === accountId);
+    const previousAccountId = get().activeAccountId;
+    const attempt = beginConnectionAttempt(accountId);
+    if (!d || !account || !d.startRememberedLoopback) {
+      const result: RememberedLoopbackResult = { status: 'missing' };
+      if (attempt.isCurrent()) {
+        set({
+          isConnecting: false,
+          isRestoringSession: false,
+          rememberedFailure: { accountId, kind: 'missing' },
+        });
+      }
+      return result;
+    }
+
+    if (previousAccountId && previousAccountId !== accountId) {
+      try { await d.stopLoopback({ accountId: previousAccountId }); } catch { /* ignore */ }
+      if (!attempt.isCurrent()) return { status: 'stale' };
+    }
+    let result: RememberedLoopbackResult;
+    try {
+      result = await d.startRememberedLoopback({
+        ...accountLoopbackTarget(account),
+        attemptToken: attempt.token,
+      });
+    } catch (error: any) {
+      result = {
+        status: 'retryable_error',
+        error: error?.message || String(error),
+      };
+    }
+
+    if (!attempt.isCurrent()) {
+      if (result.status === 'started') {
+        await discardStaleLoopback(d, accountId, attempt.token);
+      }
+      return { status: 'stale' };
+    }
+
+    // Main may recover this from an encrypted credential even when the
+    // renderer row is a crash placeholder (`network: ''`). Persist the public
+    // target before showing an invalid-password form so explicit retry works.
+    let resolvedAccount = account;
+    const recoveredTarget = 'target' in result ? result.target : undefined;
+    if (recoveredTarget) {
+      resolvedAccount = await persistVerifiedTarget(accountId, recoveredTarget) ?? account;
+      if (!attempt.isCurrent()) {
+        if (result.status === 'started') {
+          await discardStaleLoopback(d, accountId, attempt.token);
+        }
+        return { status: 'stale' };
+      }
+    }
+
+    if (result.status === 'started') {
+      _openWebsocket(
+        get,
+        set,
+        { ...resolvedAccount, sidecarPort: result.port },
+        accountId,
+      );
+      return result;
+    }
+
+    if (result.status === 'missing') {
+      set({
+        isConnecting: false,
+        isRestoringSession: false,
+        rememberedFailure: { accountId, kind: 'missing' },
+        error: null,
+      });
+      return result;
+    }
+
+    const message = humanizeLoginError(result.error);
+    set({
+      isConnecting: false,
+      isRestoringSession: false,
+      rememberedFailure: {
+        accountId,
+        kind: result.status === 'invalid' ? 'invalid' : 'retryable',
+        error: message,
+      },
+      error: message,
+    });
+    return result;
   },
 
   disconnect: async () => {
+    connectionAttempts.invalidate();
     const { ws, activeAccountId } = get();
     ws?.disconnect();
     // Flip the visible state SYNCHRONOUSLY before any await. Subscribers
@@ -379,6 +842,9 @@ export const useConnection = create<ConnectionState>((set, get) => ({
       agentName: null,
       agentVersion: null,
       activeAccountId: null,
+      isRestoringSession: false,
+      rememberedFailure: null,
+      error: null,
     });
     // A standalone agent window neither owns the shared resume slot nor
     // exclusively owns its loopback (a sibling window may be on the same
@@ -397,24 +863,55 @@ export const useConnection = create<ConnectionState>((set, get) => ({
 
   resumeConnection: async () => {
     const d = desktop();
-    if (!d) return;
+    if (!d) {
+      set({ isRestoringSession: false });
+      return;
+    }
+    void get().refreshCredentialAvailability();
     const { activeAccountId, ws: currentWs } = get();
-    if (!activeAccountId || currentWs) return;
+    if (currentWs) return;
+    if (!activeAccountId) {
+      set({ isRestoringSession: false });
+      return;
+    }
+    const attempt = beginConnectionAttempt(activeAccountId);
     const connRaw = await storage.getItem(ACTIVE_CONNECTION_KEY);
-    if (!connRaw) return;
+    if (!attempt.isCurrent()) return;
+    if (!connRaw) {
+      set({ isRestoringSession: false, isConnecting: false });
+      return;
+    }
     let connInfo: { accountId: string; sidecarPort: number };
-    try { connInfo = JSON.parse(connRaw); } catch { return; }
-    if (connInfo.accountId !== activeAccountId) return;
+    try { connInfo = JSON.parse(connRaw); } catch {
+      set({ isRestoringSession: false, isConnecting: false });
+      return;
+    }
+    if (connInfo.accountId !== activeAccountId) {
+      set({ isRestoringSession: false, isConnecting: false });
+      return;
+    }
     const port = await d.getLoopbackPort(activeAccountId);
-    if (!port) return;
+    if (!attempt.isCurrent()) return;
     const account = get().accounts.find((a) => a.id === activeAccountId);
-    if (!account) return;
-    _openWebsocket(get, set, { ...account, sidecarPort: port }, activeAccountId);
+    if (!account) {
+      set({ isRestoringSession: false, isConnecting: false });
+      return;
+    }
+    if (port) {
+      _openWebsocket(get, set, { ...account, sidecarPort: port }, activeAccountId);
+      return;
+    }
+    await get().connectRememberedAccount(activeAccountId);
   },
 
   // ── multi-window (Electron) ──
 
-  openAccountWindow: async (accountId, password) => {
+  openAccountWindow: async (
+    accountId,
+    password,
+    remember = false,
+    selectedAgentHandle,
+  ) => {
     const d = desktop();
     if (!d || typeof d.openAgentWindow !== 'function') {
       return { ok: false, error: 'Opening another agent in its own window requires the desktop app.' };
@@ -432,15 +929,39 @@ export const useConnection = create<ConnectionState>((set, get) => ({
       const existingPort = await d.getLoopbackPort(accountId);
       if (!existingPort) {
         if (!password) {
-          return { ok: false, error: 'Enter the password to open this agent.' };
+          if (!d.startRememberedLoopback) {
+            return { ok: false, needsPassword: true, error: 'Enter the password to open this agent.' };
+          }
+          const remembered = await d.startRememberedLoopback(accountLoopbackTarget(account));
+          const recoveredTarget = 'target' in remembered ? remembered.target : undefined;
+          if (recoveredTarget) {
+            await persistVerifiedTarget(accountId, recoveredTarget);
+          }
+          if (remembered.status === 'missing') {
+            return { ok: false, needsPassword: true, error: 'Enter the password to open this agent.' };
+          }
+          if (remembered.status === 'invalid') {
+            return {
+              ok: false,
+              needsPassword: true,
+              error: humanizeLoginError(remembered.error),
+            };
+          }
+          if (remembered.status === 'retryable_error') {
+            return {
+              ok: false,
+              retryable: true,
+              error: humanizeLoginError(remembered.error),
+            };
+          }
+        } else {
+          const started = await d.startLoopback({
+            ...accountLoopbackTarget(account, selectedAgentHandle),
+            password,
+            remember,
+          });
+          await persistVerifiedTarget(accountId, started.target);
         }
-        await d.startLoopback({
-          accountId,
-          password,
-          handle: account.handle,
-          network: account.network,
-          agent: account.agentHandle,
-        });
       }
     } catch (e: any) {
       return { ok: false, error: humanizeLoginError(e?.message || String(e)) };
@@ -449,7 +970,7 @@ export const useConnection = create<ConnectionState>((set, get) => ({
     // Loopback is up — hand off to the main process, which opens a standalone
     // window at ``/?connect=<accountId>`` that connects passwordlessly.
     try {
-      await d.openAgentWindow(accountId);
+      await d.openAgentWindow(accountId, undefined, get().activeAccountId ?? undefined);
     } catch (e: any) {
       return { ok: false, error: humanizeLoginError(e?.message || String(e)) };
     }
@@ -458,23 +979,37 @@ export const useConnection = create<ConnectionState>((set, get) => ({
 
   connectDirected: async (accountId) => {
     const d = desktop();
-    if (!d) return;
+    if (!d) {
+      set({ isRestoringSession: false });
+      return;
+    }
     // Guard against a double-connect if boot runs this twice.
     if (get().ws) return;
+    const attempt = beginConnectionAttempt(accountId);
     const port = await d.getLoopbackPort(accountId);
+    if (!attempt.isCurrent()) return;
     // No live loopback for this account → can't connect without a password;
     // leave the window on the login screen (index.tsx preselects the account).
-    if (!port) return;
+    if (!port) {
+      // A standalone window can still use the same remembered-credential
+      // path as the primary window. This keeps the password inside main.
+      const result = await get().connectRememberedAccount(accountId);
+      if (result.status === 'started') rememberDirectedAccount(accountId);
+      return;
+    }
     const account = get().accounts.find((a) => a.id === accountId);
-    if (!account) return;
-    set({ isConnecting: true, error: null, activeAccountId: accountId });
+    if (!account) {
+      set({ isRestoringSession: false, isConnecting: false });
+      return;
+    }
     _openWebsocket(
       get, set,
       { ...account, sidecarPort: port }, accountId,
       { persistActive: false },
     );
   },
-}));
+  });
+});
 
 /** Hard cap on how long we wait for the gateway's auth_ok / auth_error
  *  frame after the WebSocket is wired. The loopback proxy is already
@@ -562,6 +1097,8 @@ function _openWebsocket(
         isConnected: true,
         isConnecting: false,
         isReconnecting: false,
+        isRestoringSession: false,
+        rememberedFailure: null,
         // Fall back to persisted agent info or account name for child
         // windows where the synthesized auth_ok has no agent metadata.
         // @ts-ignore
@@ -592,7 +1129,7 @@ function _openWebsocket(
           return next;
         });
         set({ accounts: updated });
-        storage.setItem(STORAGE_KEY, JSON.stringify(updated));
+        void persistAccountsSerialized(updated).catch(() => {});
       }
       // Persist the active connection so a renderer reload can resume
       // without re-entering credentials. Skipped for standalone agent
@@ -605,28 +1142,12 @@ function _openWebsocket(
           sidecarPort: config.sidecarPort,
         }));
       }
-      // Hydrate the chat sidebar with every session the server
-      // already knows about for this device.
-      const chat = useChat.getState();
-      // Re-fetch on EVERY auth_ok, not only the first. A reconnect is
-      // exactly when the client's picture of "what is still running" can be
-      // wrong: the agent may have restarted (auto-update, deploy, crash)
-      // while a turn was in flight, in which case that turn is gone and
-      // nobody will ever send its terminal frame. The gateway replays a
-      // ``live_state`` snapshot for turns it still knows about, but a turn
-      // whose replay died with the process gets no frame at all — and the
-      // session sat on "Reasoning…" forever, with the composer's Stop the
-      // only way out. ``hydrateFromServer`` already settles anything the
-      // server reports as not live; it just was never asked again.
+      // Discover one initial v2 chat summary (or use the legacy list only on
+      // old agents). Reconnect liveness is handled by the authoritative
+      // live_state replay + grace check below, so it never needs a full
+      // session-index download.
       const attachedAt = Date.now();
-      fetchSessions()
-        .then((entries) => {
-          chat.hydrateFromServer(entries);
-          chat.markHydrated();
-        })
-        .catch(() => {
-          chat.markHydrated();
-        });
+      void discoverSessionsAfterAuth(msg.capabilities, isCurrent);
       // A session the server never persisted (its turn died before the run
       // was written) is in no listing at all, so hydration cannot settle it.
       // The gateway's reattach replay is the signal instead: it lands right
@@ -642,10 +1163,17 @@ function _openWebsocket(
     } else if (msg.type === 'auth_error') {
       finalize();
       if (!isCurrent()) return;
+      const authError = humanizeLoginError((msg as any).reason);
+      // An explicit authentication rejection is the one renderer-visible
+      // signal that invalidates a remembered credential. Transport failures
+      // below deliberately keep it and expose a passwordless retry instead.
+      void desktop()?.forgetCredential?.(accountId).catch(() => { /* best effort */ });
       set({
         isConnected: false,
         isConnecting: false,
-        error: humanizeLoginError((msg as any).reason),
+        isRestoringSession: false,
+        rememberedFailure: { accountId, kind: 'invalid', error: authError },
+        error: authError,
       });
     }
   });
@@ -655,6 +1183,32 @@ function _openWebsocket(
   // ``onclose`` only logged + scheduled a 3 s reconnect. Now the WS
   // surfaces them through onClose so we clear the loading state.
   ws.onClose(async (info) => {
+    if (info.reason === 'replaced') {
+      // The gateway has already accepted a newer transport for this device.
+      // OpenAgentWS deliberately does not reconnect this superseded socket:
+      // doing so would evict the newer one and start a replacement loop.
+      // If this attempt is stale, the newer renderer-local WS owns the store
+      // and must remain untouched.  Otherwise expose a settled, manually
+      // retryable state without invalidating the remembered credential.
+      finalize();
+      if (!isCurrent()) return;
+      const replacementError = 'This connection was replaced by a newer OpenAgent client on this device.';
+      set({
+        ws: null,
+        config: null,
+        isConnected: false,
+        isConnecting: false,
+        isReconnecting: false,
+        isRestoringSession: false,
+        rememberedFailure: {
+          accountId,
+          kind: 'retryable',
+          error: replacementError,
+        },
+        error: replacementError,
+      });
+      return;
+    }
     if (info.reason === 'post_auth') {
       // Mid-session drop — the WS auto-reconnect kicks in; surface a
       // "Reconnecting…" hint so the user knows why their messages have
@@ -686,7 +1240,13 @@ function _openWebsocket(
           isConnected: false,
           isConnecting: false,
           isReconnecting: false,
-          error: 'Connection lost. The secure tunnel to your agent stopped responding — this can happen after your Mac wakes from sleep, changes networks, or when the agent restarts and does not come back. Enter your password to reconnect.',
+          isRestoringSession: false,
+          rememberedFailure: {
+            accountId: acctId,
+            kind: 'retryable',
+            error: 'Connection lost. The secure tunnel stopped responding. Check the network or agent and retry.',
+          },
+          error: 'Connection lost. The secure tunnel stopped responding. Check the network or agent and retry.',
         });
         ws.disconnect();
         return;
@@ -697,12 +1257,15 @@ function _openWebsocket(
       finalize();
       if (!isCurrent()) return;
       const detail = info.detail || `WebSocket closed before authentication (code=${info.code})`;
+      const retryError = humanizeLoginError(detail);
 
       set({
         isConnected: false,
         isConnecting: false,
         isReconnecting: false,
-        error: humanizeLoginError(detail),
+        isRestoringSession: false,
+        rememberedFailure: { accountId, kind: 'retryable', error: retryError },
+        error: retryError,
       });
       ws.disconnect();
     }
@@ -721,6 +1284,12 @@ function _openWebsocket(
     set({
       isConnected: false,
       isConnecting: false,
+      isRestoringSession: false,
+      rememberedFailure: {
+        accountId,
+        kind: 'retryable',
+        error: 'The agent didn’t respond in time. Check that the server is running and try again.',
+      },
       error: 'The agent didn’t respond in time. Check that the server is running and try again.',
     });
     ws.disconnect();

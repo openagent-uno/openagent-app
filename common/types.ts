@@ -4,6 +4,16 @@
  */
 
 import type { ToolExecutionHost } from './client-capabilities';
+import type {
+  CapabilitiesResponse,
+  HistoryChangedEvent,
+  SearchIndexChangedEvent,
+  Completeness,
+  MessageStatus,
+} from './unified-history';
+import type { MessagePart } from './ui-views';
+import type { AttachmentRef } from './attachments';
+export type { AttachmentRef } from './attachments';
 
 // ── WebSocket Protocol ──
 
@@ -78,6 +88,13 @@ export type ClientMessage =
       // a provider is configured. Chat-tab sessions pass false so typed
       // replies stay silent; voice-mode sessions keep the default.
       speak?: boolean;
+      client_capabilities?: {
+        attachments: boolean;
+        ordered_parts: boolean;
+        inline_ui: boolean;
+        sidebar_ui: boolean;
+        custom_ui_version: number;
+      };
     }
   | { type: 'session_close'; session_id: string }
   | { type: 'text_delta'; session_id: string; text: string; final?: boolean }
@@ -110,9 +127,14 @@ export type ClientMessage =
       type: 'attachment';
       session_id: string;
       kind: 'image' | 'file' | 'voice' | 'video';
+      artifact_id?: string;
+      artifact_link_id?: string;
+      url?: string;
       path?: string;
       filename?: string;
       mime_type?: string;
+      size_bytes?: number;
+      sha256?: string;
     }
   | {
       type: 'interrupt';
@@ -135,13 +157,34 @@ export type ClientMessage =
   | { type: 'terminal_input'; terminal_id: string; data: string }
   | { type: 'terminal_resize'; terminal_id: string; cols: number; rows: number }
   | { type: 'terminal_signal'; terminal_id: string; signal: 'INT' | 'TERM' | 'HUP' | 'QUIT' | 'KILL' }
-  | { type: 'terminal_close'; terminal_id: string };
+  | { type: 'terminal_close'; terminal_id: string }
+  | {
+      type: 'ui_subscribe'; subscriptionId: string; viewId: string;
+      /** Exact immutable layout/action revision for inline embeds. Omitted for
+       * mutable sidebar pages; knownRevision is only a cache hint. */
+      revision?: number;
+      knownRevision?: number;
+    }
+  | { type: 'ui_unsubscribe'; subscriptionId: string }
+  | {
+      type: 'ui_action';
+      subscriptionId: string;
+      actionId: string;
+      input?: unknown;
+      idempotencyKey: string;
+    };
 
-export type ResourceKind = 'mcp' | 'scheduled_task' | 'workflow' | 'vault' | 'config' | 'session' | 'event';
+export type ResourceKind = 'mcp' | 'scheduled_task' | 'workflow' | 'vault' | 'config' | 'session' | 'event' | 'ui_view';
 export type ResourceAction = 'created' | 'updated' | 'deleted' | 'changed';
 
 export type ServerMessage =
-  | { type: 'auth_ok'; agent_name: string; version: string }
+  | {
+      type: 'auth_ok';
+      agent_name: string;
+      version: string;
+      /** New gateways may inline discovery; older ones omit it. */
+      capabilities?: CapabilitiesResponse;
+    }
   | { type: 'auth_error'; reason: string }
   // Rehydration snapshot for a turn that is still live on the server.
   // Frames reuse the normal stream wire types (text_final/status/delta/etc.)
@@ -166,7 +209,17 @@ export type ServerMessage =
   // don't recognize ``delta`` ignore it and render the final
   // ``response`` like before — backward-compatible.
   | { type: 'delta'; text: string; session_id: string }
-  | { type: 'response'; text: string; session_id: string; attachments?: Attachment[]; model?: string }
+  | {
+      type: 'response';
+      text: string;
+      session_id: string;
+      attachments?: Attachment[];
+      /** Ordered parts are additive; artifacts is accepted by the client as
+       * the early-beta alias but new gateways should emit parts. */
+      parts?: unknown[];
+      artifacts?: unknown[];
+      model?: string;
+    }
   // The agent-self seed that opens a spawned child session (a delegated
   // sub-agent, a scheduled firing, a workflow node) — the task/mission/role
   // prompt. Streamed FIRST so a run screen shows the Mission block at the top
@@ -191,6 +244,8 @@ export type ServerMessage =
   // Resource-change ping: a list the desktop app might be showing
   // moved on the server. Subscribed stores refetch on receipt.
   | { type: 'resource_event'; resource: ResourceKind; action: ResourceAction; id?: string }
+  | HistoryChangedEvent
+  | SearchIndexChangedEvent
   // Live host telemetry — emitted every ~2s by the gateway when at
   // least one client is connected. The System screen subscribes here
   // and re-renders without polling.
@@ -265,13 +320,30 @@ export type ServerMessage =
   | { type: 'terminal_ready'; terminal_id: string; pid: number | null; shell: string; cols: number; rows: number; cwd?: string }
   | { type: 'terminal_output'; terminal_id: string; data: string }
   | { type: 'terminal_exit'; terminal_id: string; exit_code: number | null; signal: string | null }
-  | { type: 'terminal_error'; terminal_id: string; error: string };
+  | { type: 'terminal_error'; terminal_id: string; error: string }
+  // OA-UI v1 realtime feed. Camel-case is canonical on the wire; the view
+  // store accepts snake-case aliases from early beta gateways at runtime.
+  | { type: 'ui_snapshot'; subscriptionId: string; view: unknown }
+  | {
+      type: 'ui_data'; subscriptionId: string; viewId: string; key: string;
+      value: unknown; version: number; generation?: number; seq?: number;
+    }
+  | {
+      type: 'ui_source_status'; subscriptionId: string; viewId: string; key: string;
+      status: string; error?: { code?: string; message: string } | string;
+      updatedAt?: string | number; generation?: number; seq?: number;
+    }
+  | { type: 'ui_view_changed'; viewId: string; revision: number; action?: string }
+  | {
+      type: 'ui_action_result'; subscriptionId?: string; viewId?: string;
+      actionId?: string; result?: unknown; error?: unknown;
+    }
+  | {
+      type: 'ui_error'; subscriptionId?: string; viewId?: string;
+      code?: string; message: string;
+    };
 
-export interface Attachment {
-  type: 'image' | 'file' | 'voice' | 'video';
-  path: string;
-  filename: string;
-}
+export type Attachment = AttachmentRef;
 
 // ── Interactive terminal ──
 // One live (or recently-closed) PTY shell on the gateway host. Returned
@@ -304,6 +376,10 @@ export interface TerminalInfo {
 // another wire change.
 export interface ToolInfo {
   tool_name: string;
+  /** Compact normalized history can identify the real tool behind
+   * ``tool_search_call_tool`` without re-exposing its arguments/result. */
+  effective_tool_name?: string;
+  effective_tool_server?: string;
   tool_call_id?: string;
   tool_args?: Record<string, any>;
   tool_call_error?: boolean | null;
@@ -319,6 +395,12 @@ export interface ToolInfo {
   child_session_id?: string;
   child_session_title?: string;
   child_model?: string;
+  /** Minimal ACL-checked link supplied by normalized transcript history. */
+  run_target?: {
+    kind: 'task' | 'workflow' | 'event';
+    run_id: string;
+    parent_id?: string | null;
+  };
   [key: string]: any;
 }
 
@@ -327,7 +409,9 @@ export interface ToolInfo {
 // in error frames — that's how live ``ToolCallErrorEvent`` rides
 // through), otherwise a populated ``result`` flips the chip to
 // "completed".
-export function toolPhase(t: ToolInfo): 'running' | 'completed' | 'error' {
+export function toolPhase(t: ToolInfo): 'running' | 'completed' | 'stopped' | 'error' {
+  const status = String(t.status || '').toLowerCase();
+  if (status === 'cancelled' || status === 'interrupted') return 'stopped';
   if (t.tool_call_error) return 'error';
   if (t.result !== undefined && t.result !== null) return 'completed';
   return 'running';
@@ -451,7 +535,8 @@ export function effectiveTool(t?: ToolInfo): EffectiveTool | undefined {
   const name = String(t.tool_name || '');
   if (name === TOOL_SEARCH_DISPATCHER) {
     const outer = t.tool_args || {};
-    const innerName = String(outer.tool || '');
+    const innerName = String(t.effective_tool_name || outer.tool || '');
+    const innerServer = String(t.effective_tool_server || outer.server || '');
     const innerArgs =
       outer.args && typeof outer.args === 'object'
         ? (outer.args as Record<string, any>)
@@ -459,7 +544,7 @@ export function effectiveTool(t?: ToolInfo): EffectiveTool | undefined {
     const res = parseToolResult(t.result);
     return {
       tool_name: innerName || name,
-      server: typeof outer.server === 'string' ? outer.server : undefined,
+      server: innerServer || undefined,
       tool_args: innerArgs,
       result: t.result,
       tool_call_error: t.tool_call_error,
@@ -562,6 +647,26 @@ export function runRoutePath(target: RunLaunchTarget): string | undefined {
  *  still running (it arrives in the result), so the card renders as a
  *  non-clickable "running" card until then, mirroring DelegationCard. */
 export function runLaunchTarget(t?: ToolInfo): RunLaunchTarget | undefined {
+  // Reopened normalized transcripts do not expose tool args/results. The
+  // server resolves those historical envelopes once, validates the target
+  // against canonical run tables and the current ACL, then sends only this
+  // identifier-only link. Prefer it over every legacy inference path.
+  const canonical = t?.run_target;
+  if (
+    canonical
+    && (canonical.kind === 'task' || canonical.kind === 'workflow' || canonical.kind === 'event')
+    && typeof canonical.run_id === 'string'
+    && canonical.run_id.length > 0
+  ) {
+    return {
+      kind: canonical.kind,
+      runId: canonical.run_id,
+      parentId: typeof canonical.parent_id === 'string' && canonical.parent_id
+        ? canonical.parent_id
+        : undefined,
+      status: t?.status ? String(t.status) : undefined,
+    };
+  }
   // Unwrap the deferred-tool dispatcher so a run-now invoked via
   // ``tool_search_call_tool`` is matched by its REAL tool name, exactly like a
   // direct call — the run card then appears on every screen regardless of how
@@ -871,6 +976,9 @@ export interface ChatMessage {
   text: string;
   timestamp: number;
   attachments?: Attachment[];
+  /** Ordered rich response parts. Absent on stable/legacy gateways, in which
+   * case renderers preserve the historical text-then-attachments order. */
+  parts?: MessagePart[];
   toolInfo?: ToolInfo;
   /** Set on ``role: 'compaction'`` messages — the compaction card payload. */
   compactionInfo?: CompactionInfo;
@@ -883,6 +991,12 @@ export interface ChatMessage {
   // attachment markers ``parse_response_markers`` extracted on the
   // server side). Used by MessageList to render a soft caret / cursor.
   streaming?: boolean;
+  /** Durable v2 transcript ordering/status. Absent on legacy run rows. */
+  ordinal?: number;
+  durableStatus?: MessageStatus;
+  completeness?: Completeness;
+  /** Canonical operational-search anchor, distinct from legacy tool_call_id. */
+  toolInvocationId?: string;
 }
 
 export interface ChatSession {
@@ -890,6 +1004,15 @@ export interface ChatSession {
   title: string;
   messages: ChatMessage[];
   isProcessing: boolean;
+  /** Persisted session creation time (epoch seconds). Present after the
+   *  authorized session summary has been hydrated; a brand-new local draft
+   *  has no server timestamp yet. */
+  createdAt?: number;
+  /** Provider metadata exposed by ``GET /api/sessions``. These are display
+   *  hints only; ``contextUsage.model`` remains authoritative for the model
+   *  that actually served the current context window. */
+  model?: string;
+  framework?: string;
   statusText?: string;
   /** Driven by the transient ``reasoning`` wire frame: true while the agent
    *  is thinking with no visible output yet. Swaps the static status row for
@@ -934,6 +1057,14 @@ export interface ChatSession {
    *  Applies to every session kind — chat, sub-agent, scheduled firing,
    *  workflow AI node — since they are all ordinary sessions. */
   contextUsage?: SessionContext;
+  /** Cursor/range metadata from the v2 messages-around endpoint. */
+  messageWindow?: {
+    revision: string;
+    beforeCursor: string | null;
+    afterCursor: string | null;
+    hasMoreBefore: boolean;
+    hasMoreAfter: boolean;
+  };
 }
 
 // ── System telemetry ──
@@ -1793,6 +1924,10 @@ export type UpdateWorkflowInput = Partial<{
 // each block finishes. Shared between the UI's RunHistoryContent and
 // the workflow-manager MCP's get_workflow_run tool.
 export interface WorkflowTraceEntry {
+  /** Stable v2 attempt-level anchor; legacy gateways omit it. */
+  id?: string;
+  /** Compatibility alias emitted by early beta gateways. */
+  trace_step_id?: string;
   node_id: string;
   type: BlockType;
   started_at: number;
@@ -1805,6 +1940,7 @@ export interface WorkflowTraceEntry {
    *  screen renders a DelegationCard that deep-links into the node's full
    *  conversation. */
   child_session_id?: string;
+  tool_invocation_ids?: string[];
 }
 
 export interface WorkflowRun {

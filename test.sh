@@ -44,6 +44,13 @@ run_types() {
 
 run_unit() {
     echo "🧪 Electron main/network/capability tests..."
+    local desktop_dist="$SCRIPT_DIR/desktop/dist"
+    cleanup_unit_artifacts() {
+        rm -rf -- "$desktop_dist"
+    }
+    # Desktop tests exercise the same bundled main-process code shipped by
+    # Electron. Keep generated dist/ state scoped to this gate.
+    trap cleanup_unit_artifacts RETURN
     cd "$SCRIPT_DIR/desktop"
     npm test || FAILURES=$((FAILURES + 1))
 

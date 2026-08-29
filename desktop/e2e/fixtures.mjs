@@ -154,8 +154,11 @@ export class DeterministicGateway {
     return {
       account_id: this.accountId,
       base_url: this.baseUrl,
+      network_name: 'desktop-e2e',
       network_id: this.networkId,
       device_id: this.deviceId,
+      handle: 'e2e-user',
+      coordinator_node_id: 'coordinator-node-e2e',
       agent_node_id: this.agentNodeId,
       agent_handle: 'e2e-agent',
     };

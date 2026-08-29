@@ -48,6 +48,7 @@ export default function TriggerManualProperties({ node, onChange }: Props) {
         <code> &#123;&#123;inputs.&lt;key&gt;&#125;&#125;</code>.
       </div>
       <FormField
+        fieldKey="inputs_schema"
         label="Inputs schema (JSON)"
         value={schemaText}
         onChange={onSchemaChange}

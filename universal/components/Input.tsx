@@ -1,7 +1,7 @@
 /**
  * Input — text field wrapped with an optional uppercase label and hint.
  * Used everywhere forms appear so fields look identical app-wide.
- * `mono` applies the Geist Mono family — good for tokens, paths, IDs.
+ * `mono` applies the platform monospace family — good for tokens, paths, IDs.
  */
 
 import type { ReactNode } from 'react';

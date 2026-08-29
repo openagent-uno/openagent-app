@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState, type Ref, type ReactNode, useMemo } from 'react';
 import Feather from '@expo/vector-icons/Feather';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Platform, Image } from 'react-native';
+import type { Attachment } from '../../common/types';
 import { colors, font, radius } from '../theme';
 
 export interface SlashCommand {
@@ -33,7 +34,10 @@ export interface PendingFile {
   /** Stable id so async upload completion can target the right chip. */
   id: string;
   filename: string;
-  remotePath: string;
+  /** Canonical result returned by the CAS upload endpoint. */
+  attachment?: Attachment;
+  /** @deprecated Path-only picker fallback for pre-CAS desktop builds. */
+  remotePath?: string;
   kind: 'image' | 'file';
   /** True between picker dismissal and upload settle. */
   uploading?: boolean;
@@ -42,9 +46,8 @@ export interface PendingFile {
   /**
    * Present when the upload failed. The chip renders in an error state
    * (red border, alert glyph) and ``handleSend`` filters these out so
-   * the user has to dismiss them explicitly. ``remotePath`` is empty
-   * for failed entries — keep that in mind if you start using it
-   * elsewhere.
+   * the user has to dismiss them explicitly. Attachment carriers are
+   * absent for failed entries.
    */
   error?: string;
   /**
@@ -252,9 +255,9 @@ export default function MessageComposer({
   // Failed and still-uploading entries stay in the list as visible
   // chips but don't count toward "there's something to send". Without
   // this check the user could fire a send before an upload settled and
-  // get a message with an empty ``remotePath`` attachment.
+  // get a message with no durable attachment reference.
   const sendableCount = files.reduce(
-    (n, f) => n + (f.error || f.uploading ? 0 : 1),
+    (n, f) => n + (f.error || f.uploading || (!f.attachment && !f.remotePath) ? 0 : 1),
     0,
   );
   const canSend = (input.trim().length > 0 || sendableCount > 0) && !disabled;

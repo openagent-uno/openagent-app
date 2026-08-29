@@ -26,7 +26,7 @@ export default function TriggerScheduleProperties({ node, onChange }: Props) {
   };
 
   return (
-    <View>
+    <View nativeID="workflow-field-cron_expression">
       <CronPicker
         label="Cron expression"
         value={(config.cron_expression as string) || ''}
