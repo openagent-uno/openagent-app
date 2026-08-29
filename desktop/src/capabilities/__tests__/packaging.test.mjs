@@ -21,17 +21,31 @@ test('committed host-tools lock is the complete immutable public release index',
   const lock = JSON.parse(bytes.toString('utf8'));
   assert.equal(
     createHash('sha256').update(bytes).digest('hex'),
-    '4e4d16c5276e6393f6171a5670a9551773df3044f983d33d78ec7c120d351a33',
+    '88efc4b74b89796f1862839f8d8f3ec51f463cc15799f9de40a4502ae2421f08',
   );
-  assert.equal(lock.source_commit, '78b31f872f30bc2a307360403857dfa58696e678');
+  assert.equal(lock.source_commit, 'af6ad6871d4d1208874bf79735710d089f59b959');
   assert.deepEqual(Object.keys(lock.platforms).sort(), [
     'darwin-arm64', 'darwin-x64', 'linux-arm64', 'linux-x64',
     'win32-arm64', 'win32-x64',
   ]);
   assert.equal(
     lock.python_wheel.sha256,
-    '74977320f43033fe18bf9bd58c710823886c0f348c94bb36766627b4037c2e88',
+    '22e74b799da2bfacaa3ff7f1e473e1c8205c8b4b8c20764d09211b50f22c31e0',
   );
+});
+
+test('CI gates Desktop client tools over the exact real-Iroh server twice', () => {
+  const workflow = fs.readFileSync(
+    path.resolve(desktop, '..', '.github', 'workflows', 'test.yml'),
+    'utf8',
+  );
+  assert.match(workflow, /desktop-real-iroh-e2e:/);
+  assert.match(workflow, /repository: openagent-uno\/openagent-server/);
+  assert.match(workflow, /ref: af602b1fd204121503ee456369306c7ae43ea870/);
+  assert.match(workflow, /cmp desktop\/host-tools\.lock\.json \.e2e-deps\/openagent-server\/host-tools\.lock\.json/);
+  assert.match(workflow, /OPENAGENT_REAL_DESKTOP_SERVER_ROOT:/);
+  assert.match(workflow, /OPENAGENT_REAL_DESKTOP_PYTHON:/);
+  assert.match(workflow, /\.\/test\.sh e2e-real-iroh/);
 });
 
 test('macOS packaging preserves and re-verifies upstream host-tool signatures', () => {
