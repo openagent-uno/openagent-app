@@ -25,6 +25,70 @@ jobs:
         working-directory: desktop
         run: npm test
 
+  packaged-release-smoke:
+    name: Packaged release smoke (${{ matrix.platform_key }})
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-2025
+            package_script: build:win
+            arch_flag: --x64
+            platform_key: win32-x64
+          - os: ubuntu-24.04
+            package_script: build:linux
+            arch_flag: --x64
+            platform_key: linux-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            desktop/package-lock.json
+            universal/package-lock.json
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y rpm libarchive-tools xvfb
+      - name: Install application dependencies
+        run: |
+          npm --prefix universal ci
+          npm --prefix desktop ci
+      - name: Build web application
+        working-directory: universal
+        run: npx expo export --platform web
+      - name: Acquire pinned host-tools release bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node desktop/scripts/fetch-host-tools-release.js ${{ matrix.platform_key }} .release-deps/host-tools-dist
+      - name: Stage web application
+        shell: bash
+        run: |
+          rm -rf desktop/web-build
+          cp -r universal/dist desktop/web-build
+          sed -i.bak 's|href="/|href="./|g; s|src="/|src="./|g' desktop/web-build/index.html
+          rm -f desktop/web-build/index.html.bak
+      - name: Build unsigned release package
+        working-directory: desktop
+        shell: bash
+        run: |
+          channel=$(node -p "require('./package.json').version.includes('-beta.') ? 'beta' : 'latest'")
+          npm run ${{ matrix.package_script }} -- ${{ matrix.arch_flag }} --publish never --config.publish.channel "$channel"
+        env:
+          OPENAGENT_REQUIRE_HOST_TOOLS: '1'
+          OPENAGENT_HOST_TOOLS_PLATFORM_KEY: ${{ matrix.platform_key }}
+          OPENAGENT_HOST_TOOLS_DIST: ${{ github.workspace }}/.release-deps/host-tools-dist
+          GH_TOKEN: ${{ github.token }}
+      - name: Verify, install, and launch packaged artifacts
+        working-directory: desktop
+        run: node scripts/test-packaged-artifacts.mjs "${{ matrix.platform_key }}"
+        env:
+          REQUIRE_SIGNED: 'false'
+
   desktop-local-tools-e2e:
     runs-on: macos-15
     steps:
