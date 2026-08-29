@@ -49,28 +49,76 @@ export async function identityFromSecret(secret: Uint8Array): Promise<Identity> 
  * passes the desired path; we mkdir -p its parent.
  */
 export async function loadOrCreateIdentity(filePath: string): Promise<Identity> {
-  if (fs.existsSync(filePath)) {
-    const raw = fs.readFileSync(filePath);
-    if (raw.length !== SECRET_KEY_LEN) {
-      throw new Error(
-        `identity file ${filePath} is ${raw.length} bytes; expected ${SECRET_KEY_LEN}`,
-      );
-    }
-    return identityFromSecret(new Uint8Array(raw));
+  try {
+    return await readIdentity(filePath);
+  } catch (error: unknown) {
+    if (!hasErrorCode(error, 'ENOENT')) throw error;
   }
+
   const identity = await generateIdentity();
-  await persistIdentity(filePath, identity);
-  return identity;
+  if (publishNewIdentity(filePath, identity)) return identity;
+
+  // Another Desktop/CLI process won first creation. Never return our
+  // discarded candidate: Iroh must use the identity persisted by the winner.
+  return readIdentity(filePath);
 }
 
-async function persistIdentity(filePath: string, identity: Identity): Promise<void> {
+async function readIdentity(filePath: string): Promise<Identity> {
+  const raw = fs.readFileSync(filePath);
+  if (raw.length !== SECRET_KEY_LEN) {
+    throw new Error(
+      `identity file ${filePath} is ${raw.length} bytes; expected ${SECRET_KEY_LEN}`,
+    );
+  }
+  return identityFromSecret(new Uint8Array(raw));
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && (error as NodeJS.ErrnoException).code === code;
+}
+
+/**
+ * Publish a fully-written identity only while ``filePath`` is absent.
+ *
+ * A rename would overwrite another process's winner. Linking a unique,
+ * fsynced tempfile into place is atomic and no-replace on every supported
+ * local filesystem: exactly one Desktop/CLI process succeeds, and losers
+ * re-read the complete winning inode.
+ */
+function publishNewIdentity(filePath: string, identity: Identity): boolean {
   const dir = path.dirname(filePath);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const tmp = filePath + '.tmp';
-  fs.writeFileSync(tmp, Buffer.from(identity.secret), { mode: 0o600 });
-  // chmod again because some umask configurations strip the write mode bits.
-  fs.chmodSync(tmp, 0o600);
-  fs.renameSync(tmp, filePath);
+  const tmp = path.join(
+    dir,
+    `.${path.basename(filePath)}.${process.pid}.${randomBytes(8).toString('hex')}.tmp`,
+  );
+  let fd: number | undefined;
+  try {
+    fd = fs.openSync(tmp, 'wx', 0o600);
+    fs.writeFileSync(fd, Buffer.from(identity.secret));
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    fd = undefined;
+    // chmod again because some umask configurations strip the write bits.
+    fs.chmodSync(tmp, 0o600);
+    try {
+      fs.linkSync(tmp, filePath);
+      return true;
+    } catch (error: unknown) {
+      if (hasErrorCode(error, 'EEXIST')) return false;
+      throw error;
+    }
+  } finally {
+    if (fd !== undefined) fs.closeSync(fd);
+    try {
+      fs.unlinkSync(tmp);
+    } catch (error: unknown) {
+      if (!hasErrorCode(error, 'ENOENT')) throw error;
+    }
+  }
 }
 
 /**

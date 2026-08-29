@@ -3,6 +3,9 @@
   "description": "Persistent AI agent framework with MCP tools, long-term memory, and multi-channel support.",
   "version": "0.16.0",
   "private": true,
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "productName": "OpenAgent",
   "homepage": "https://openagent.uno/",
   "author": {
@@ -13,11 +16,18 @@
   "main": "dist/main.js",
   "scripts": {
     "dev": "tsc && node ./scripts/bundle-main.js && electron .",
-    "build": "tsc && node ./scripts/bundle-main.js && electron-builder",
-    "build:mac": "tsc && node ./scripts/bundle-main.js && electron-builder --mac",
-    "build:win": "tsc && node ./scripts/bundle-main.js && electron-builder --win",
-    "build:linux": "tsc && node ./scripts/bundle-main.js && electron-builder --linux",
-    "start": "tsc && node ./scripts/bundle-main.js && electron ."
+    "build": "node ./scripts/package-desktop.js",
+    "build:mac": "node ./scripts/package-desktop.js --mac",
+    "build:win": "node ./scripts/package-desktop.js --win",
+    "build:linux": "node ./scripts/package-desktop.js --linux",
+    "start": "tsc && node ./scripts/bundle-main.js && electron .",
+    "build:test": "tsc && node ./scripts/bundle-main.js",
+    "build:e2e": "npm --prefix ../universal run build:web && npm run build:test",
+    "test": "npm run test:iroh-runtime && npm run build:test && node --test src/capabilities/__tests__/*.test.mjs src/network/__tests__/*.test.mjs",
+    "test:iroh-runtime": "node ./scripts/smoke-iroh-electron.js",
+    "test:capabilities": "npm run build:test && node --test src/capabilities/__tests__/*.test.mjs",
+    "test:e2e": "npm run build:e2e && playwright test --config=playwright.config.mjs",
+    "test:e2e:twice": "npm run build:e2e && playwright test --config=playwright.config.mjs --repeat-each=2 --workers=1"
   },
   "dependencies": {
     "@noble/ed25519": "^3.1.0",
@@ -25,14 +35,19 @@
     "@windwalker-io/srp": "^1.0.1",
     "cbor2": "^2.3.0",
     "electron-store": "^8.0.0",
-    "electron-updater": "^6.3.0",
+    "electron-updater": "^6.8.9",
     "rfc4648": "^1.5.4",
-    "smol-toml": "^1.6.1"
+    "smol-toml": "^1.6.1",
+    "tar": "^7.4.3",
+    "ws": "^8.18.3"
   },
   "devDependencies": {
-    "electron": "^33.0.0",
-    "electron-builder": "^25.0.0",
-    "esbuild": "^0.24.0",
+    "@playwright/test": "^1.62.1",
+    "@types/ws": "^8.18.1",
+    "electron": "^43.4.1",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
+    "js-yaml": "^4.1.0",
     "typescript": "^5.6.0"
   },
   "build": {
@@ -58,6 +73,10 @@
       {
         "from": "web-build",
         "to": "web-build"
+      },
+      {
+        "from": "resources/host-tools",
+        "to": "host-tools"
       }
     ],
     "publish": {
@@ -65,30 +84,29 @@
       "owner": "openagent-uno",
       "repo": "openagent-app"
     },
+    "afterSign": "scripts/after-sign-host-tools.js",
     "mac": {
       "artifactName": "openagent-app-${version}-macos-${arch}.${ext}",
+      "forceCodeSigning": true,
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
       "entitlements": "buildResources/entitlements.mac.plist",
       "entitlementsInherit": "buildResources/entitlements.mac.inherit.plist",
       "notarize": true,
+      "signIgnore": [
+        "host-tools/darwin-(arm64|x64)/openagent-host-tools$",
+        "host-tools/darwin-(arm64|x64)/node$",
+        "host-tools/darwin-(arm64|x64)/openagent-computer-control\\.app(/.*)?$"
+      ],
       "extendInfo": {
         "NSLocalNetworkUsageDescription": "OpenAgent needs to find OpenAgent servers on your local network — required when connecting to a server running on the same Mac or LAN."
       },
       "target": [
         {
-          "target": "dmg",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
+          "target": "dmg"
         },
         {
-          "target": "zip",
-          "arch": [
-            "x64",
-            "arm64"
-          ]
+          "target": "zip"
         }
       ],
       "category": "public.app-category.developer-tools",
@@ -100,10 +118,7 @@
       "icon": "buildResources/icon.ico",
       "target": [
         {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
+          "target": "nsis"
         }
       ]
     },
@@ -112,16 +127,10 @@
       "icon": "buildResources/icon.png",
       "target": [
         {
-          "target": "AppImage",
-          "arch": [
-            "x64"
-          ]
+          "target": "AppImage"
         },
         {
-          "target": "deb",
-          "arch": [
-            "x64"
-          ]
+          "target": "deb"
         }
       ],
       "category": "Development"

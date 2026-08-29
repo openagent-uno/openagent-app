@@ -52,6 +52,22 @@ const trayIconDst = path.join(dist, 'tray-icon.png');
 fs.copyFileSync(trayIconSrc, trayIconDst);
 console.log(`[bundle] copied tray icon: ${trayIconSrc} → ${trayIconDst}`);
 
+// Pin staged native host-tool executables inside the signed asar. Runtime
+// verifies this manifest before spawning anything from extraResources.
+const hostManifestSrc = path.resolve(__dirname, '..', 'resources', 'host-tools', 'manifest.json');
+const hostManifestDst = path.join(dist, 'host-tools-manifest.json');
+if (fs.existsSync(hostManifestSrc)) {
+  fs.copyFileSync(hostManifestSrc, hostManifestDst);
+  console.log(`[bundle] copied host-tools checksum manifest`);
+} else {
+  // Never retain a manifest from an earlier build after staging failed or was
+  // skipped. Release packaging sets OPENAGENT_REQUIRE_HOST_TOOLS=1.
+  if (fs.existsSync(hostManifestDst)) fs.rmSync(hostManifestDst, { force: true });
+  if (process.env.OPENAGENT_REQUIRE_HOST_TOOLS === '1') {
+    throw new Error('Required staged host-tools checksum manifest is missing');
+  }
+}
+
 // Guard: fail loudly if either ESM-only dep wasn't actually inlined in any target.
 const offenders = [/require\(["']@noble\/ed25519["']\)/, /require\(["']cbor2["']\)/];
 for (const t of targets) {

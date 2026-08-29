@@ -15,6 +15,7 @@ import { GATEWAY_ALPN } from './coordinator-rpc.js';
 import { dialWithTimeout } from './dial-helpers.js';
 import type {
   IrohConnection,
+  IrohBiStream,
   IrohEndpoint,
   IrohNodeAddr,
   IrohSendStream,
@@ -75,16 +76,24 @@ export class SessionDialer {
    *  once more. One retry, not a loop — if the fresh connection fails too, the
    *  agent really is unreachable and the caller must hear about it. */
   async openGatewayStream(targetNodeId: string): Promise<GatewayStream> {
-    const first = this.connectionFor(targetNodeId);
+    let cached = await this.getOrOpenConnection(targetNodeId);
     try {
-      return await this.openStreamOn(await first.connection, targetNodeId);
-    } catch (err) {
-      // A connection we just dialled ourselves failing is a real failure,
-      // not a stale-pool one — there is nothing staler to fall back to.
-      if (!first.pooled) throw err;
-      this.evictConnection(targetNodeId, first.connection);
-      const retry = this.connectionFor(targetNodeId);
-      return await this.openStreamOn(await retry.connection, targetNodeId);
+      return await this.openStreamOn(cached.connection, targetNodeId);
+    } catch {
+      // A successfully-dialled QUIC connection can die later. Keeping that
+      // resolved Promise in the pool makes every WebSocket reconnect reuse the
+      // same dead connection forever. Evict only the entry this attempt used
+      // (another concurrent caller may already have installed a replacement),
+      // then make one bounded redial attempt. This also covers a connection
+      // that dies between a fresh dial and its first stream.
+      this.evictConnection(targetNodeId, cached);
+      cached = await this.getOrOpenConnection(targetNodeId);
+      try {
+        return await this.openStreamOn(cached.connection, targetNodeId);
+      } catch (error) {
+        this.evictConnection(targetNodeId, cached);
+        throw error;
+      }
     }
   }
 
@@ -92,7 +101,7 @@ export class SessionDialer {
     conn: IrohConnection,
     targetNodeId: string,
   ): Promise<GatewayStream> {
-    const bi = await conn.openBi();
+    const bi: IrohBiStream = await conn.openBi();
     const cert = this.certWire;
     const prefix = new Uint8Array(4 + cert.length);
     new DataView(prefix.buffer).setUint32(0, cert.length, false);
@@ -114,47 +123,40 @@ export class SessionDialer {
     };
   }
 
-  /** Drop a connection from the pool, but only if it is still the one the
-   *  caller used — a concurrent caller may already have redialled, and
-   *  evicting that fresh entry would make every request dial its own
-   *  connection. Closing the dead one is best-effort. */
-  private evictConnection(nodeId: string, connection: Promise<IrohConnection>): void {
-    if (this.connections.get(nodeId) !== connection) return;
-    this.connections.delete(nodeId);
-    connection
-      .then((conn) => {
-        try {
-          conn.close(0n, new Uint8Array());
-        } catch {
-          // ignore — already gone, which is the expected case here
+  private async getOrOpenConnection(
+    nodeId: string,
+  ): Promise<{ connection: IrohConnection; entry: Promise<IrohConnection> }> {
+    let p = this.connections.get(nodeId);
+    if (p === undefined) {
+      const hint = this.addrHints.get(nodeId);
+      const addr: IrohNodeAddr = hint ?? { nodeId };
+      p = dialWithTimeout(this.endpoint, addr, GATEWAY_ALPN);
+      this.connections.set(nodeId, p);
+      p.catch(() => {
+        // Whether the failure is a timeout or a real dial error, evict
+        // so the next caller retries with a fresh attempt — a hung
+        // promise that later resolves is closed by dialWithTimeout's
+        // late-cleanup path.
+        if (this.connections.get(nodeId) === p) {
+          this.connections.delete(nodeId);
         }
-      })
-      .catch(() => { /* never resolved: nothing to close */ });
+      });
+    }
+    return { connection: await p, entry: p };
   }
 
-  /** The pooled connection for ``nodeId``, dialling one if there is none.
-   *  ``pooled`` says whether it came from the cache, which is what tells a
-   *  failure "the pool went stale" apart from "the agent is unreachable". */
-  private connectionFor(
+  private evictConnection(
     nodeId: string,
-  ): { connection: Promise<IrohConnection>; pooled: boolean } {
-    const existing = this.connections.get(nodeId);
-    if (existing !== undefined) return { connection: existing, pooled: true };
-
-    const hint = this.addrHints.get(nodeId);
-    const addr: IrohNodeAddr = hint ?? { nodeId };
-    const p = dialWithTimeout(this.endpoint, addr, GATEWAY_ALPN);
-    this.connections.set(nodeId, p);
-    p.catch(() => {
-      // Whether the failure is a timeout or a real dial error, evict
-      // so the next caller retries with a fresh attempt — a hung
-      // promise that later resolves is closed by dialWithTimeout's
-      // late-cleanup path.
-      if (this.connections.get(nodeId) === p) {
-        this.connections.delete(nodeId);
-      }
-    });
-    return { connection: p, pooled: false };
+    cached: { connection: IrohConnection; entry: Promise<IrohConnection> },
+  ): void {
+    if (this.connections.get(nodeId) === cached.entry) {
+      this.connections.delete(nodeId);
+    }
+    try {
+      cached.connection.close(0n, new Uint8Array());
+    } catch {
+      // The failed openBi commonly means the connection is already closed.
+    }
   }
 
   async close(): Promise<void> {

@@ -471,6 +471,10 @@ const ToolCard = memo(function ToolCard({
   const eff = effectiveTool(info);
   const rawName = eff?.tool_name || info.tool_name;
   const dispatched = info.tool_name === 'tool_search_call_tool';
+  const executionHost = info.execution_host;
+  const executionHostLabel = executionHost?.kind === 'client'
+    ? `This computer${executionHost.device_label ? ` · ${executionHost.device_label}` : ''}`
+    : executionHost?.kind === 'server' ? executionHost.device_label || 'OpenAgent server' : null;
 
   return (
     <TouchableOpacity
@@ -523,6 +527,16 @@ const ToolCard = memo(function ToolCard({
             <Text style={styles.toolOpenLinkText}>Open</Text>
           </TouchableOpacity>
         )}
+        {executionHostLabel && (
+          <View style={styles.toolHostBadge}>
+            <Feather
+              name={executionHost?.kind === 'client' ? 'monitor' : 'server'}
+              size={9}
+              color={executionHost?.kind === 'client' ? colors.accent : colors.textMuted}
+            />
+            <Text style={styles.toolHostText} numberOfLines={1}>{executionHostLabel}</Text>
+          </View>
+        )}
         <Text style={[styles.toolStatusText, { color: statusColor }]}>{statusLabel}</Text>
         <Feather name={expanded ? 'chevron-down' : 'chevron-right'} size={12} color={colors.textMuted} />
       </View>
@@ -540,6 +554,18 @@ const ToolCard = memo(function ToolCard({
               )}
             </Text>
           </View>
+          {executionHost && (
+            <>
+              <Text style={styles.toolSectionTitle}>Execution host</Text>
+              <View style={styles.toolCodeBlock}>
+                <Text style={styles.toolCodeText}>
+                  {executionHost.kind === 'client'
+                    ? `${executionHost.device_label} · client ${executionHost.client_instance_id}`
+                    : executionHost.device_label}
+                </Text>
+              </View>
+            </>
+          )}
           {info.tool_args && Object.keys(info.tool_args).length > 0 && (
             <>
               <Text style={styles.toolSectionTitle}>Parameters</Text>
@@ -823,6 +849,12 @@ const styles = StyleSheet.create({
   },
   toolStatusDot: { width: 6, height: 6, borderRadius: 3 },
   toolCardTitleWrap: { flex: 1, minWidth: 0 },
+  toolHostBadge: {
+    maxWidth: 180, flexDirection: 'row', alignItems: 'center', gap: 4,
+    paddingHorizontal: 6, paddingVertical: 2, borderRadius: 8,
+    borderWidth: 1, borderColor: colors.border,
+  },
+  toolHostText: { maxWidth: 150, fontSize: 9, color: colors.textMuted, fontFamily: font.mono },
   toolCardName: {
     fontSize: 12, fontWeight: '600', color: colors.text,
   },

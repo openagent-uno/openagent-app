@@ -104,6 +104,7 @@ function humanizeLoginError(raw: string | undefined | null): string {
 }
 
 interface DesktopAPI {
+  clientInstanceId?: string;
   startLoopback: (args: {
     accountId: string;
     password: string;
@@ -513,7 +514,10 @@ function _openWebsocket(
   const host = '127.0.0.1';
   const port = config.sidecarPort;
   const url = `ws://${host}:${port}/ws`;
-  const ws = new OpenAgentWS(url, undefined);
+  const instanceId = typeof window !== 'undefined'
+    ? (window as any).desktop?.clientInstanceId
+    : undefined;
+  const ws = new OpenAgentWS(url, undefined, instanceId);
 
   if (isChild) {
     try {

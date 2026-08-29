@@ -56,6 +56,10 @@ export interface RunningLoopback {
   port: number;
   baseUrl: string;
   wsUrl: string;
+  /** Network id from the coordinator-signed device certificate. */
+  networkId: string;
+  /** Lowercase device public-key hex bound into that certificate. */
+  deviceId: string;
   agentNodeId: string;
   agentHandle: string;
   /** Idempotent. Tears down proxy, closes iroh, and releases all sockets. */
@@ -305,6 +309,8 @@ export async function startNativeLoopback(
       port: addr.port,
       baseUrl: proxy.baseUrl,
       wsUrl: proxy.wsUrl,
+      networkId: resolvedNet.networkId,
+      deviceId: identity.nodeIdHex,
       agentNodeId: chosen.nodeId,
       agentHandle: chosen.handle ?? '',
       stop: teardown,

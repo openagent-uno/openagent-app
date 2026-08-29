@@ -6,13 +6,15 @@
  * the focused window for renderer-side actions (DevTools, reload, zoom).
  */
 
-import { app, BrowserWindow, globalShortcut, ipcMain } from 'electron';
+import { app, BrowserWindow, globalShortcut } from 'electron';
 import {
   getAllWindows,
   focusWindow,
   closeWindow,
   getCreateWindowFactory,
 } from './window-manager';
+import { handleTrustedIpc } from './security/trusted-ipc';
+import { sendToTrustedRenderer } from './security/trusted-renderers';
 
 // ── Types ──
 
@@ -45,7 +47,7 @@ function buildShortcutDefs(): ShortcutDef[] {
   const sendToFocused = (channel: string, ...args: unknown[]): void => {
     const win = focusedWin();
     if (win && !win.isDestroyed()) {
-      win.webContents.send(channel, ...args);
+      sendToTrustedRenderer(win.webContents, channel, ...args);
     }
   };
 
@@ -282,7 +284,7 @@ export function registerAllShortcuts(): void {
 
   // Also register IPC handler so the renderer can request the shortcuts
   // map for documentation / keyboard-shortcuts modal.
-  ipcMain.handle('shortcuts:getMap', () => {
+  handleTrustedIpc('shortcuts:getMap', () => {
     return getShortcutsMap();
   });
 }
