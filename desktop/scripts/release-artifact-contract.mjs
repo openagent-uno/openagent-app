@@ -1,6 +1,58 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import zlib from 'node:zlib';
+
+/** Public release assets are files directly under electron-builder's output
+ * directory. Recursive payload files (for example win-unpacked/OpenAgent.exe)
+ * are implementation details and must never be mistaken for installers. */
+export function listTopLevelReleaseFiles(root) {
+  return fs.readdirSync(root, { withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => path.join(root, entry.name))
+    .sort();
+}
+
+/** Mirror electron-builder's Linux executable-name contract. An explicit
+ * build executableName wins; otherwise LinuxPackager lowercases the sanitized
+ * package name. OpenAgent's package/config names are already safe basenames,
+ * and this verifier rejects an ambiguous path instead of guessing. */
+export function expectedLinuxExecutableName(packageManifest) {
+  const configured = packageManifest?.build?.linux?.executableName
+    ?? packageManifest?.build?.executableName;
+  const value = configured == null
+    ? String(packageManifest?.name || '').toLowerCase()
+    : String(configured);
+  assert(value.length > 0, 'Linux executable contract has no package/config name');
+  assert(
+    /^[a-zA-Z0-9._+-]+$/.test(value),
+    `Linux executable contract is not an exact portable basename: ${value}`,
+  );
+  return value;
+}
+
+/** Locate the real executable payload in an extracted Linux package. Links are
+ * excluded so a package cannot satisfy the smoke test with only a launcher
+ * alias whose target is absent. */
+export function findLinuxPayloadExecutables(root, expectedName) {
+  const found = [];
+  const visit = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const full = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        visit(full);
+      } else if (
+        entry.isFile()
+        && entry.name === expectedName
+        && (fs.statSync(full).mode & 0o111) !== 0
+      ) {
+        found.push(full);
+      }
+    }
+  };
+  visit(root);
+  return found.sort();
+}
 
 /**
  * Verify an electron-builder blockmap that is embedded at the end of an
