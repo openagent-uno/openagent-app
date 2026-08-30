@@ -50,6 +50,25 @@ export function isTopLevelSidebarActivity(item: ActivityItem): boolean {
   return item.parent?.kind !== 'session';
 }
 
+/**
+ * A run row represents the scheduled task, workflow, or event that fired.
+ * The activity title identifies the individual firing (for example,
+ * "Scheduled run ab12…"), while the parent title is the stable name users
+ * recognise in navigation. Keep chats on their own title and fall back to the
+ * activity title for mixed-version servers that do not include parent names.
+ */
+export function sidebarActivityTitle(item: ActivityItem): string {
+  if (
+    item.kind === 'workflow_run'
+    || item.kind === 'scheduled_run'
+    || item.kind === 'event_delivery'
+  ) {
+    const parentTitle = item.parent?.title?.trim();
+    if (parentTitle && parentTitle !== item.parent?.id) return parentTitle;
+  }
+  return item.title;
+}
+
 export interface LocalHistorySession {
   id: string;
   origin?: string;

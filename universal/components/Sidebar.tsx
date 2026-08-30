@@ -48,6 +48,7 @@ import {
   historyKindsForFilters,
   isTopLevelSidebarActivity,
   localSessionIdsMissingFromHistory,
+  sidebarActivityTitle,
 } from '../../common/history-feed-policy';
 import { chatSessionIntent } from '../../common/search-navigation';
 import { useConfirm } from './ConfirmDialog';
@@ -785,7 +786,7 @@ function unifiedFeedItem(
     // row never flickers or briefly duplicates when persistence catches up.
     key: sessionId ? `c-session:${sessionId}` : `${prefix}-${item.id}`,
     icon,
-    label: item.title,
+    label: sidebarActivityTitle(item),
     ts: Date.parse(item.occurred_at),
     active: sessionId ? onChat && sessionId === activeSessionId : activeRunId === item.resource_id,
     statusTone: item.live ? 'success' : item.status ? historyStatusTone(item.status) : null,

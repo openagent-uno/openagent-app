@@ -9,6 +9,7 @@ import {
   localSessionIdsMissingFromHistory,
   mergeBoundedHistory,
   sessionDiscoveryStrategy,
+  sidebarActivityTitle,
 } from '../history-feed-policy.ts';
 
 function item(id, occurredAt) {
@@ -55,6 +56,40 @@ test('flat Recent hides child sessions but keeps every first-class run', () => {
   for (const kind of ['workflow_run', 'scheduled_run', 'event_delivery']) {
     assert.equal(isTopLevelSidebarActivity({ ...base, kind }), true);
   }
+});
+
+test('Recent labels runs with their scheduled, workflow, or event parent name', () => {
+  const base = item('activity', '2026-01-03T00:00:00Z');
+  assert.equal(sidebarActivityTitle({
+    ...base,
+    kind: 'scheduled_run',
+    title: 'Scheduled run ab12',
+    parent: { kind: 'scheduled_task', id: 'task-1', title: 'Morning brief' },
+  }), 'Morning brief');
+  assert.equal(sidebarActivityTitle({
+    ...base,
+    kind: 'workflow_run',
+    title: 'Workflow run cd34',
+    parent: { kind: 'workflow', id: 'workflow-1', title: 'Publish release' },
+  }), 'Publish release');
+  assert.equal(sidebarActivityTitle({
+    ...base,
+    kind: 'event_delivery',
+    title: 'Event delivery ef56',
+    parent: { kind: 'event', id: 'event-1', title: 'Customer webhook' },
+  }), 'Customer webhook');
+  assert.equal(sidebarActivityTitle({
+    ...base,
+    kind: 'scheduled_run',
+    title: 'Scheduled run fallback',
+  }), 'Scheduled run fallback');
+  assert.equal(sidebarActivityTitle({
+    ...base,
+    kind: 'scheduled_run',
+    title: 'Scheduled run mixed version',
+    parent: { kind: 'scheduled_task', id: 'task-legacy', title: 'task-legacy' },
+  }), 'Scheduled run mixed version');
+  assert.equal(sidebarActivityTitle(base), 'activity');
 });
 
 test('v2 Recent overlays unpersisted live chats without duplicating durable rows', () => {

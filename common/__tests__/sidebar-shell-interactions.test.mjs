@@ -99,6 +99,10 @@ test('v2 sidebar overlays local live chats until normalized history persists the
   assert.match(sidebar, /sessionId \? `c-session:\$\{sessionId\}`/);
 });
 
+test('v2 Recent uses parent resource names for automation runs', () => {
+  assert.match(sidebar, /label: sidebarActivityTitle\(item\)/);
+});
+
 test('dashboard views and recent history share one infinite sidebar scroller', () => {
   assert.equal((sidebar.match(/<FlatList/g) || []).length, 1);
   assert.match(sidebar, /ListHeaderComponent=\{\(/);
