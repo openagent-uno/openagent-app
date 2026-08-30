@@ -224,11 +224,10 @@ test('real Electron host executes local tools, reports its host, audits, and nev
         execution_host: executionHost,
       },
     }]);
+    // Open the fixture directly. Clicking its already-selected Recent row now
+    // intentionally opens Rename, while the session query still exercises the
+    // production lazy runs fetch used to reopen a durable chat.
     await page.goto(`${gateway.baseUrl}/chat?session=e2e-session`);
-    // The session metadata is hydrated before its transcript. Selecting the
-    // real Recent row exercises the production lazy runs fetch used when a
-    // user reopens a durable chat.
-    await page.getByText('Local capability E2E', { exact: true }).click();
     const locationLabel = `This computer · ${hello.device_label}`;
     await expect(page.getByText(locationLabel, { exact: true })).toBeVisible();
     await page.getByText(locationLabel, { exact: true }).click();
