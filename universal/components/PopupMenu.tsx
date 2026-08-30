@@ -9,7 +9,13 @@
  * Items can be `destructive` (rendered in the error colour) — e.g. Delete.
  */
 
-import { useRef, useState, type ReactNode } from 'react';
+import {
+  forwardRef,
+  useImperativeHandle,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import {
   View,
   Text,
@@ -33,26 +39,19 @@ export interface PopupMenuItem {
   onPress: () => void;
 }
 
-interface Anchor { x: number; y: number; w: number; h: number; }
+interface Anchor { x: number; y: number; w: number; h: number; point?: boolean; }
+
+export interface PopupMenuHandle {
+  /** Open the same menu at a viewport point, e.g. a mouse context click. */
+  openAt: (x: number, y: number) => void;
+}
 
 const DEFAULT_MENU_WIDTH = 184;
 // Rough per-row height (padding + line) used only to decide whether to flip
 // the menu above the trigger when it would overflow the bottom edge.
 const ROW_H = 38;
 
-export default function PopupMenu({
-  items,
-  children,
-  triggerIcon = 'more-horizontal',
-  triggerSize = 18,
-  triggerColor = colors.textSecondary,
-  triggerStyle,
-  accessibilityLabel = 'More options',
-  align = 'right',
-  menuWidth = DEFAULT_MENU_WIDTH,
-  stopPropagation = true,
-  triggerClassName,
-}: {
+const PopupMenu = forwardRef<PopupMenuHandle, {
   /** Action rows — each closes the menu then runs ``onPress``. Omit when
    *  passing ``children`` for fully custom content (e.g. multi-select
    *  toggles that stay open). */
@@ -76,7 +75,19 @@ export default function PopupMenu({
   /** Optional web interaction class. Defaults to the shared row hover; list
    *  rows can supply a child-control class when their parent owns the hover. */
   triggerClassName?: string;
-}) {
+}>(function PopupMenu({
+  items,
+  children,
+  triggerIcon = 'more-horizontal',
+  triggerSize = 18,
+  triggerColor = colors.textSecondary,
+  triggerStyle,
+  accessibilityLabel = 'More options',
+  align = 'right',
+  menuWidth = DEFAULT_MENU_WIDTH,
+  stopPropagation = true,
+  triggerClassName,
+}, ref) {
   const triggerRef = useRef<View>(null);
   const [anchor, setAnchor] = useState<Anchor | null>(null);
 
@@ -92,17 +103,23 @@ export default function PopupMenu({
   };
   const close = () => setAnchor(null);
 
+  useImperativeHandle(ref, () => ({
+    openAt: (x, y) => setAnchor({ x, y, w: 0, h: 0, point: true }),
+  }), []);
+
   let menuPos: ViewStyle | null = null;
   if (anchor) {
     const screen = Dimensions.get('window');
-    const left = align === 'left'
-      ? Math.min(anchor.x, screen.width - menuWidth - 8)
-      : Math.max(8, anchor.x + anchor.w - menuWidth);
+    const left = anchor.point
+      ? Math.max(8, Math.min(anchor.x, screen.width - menuWidth - 8))
+      : align === 'left'
+        ? Math.min(anchor.x, screen.width - menuWidth - 8)
+        : Math.max(8, anchor.x + anchor.w - menuWidth);
     // Row count is only known for the ``items`` form; for custom children fall
     // back to a small estimate. Used solely to decide the flip-above-on-overflow.
     const rows = items ? items.length : 4;
     const estHeight = rows * ROW_H + 8;
-    const below = anchor.y + anchor.h + 4;
+    const below = anchor.point ? anchor.y : anchor.y + anchor.h + 4;
     // Flip above the trigger when it would run off the bottom of the screen.
     const top = below + estHeight > screen.height - 8
       ? Math.max(8, anchor.y - estHeight - 4)
@@ -165,7 +182,9 @@ export default function PopupMenu({
       </Modal>
     </>
   );
-}
+});
+
+export default PopupMenu;
 
 const glassStyle: any = {
   backgroundColor: glassSurface.backgroundColor,

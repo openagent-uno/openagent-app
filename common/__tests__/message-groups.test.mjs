@@ -2,7 +2,11 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
-import { messageHeaderVisibility } from '../message-groups.ts';
+import {
+  messageHeaderVisibility,
+  messageTimestampMs,
+  messageTurnTimeline,
+} from '../message-groups.ts';
 
 const message = (role, author) => ({ role, author });
 
@@ -71,6 +75,53 @@ test('streaming state changes do not split an assistant group', () => {
   ]), [true, false, false]);
 });
 
+test('turn timeline shows time per speaker turn and a date only when the local day changes', () => {
+  const firstDayMorning = new Date(2026, 7, 29, 9, 5).getTime();
+  const firstDayAfternoon = new Date(2026, 7, 29, 17, 40).getTime();
+  const secondDay = new Date(2026, 7, 30, 8, 15).getTime();
+  const timeline = messageTurnTimeline([
+    { ...message('user'), timestamp: firstDayMorning },
+    { ...message('user'), timestamp: firstDayMorning + 1_000 },
+    { ...message('tool'), timestamp: firstDayAfternoon - 1_000 },
+    { ...message('assistant'), timestamp: firstDayAfternoon },
+    { ...message('user'), timestamp: secondDay },
+  ]);
+
+  assert.deepEqual(timeline, [
+    { timestamp: firstDayMorning, showDayDivider: true },
+    { showDayDivider: false },
+    { showDayDivider: false },
+    { timestamp: firstDayAfternoon, showDayDivider: false },
+    { timestamp: secondDay, showDayDivider: true },
+  ]);
+});
+
+test('turn timeline hides missing timestamps and normalizes legacy epoch seconds', () => {
+  const milliseconds = new Date(2026, 7, 30, 12, 0).getTime();
+  assert.equal(messageTimestampMs(0), undefined);
+  assert.equal(messageTimestampMs(Number.NaN), undefined);
+  assert.equal(messageTimestampMs(milliseconds / 1000), milliseconds);
+  assert.deepEqual(messageTurnTimeline([
+    { ...message('user'), timestamp: undefined },
+    { ...message('assistant'), timestamp: milliseconds / 1000 },
+  ]), [
+    { showDayDivider: false },
+    { timestamp: milliseconds, showDayDivider: true },
+  ]);
+});
+
+test('a new local day splits consecutive rows from the same speaker', () => {
+  const beforeMidnight = new Date(2026, 7, 29, 23, 59).getTime();
+  const afterMidnight = new Date(2026, 7, 30, 0, 1).getTime();
+  assert.deepEqual(messageTurnTimeline([
+    { ...message('user'), timestamp: beforeMidnight },
+    { ...message('user'), timestamp: afterMidnight },
+  ]), [
+    { timestamp: beforeMidnight, showDayDivider: true },
+    { timestamp: afterMidnight, showDayDivider: true },
+  ]);
+});
+
 test('the shared transcript renderer applies grouped headers and the user surface', () => {
   const source = readFileSync(
     new URL('../../universal/components/MessageList.tsx', import.meta.url),
@@ -78,9 +129,15 @@ test('the shared transcript renderer applies grouped headers and the user surfac
   );
 
   assert.match(source, /messageHeaderVisibility\(visible\)/);
+  assert.match(source, /messageTurnTimeline\(visible\)/);
+  assert.match(source, /testID="oa-message-turn-time"/);
+  assert.match(source, /testID="oa-message-day-divider"/);
   assert.match(source, /testID="oa-agent-message-header"/);
   assert.match(source, /testID="oa-agent-message-label"/);
   assert.match(source, /testID="oa-human-message-header"/);
+  assert.match(source, /\{actions\}\s*<TurnTime timestamp=\{timestamp\} \/>/);
+  assert.match(source, /<TurnTime timestamp=\{timestamp\} flushToTranscriptEdge \/>/);
+  assert.match(source, /turnTimeFlushRight:\s*\{ marginRight: -12 \}/);
   assert.doesNotMatch(source, /assistantDot/);
   assert.match(source, /!showHeader && styles\.continuationActions/);
   assert.match(source, /!showHeader && styles\.continuationBody/);

@@ -421,6 +421,16 @@ function ensureGlobalCss(): void {
         background-color: var(--oa-hover);
         border-color: transparent;
       }
+      /* Keep the timestamp's width reserved so revealing it never nudges the
+         title or dots menu. Pointer-less surfaces keep the native fallback. */
+      [data-testid^="oa-history-feed-row-"]
+      [data-testid="oa-history-feed-date"] {
+        opacity: 0;
+      }
+      [data-testid^="oa-history-feed-row-"]:hover
+      [data-testid="oa-history-feed-date"] {
+        opacity: 1;
+      }
       [data-testid^="oa-history-feed-row-"]:hover
       [data-testid="oa-history-status-icon-success"] {
         color: var(--oa-success) !important;

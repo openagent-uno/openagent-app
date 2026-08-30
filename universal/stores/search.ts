@@ -206,6 +206,8 @@ interface SearchStore {
   acceptUpdatedResults: () => Promise<void>;
   handleHistoryChanged: (event: HistoryChangedEvent) => void;
   handleSearchIndexChanged: (event: SearchIndexChangedEvent) => void;
+  /** Patch a committed conversation rename into account-scoped v2 caches. */
+  renameSessionTitle: (sessionId: string, title: string) => void;
   setChatDestination: (target: ChatSearchTarget) => void;
   clearChatDestination: () => void;
   clear: () => void;
@@ -660,6 +662,21 @@ export const useSearch = create<SearchStore>((set, get) => ({
       set({ resultsUpdated: true });
     }
   },
+
+  renameSessionTitle: (sessionId, title) => set((state) => ({
+    historyItems: state.historyItems.map((item) =>
+      (item.kind === 'chat' || item.kind === 'delegated_session')
+        && (item.session_id || item.resource_id) === sessionId
+        ? { ...item, title }
+        : item,
+    ),
+    results: state.results.map((result) =>
+      result.root.session_id === sessionId
+        || (result.root.kind === 'chat' && result.root.id === sessionId)
+        ? { ...result, root: { ...result.root, title } }
+        : result,
+    ),
+  })),
 
   setChatDestination: (target) => set((state) => {
     const generation = state.chatDestinationGeneration + 1;

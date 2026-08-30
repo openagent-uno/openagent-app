@@ -24,7 +24,7 @@
  * there is no collapsed icon-only stage.
  */
 
-import { useCallback, useEffect, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -51,7 +51,8 @@ import {
 } from '../../common/history-feed-policy';
 import { chatSessionIntent } from '../../common/search-navigation';
 import { useConfirm } from './ConfirmDialog';
-import PopupMenu from './PopupMenu';
+import { useRenameSession } from './RenameSessionDialog';
+import PopupMenu, { type PopupMenuHandle } from './PopupMenu';
 import { useEvents } from '../stores/events';
 import { useUIViews } from '../stores/uiViews';
 import type { UIViewSummary } from '../../common/ui-views';
@@ -77,7 +78,6 @@ const NAV: NavItem[] = [
   { href: '/tasks', match: 'tasks', label: 'Scheduled', icon: 'clock' },
   { href: '/workflows', match: 'workflows', label: 'Workflows', icon: 'git-branch' },
   { href: '/events', match: 'events', label: 'Events', icon: 'zap' },
-  { href: '/views', match: 'views', label: 'Views', icon: 'layout' },
 ];
 
 // Fixed nav-row geometry shared by actions and navigation.
@@ -105,6 +105,8 @@ interface FeedItem {
   // the sub-agent sessions it spawned. Runs (workflow / scheduled) leave it
   // undefined, so no delete affordance renders for them.
   onDelete?: () => void;
+  /** Conversation-only rename action, shared by the row and its menu. */
+  onRename?: () => void;
 }
 
 export default function Sidebar({
@@ -291,6 +293,7 @@ function RecentFeed({
   const activeSessionId = useChat((s) => s.activeSessionId);
   const removeSession = useChat((s) => s.removeSession);
   const confirm = useConfirm();
+  const renameSession = useRenameSession();
 
   // Delete a chat (and the sub-agent sessions it spawned) from the Recent
   // feed, behind a confirmation dialog. This is the primary, always-visible
@@ -344,6 +347,27 @@ function RecentFeed({
     return () => { off1(); off2(); off3(); };
   }, [isConnected, loadActivity, unifiedSupport]);
 
+  // Explicit metadata edits (notably rename) are committed into normalized
+  // history before the server emits ``resource_event/session``. Refresh the
+  // bounded feed and any currently-open chat metadata so another signed-in
+  // client sees the new title without restarting or loading the legacy list.
+  useEffect(() => {
+    if (!isConnected || unifiedSupport !== 'v2') return;
+    return useEvents.getState().subscribe('session', () => {
+      const search = useSearch.getState();
+      void search.loadHistory(true).then(() => {
+        const chat = useChat.getState();
+        for (const item of useSearch.getState().historyItems) {
+          if (item.kind !== 'chat' && item.kind !== 'delegated_session') continue;
+          const id = item.session_id || item.resource_id;
+          if (chat.sessions.some((session) => session.id === id)) {
+            chat.applySessionTitle(id, item.title);
+          }
+        }
+      });
+    });
+  }, [isConnected, unifiedSupport]);
+
   const onChat = activeSeg === 'chat' && !onRunsRoute;
   const allOn = filters.chat && filters.workflow && filters.task && filters.event;
 
@@ -363,6 +387,12 @@ function RecentFeed({
         } else if (!filters.event) continue;
         const mapped = unifiedFeedItem(
           item, router, activeRunId, activeSessionId, onChat, onNavigate,
+          item.kind === 'chat'
+            ? () => renameSession({
+                id: item.session_id || item.resource_id,
+                title: item.title,
+              })
+            : undefined,
           item.kind === 'chat'
             ? () => confirmAndRemove(item.session_id || item.resource_id, item.title)
             : undefined,
@@ -384,6 +414,7 @@ function RecentFeed({
             activeSessionId,
             onChat,
             onNavigate,
+            () => renameSession({ id: session.id, title: session.title }),
             () => confirmAndRemove(session.id, session.title || 'New Chat'),
           ));
         }
@@ -405,6 +436,7 @@ function RecentFeed({
           activeSessionId,
           onChat,
           onNavigate,
+          () => renameSession({ id: s.id, title: s.title }),
           () => confirmAndRemove(s.id, s.title || 'New Chat'),
         ));
       }
@@ -577,15 +609,38 @@ function feedKeyExtractor(item: FeedItem): string {
 }
 
 function renderFeedItem({ item }: { item: FeedItem }) {
+  return <FeedRow item={item} />;
+}
+
+function FeedRow({ item }: { item: FeedItem }) {
+  const menuRef = useRef<PopupMenuHandle>(null);
+  const hasMenu = !!(item.onDelete || item.onRename);
+
+  const contextMenuProps = Platform.OS === 'web' && hasMenu
+    ? {
+        onContextMenu: (event: any) => {
+          event.preventDefault?.();
+          event.stopPropagation?.();
+          const source = event.nativeEvent ?? event;
+          const x = Number(source.clientX ?? source.pageX);
+          const y = Number(source.clientY ?? source.pageY);
+          if (Number.isFinite(x) && Number.isFinite(y)) {
+            menuRef.current?.openAt(x, y);
+          }
+        },
+      }
+    : {};
+
   return (
     <View
       testID={`oa-history-feed-row-${item.key}`}
       // @ts-ignore web hover + entrance
       {...(Platform.OS === 'web' ? { className: 'oa-feed-row oa-fade-in' } : {})}
+      {...contextMenuProps}
       style={[styles.feedRow, item.active && styles.feedRowActive]}
     >
       <Pressable
-        onPress={item.onPress}
+        onPress={item.active && item.onRename ? item.onRename : item.onPress}
         style={styles.feedRowMain}
         accessibilityRole="button"
         accessibilityState={{ selected: !!item.active }}
@@ -601,10 +656,18 @@ function renderFeedItem({ item }: { item: FeedItem }) {
         <Text style={[styles.feedText, item.active && styles.feedTextActive]} numberOfLines={1}>
           {item.label}
         </Text>
-        {item.ts ? <Text style={styles.feedMeta}>{relTime(item.ts)}</Text> : null}
+        {item.ts ? (
+          <Text
+            style={styles.feedMeta}
+            testID="oa-history-feed-date"
+          >
+            {relTime(item.ts)}
+          </Text>
+        ) : null}
       </Pressable>
-      {item.onDelete ? (
+      {hasMenu ? (
         <PopupMenu
+          ref={menuRef}
           triggerIcon="more-horizontal"
           triggerSize={15}
           triggerColor={colors.textMuted}
@@ -612,7 +675,12 @@ function renderFeedItem({ item }: { item: FeedItem }) {
           triggerClassName="oa-feed-row-control"
           accessibilityLabel={`Options for ${item.label}`}
           items={[
-            { label: 'Delete', icon: 'trash-2', destructive: true, onPress: item.onDelete },
+            ...(item.onRename
+              ? [{ label: 'Rename', icon: 'edit-2' as const, onPress: item.onRename }]
+              : []),
+            ...(item.onDelete
+              ? [{ label: 'Delete', icon: 'trash-2' as const, destructive: true, onPress: item.onDelete }]
+              : []),
           ]}
         />
       ) : null}
@@ -677,6 +745,7 @@ function unifiedFeedItem(
   activeSessionId: string | null,
   onChat: boolean,
   onNavigate?: () => void,
+  onRename?: () => void,
   onDelete?: () => void,
 ): FeedItem | null {
   let target: SearchTarget;
@@ -728,6 +797,7 @@ function unifiedFeedItem(
       openSearchTarget(router, target);
       onNavigate?.();
     },
+    onRename,
     onDelete,
   };
 }
@@ -738,6 +808,7 @@ function chatFeedItem(
   activeSessionId: string | null,
   onChat: boolean,
   onNavigate?: () => void,
+  onRename?: () => void,
   onDelete?: () => void,
 ): FeedItem {
   return {
@@ -752,6 +823,7 @@ function chatFeedItem(
       router.push(chatSessionIntent(session.id) as any);
       onNavigate?.();
     },
+    onRename,
     onDelete,
   };
 }

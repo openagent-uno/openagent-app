@@ -44,6 +44,7 @@ import { useNavHistory } from '../../stores/navHistory';
 import { useAutoScroll } from '../../hooks/useAutoScroll';
 import { Skeleton, SkeletonLines } from '../../components/Skeleton';
 import { useConfirm } from '../../components/ConfirmDialog';
+import { useRenameSession } from '../../components/RenameSessionDialog';
 import {
   uploadFile, guessMimeType, listDbModels,
   getSessionModelPin, pinSessionModel, unpinSessionModel, isAgentUnreachable,
@@ -114,6 +115,7 @@ export default function ChatScreen() {
   const setActiveSession = useChat((s) => s.setActiveSession);
   const removeSession = useChat((s) => s.removeSession);
   const confirm = useConfirm();
+  const renameSession = useRenameSession();
   const addUserMessage = useChat((s) => s.addUserMessage);
   const editUserMessage = useChat((s) => s.editUserMessage);
   const setDraftInput = useChat((s) => s.setDraftInput);
@@ -543,6 +545,11 @@ export default function ChatScreen() {
                 accessibilityLabel="Chat options"
                 items={[
                   {
+                    label: 'Rename',
+                    icon: 'edit-2' as const,
+                    onPress: () => renameSession(activeSession),
+                  },
+                  {
                     label: 'Delete chat',
                     icon: 'trash-2' as const,
                     destructive: true,
@@ -556,7 +563,7 @@ export default function ChatScreen() {
         ) : null,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [navigation, isChildSession, parentSession?.id, activeSession?.id, activeSession?.title]);
+  }, [navigation, isChildSession, parentSession?.id, activeSession?.id, activeSession?.title, renameSession]);
 
   // A freshly-spawned child session fires a resource_event. V2 normally gets
   // its exact summary from history_changed; gateways without that realtime

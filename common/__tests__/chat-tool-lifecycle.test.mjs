@@ -35,7 +35,10 @@ const bundle = await build({
           export const getSessionContext = async () => ({});
           export const listSessionMessages = async () => ({ messages: [] });
           export const runMsgToChat = (message) => message;
-          export const updateSessionMetadata = async () => {};
+          export const updateSessionMetadata = async (...args) => {
+            const handler = globalThis.__oaUpdateSessionMetadata;
+            return handler ? handler(...args) : { ok: true };
+          };
         `,
       }));
     },
@@ -56,6 +59,41 @@ test('a new local chat has recency before its first durable history row exists',
   assert.equal(useChat.getState().activeSessionId, id);
   assert.ok(session);
   assert.ok(session.lastActiveAt >= before);
+});
+
+test('renameSession persists a normalized title and keeps the optimistic value on success', async () => {
+  const calls = [];
+  globalThis.__oaUpdateSessionMetadata = async (...args) => {
+    calls.push(args);
+    return { ok: true };
+  };
+  useChat.setState({
+    sessions: [{ id: 'rename-ok', title: 'Old title', messages: [], isProcessing: false }],
+    activeSessionId: 'rename-ok',
+  });
+
+  await useChat.getState().renameSession('rename-ok', '  New title  ');
+
+  assert.equal(useChat.getState().sessions[0].title, 'New title');
+  assert.deepEqual(calls, [['rename-ok', { title: 'New title' }]]);
+  delete globalThis.__oaUpdateSessionMetadata;
+});
+
+test('renameSession rolls the optimistic title back when persistence fails', async () => {
+  globalThis.__oaUpdateSessionMetadata = async () => {
+    throw new Error('server refused rename');
+  };
+  useChat.setState({
+    sessions: [{ id: 'rename-fail', title: 'Stable title', messages: [], isProcessing: false }],
+    activeSessionId: 'rename-fail',
+  });
+
+  await assert.rejects(
+    useChat.getState().renameSession('rename-fail', 'Temporary title'),
+    /server refused rename/,
+  );
+  assert.equal(useChat.getState().sessions[0].title, 'Stable title');
+  delete globalThis.__oaUpdateSessionMetadata;
 });
 
 test('a sparse terminal frame preserves execution host from the started frame', () => {

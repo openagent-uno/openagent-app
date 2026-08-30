@@ -78,6 +78,7 @@ import { useConnection } from '../stores/connection';
 import { useDrawerPreferences } from '../stores/drawerPreferences';
 import { useNavigationSidebar } from '../stores/navigationSidebar';
 import { useSearch } from '../stores/search';
+import { useRenameSession } from './RenameSessionDialog';
 import {
   useSessionDetailsDrawer,
   type SessionDetailsRunTarget,
@@ -354,6 +355,7 @@ function SessionDetailsContent({
   onClose: () => void;
 }) {
   const router = useRouter();
+  const renameSession = useRenameSession();
   const accountId = useConnection((state) => state.activeAccountId);
   const activeSessionId = useChat((state) => state.activeSessionId);
   const session = useChat((state) =>
@@ -577,7 +579,16 @@ function SessionDetailsContent({
       <View style={styles.topBar}>
         <View style={styles.topTitleWrap}>
           <Text style={styles.eyebrow}>Session details</Text>
-          <Text style={styles.drawerTitle} numberOfLines={2}>{session.title}</Text>
+          <Pressable
+            onPress={() => renameSession({ id: session.id, title: session.title })}
+            style={styles.renameTitleButton}
+            accessibilityRole="button"
+            accessibilityLabel={`Rename ${session.title || 'conversation'}`}
+            {...(Platform.OS === 'web' ? { className: 'oa-side-row' } as any : {})}
+          >
+            <Text style={[styles.drawerTitle, styles.renameTitleText]} numberOfLines={2}>{session.title}</Text>
+            <Feather name="edit-2" size={12} color={colors.textMuted} />
+          </Pressable>
         </View>
         <View style={styles.topActions}>
           <Pressable
@@ -1906,6 +1917,16 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontWeight: '600',
     color: colors.text,
+  },
+  renameTitleText: { flex: 1 },
+  renameTitleButton: {
+    minHeight: 28,
+    marginLeft: -6,
+    paddingHorizontal: 6,
+    borderRadius: radius.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
   },
   topButton: {
     width: 32,

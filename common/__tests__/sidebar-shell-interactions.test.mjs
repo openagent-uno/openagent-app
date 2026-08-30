@@ -30,6 +30,14 @@ const chatScreen = readFileSync(
   new URL('../../universal/app/(tabs)/chat.tsx', import.meta.url),
   'utf8',
 );
+const renameDialog = readFileSync(
+  new URL('../../universal/components/RenameSessionDialog.tsx', import.meta.url),
+  'utf8',
+);
+const popupMenu = readFileSync(
+  new URL('../../universal/components/PopupMenu.tsx', import.meta.url),
+  'utf8',
+);
 
 test('recent rows own one hover surface across their title and dots controls', () => {
   // RN Web forwards testID to data-testid even when it filters arbitrary
@@ -46,6 +54,18 @@ test('recent rows own one hover surface across their title and dots controls', (
   assert.match(
     theme,
     /\[data-testid\^="oa-history-feed-row-"\] > \[role="button"\]:hover/,
+  );
+});
+
+test('recent timestamps appear only while their compound row is hovered', () => {
+  assert.match(sidebar, /testID="oa-history-feed-date"/);
+  assert.match(
+    theme,
+    /\[data-testid\^="oa-history-feed-row-"\][\s\S]*\[data-testid="oa-history-feed-date"\][\s\S]*opacity:\s*0/,
+  );
+  assert.match(
+    theme,
+    /\[data-testid\^="oa-history-feed-row-"\]:hover[\s\S]*\[data-testid="oa-history-feed-date"\][\s\S]*opacity:\s*1/,
   );
 });
 
@@ -88,6 +108,31 @@ test('dashboard views and recent history share one infinite sidebar scroller', (
   assert.doesNotMatch(sidebar, /viewList:\s*\{[^}]*maxHeight/);
   assert.match(sidebar, /onEndReached=\{\(\) => \{/);
   assert.match(sidebar, /void loadMoreHistory\(\)/);
+});
+
+test('custom views have no duplicate generic Views navigation row', () => {
+  assert.doesNotMatch(sidebar, /href:\s*['"]\/views['"]/);
+  assert.match(sidebar, /customViews\.map\(\(item, index\) =>/);
+  assert.match(sidebar, /`\/views\/\$\{encodeURIComponent\(item\.id\)\}`/);
+});
+
+test('conversation rename is shared by menus, selected history, and details title', () => {
+  assert.match(sidebar, /label: 'Rename'/);
+  assert.match(sidebar, /item\.active && item\.onRename \? item\.onRename : item\.onPress/);
+  assert.match(detailsDrawer, /accessibilityLabel=\{`Rename \$\{session\.title/);
+  assert.match(chatScreen, /label: 'Rename'[\s\S]*renameSession\(activeSession\)/);
+  assert.match(renameDialog, /await useChat\.getState\(\)\.renameSession/);
+  assert.match(renameDialog, /useSearch\.getState\(\)\.renameSessionTitle/);
+  assert.match(renameDialog, /maxLength=\{200\}/);
+});
+
+test('right-clicking a history conversation opens its existing popup menu', () => {
+  assert.match(sidebar, /onContextMenu:\s*\(event: any\) =>/);
+  assert.match(sidebar, /event\.preventDefault\?\.\(\)/);
+  assert.match(sidebar, /menuRef\.current\?\.openAt\(x, y\)/);
+  assert.match(sidebar, /ref=\{menuRef\}/);
+  assert.match(popupMenu, /openAt: \(x, y\) => setAnchor/);
+  assert.match(popupMenu, /anchor\.point \? anchor\.y/);
 });
 
 test('sidebar status uses hover-colored icons without separate dots', () => {

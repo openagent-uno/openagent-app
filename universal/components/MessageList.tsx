@@ -35,7 +35,7 @@ import {
 } from '../../common/types';
 import type { MessagePart } from '../../common/ui-views';
 import { attachmentKey } from '../../common/attachments';
-import { messageHeaderVisibility } from '../../common/message-groups';
+import { messageHeaderVisibility, messageTurnTimeline } from '../../common/message-groups';
 import {
   compactToolFallback,
   legacyToolInfoFromText,
@@ -118,6 +118,10 @@ function MessageListBase({
     () => messageHeaderVisibility(visible),
     [visible],
   );
+  const turnTimeline = useMemo(
+    () => messageTurnTimeline(visible),
+    [visible],
+  );
   const resolvedAnchorMessageId = useMemo(() => {
     if (anchorMessageId) return anchorMessageId;
     if (!anchorToolInvocationId) return undefined;
@@ -170,15 +174,26 @@ function MessageListBase({
   }, [visible]);
   const renderMessage = (msg: ChatMessage, index: number) => {
     const isAnchor = msg.id === resolvedAnchorMessageId;
-    const showAuthorHeader = headerVisibility[index] ?? true;
+    const turnMeta = turnTimeline[index];
+    const turnTimestamp = turnMeta?.timestamp;
+    const showAuthorHeader = (headerVisibility[index] ?? true)
+      || !!turnMeta?.showDayDivider;
     const renderKey = msg.role === 'tool'
       ? toolMessageRenderKey(msg.id, msg.toolInfo, msg.toolInvocationId)
       : msg.id;
     const wrap = (node: ReactNode) => {
+      const content = (
+        <>
+          {turnMeta?.showDayDivider && turnTimestamp != null
+            ? <DayDivider timestamp={turnTimestamp} />
+            : null}
+          {node}
+        </>
+      );
       // Search highlighting needs one measurable wrapper, but wrapping every
       // ordinary row changed the stable chat layout and web DOM. Keep normal
       // messages structurally identical to main.
-      if (!isAnchor) return <Fragment key={renderKey}>{node}</Fragment>;
+      if (!isAnchor) return <Fragment key={renderKey}>{content}</Fragment>;
       return (
         <View
           key={renderKey}
@@ -191,7 +206,7 @@ function MessageListBase({
           accessibilityLabel="Search result message"
           {...(Platform.OS === 'web' ? ({ tabIndex: -1 } as any) : {})}
         >
-          {node}
+          {content}
         </View>
       );
     };
@@ -241,7 +256,13 @@ function MessageListBase({
       // node prompt the agent gave itself) renders as a Mission block,
       // not a "You" bubble.
       if (msg.author?.kind === 'agent') {
-        return wrap(<SelfPromptBlock text={msg.text} label={msg.author.display} />);
+        return wrap(
+          <SelfPromptBlock
+            text={msg.text}
+            label={msg.author.display}
+            timestamp={turnTimestamp}
+          />,
+        );
       }
       return wrap(
         <UserMessage
@@ -249,6 +270,7 @@ function MessageListBase({
           parts={msg.parts}
           author={msg.author} fallbackLabel={currentUserHandle}
           showHeader={showAuthorHeader}
+          timestamp={turnTimestamp}
           onEdit={onEditUser}
         />,
       );
@@ -259,6 +281,7 @@ function MessageListBase({
         parts={msg.parts}
         streaming={msg.streaming} author={msg.author}
         showHeader={showAuthorHeader}
+        timestamp={turnTimestamp}
         onRegenerate={msg.id === lastAssistantId && !isProcessing ? onRegenerate : undefined}
       />,
     );
@@ -324,7 +347,7 @@ export default MessageList;
 // ── Atoms ────────────────────────────────────────────────────────────
 
 const UserMessage = memo(function UserMessage({
-  id, text, attachments, parts, author, fallbackLabel, showHeader, onEdit,
+  id, text, attachments, parts, author, fallbackLabel, showHeader, timestamp, onEdit,
 }: {
   id: string;
   text: string;
@@ -333,6 +356,7 @@ const UserMessage = memo(function UserMessage({
   author?: MessageAuthor;
   fallbackLabel?: string;
   showHeader: boolean;
+  timestamp?: number;
   onEdit?: (id: string, newText: string) => void;
 }) {
   const label = author?.display || author?.handle || fallbackLabel || 'You';
@@ -366,6 +390,7 @@ const UserMessage = memo(function UserMessage({
           <View style={styles.userHead} testID="oa-human-message-header">
             <Text style={styles.userLabel}>{label}</Text>
             {actions}
+            <TurnTime timestamp={timestamp} flushToTranscriptEdge />
           </View>
         ) : actions}
         {editing ? (
@@ -427,7 +452,7 @@ const UserMessage = memo(function UserMessage({
 });
 
 const AssistantMessage = memo(function AssistantMessage({
-  text, model, attachments, parts, streaming, author, showHeader, onRegenerate,
+  text, model, attachments, parts, streaming, author, showHeader, timestamp, onRegenerate,
 }: {
   text: string;
   model?: string;
@@ -436,6 +461,7 @@ const AssistantMessage = memo(function AssistantMessage({
   streaming?: boolean;
   author?: MessageAuthor;
   showHeader: boolean;
+  timestamp?: number;
   onRegenerate?: () => void;
 }) {
   const label = author?.display || 'OpenAgent';
@@ -466,7 +492,9 @@ const AssistantMessage = memo(function AssistantMessage({
         <View style={styles.assistantHead} testID="oa-agent-message-header">
           <Text style={styles.assistantLabel} testID="oa-agent-message-label">{label}</Text>
           {model && <Text style={styles.modelText}>· {model}</Text>}
+          <View style={styles.headerSpacer} />
           {actions}
+          <TurnTime timestamp={timestamp} />
         </View>
       ) : actions}
       <View style={[styles.assistantBody, !showHeader && styles.continuationBody]}>
@@ -552,8 +580,8 @@ function CopyButton({ text }: { text: string }) {
 // the agent gave itself. Rendered distinctly so it reads as "the agent set
 // itself this task", not as a human "You" message.
 const SelfPromptBlock = memo(function SelfPromptBlock({
-  text, label,
-}: { text: string; label?: string }) {
+  text, label, timestamp,
+}: { text: string; label?: string; timestamp?: number }) {
   return (
     <View
       style={styles.selfPromptBlock}
@@ -565,12 +593,53 @@ const SelfPromptBlock = memo(function SelfPromptBlock({
         <View style={styles.userHead}>
           <Feather name="target" size={11} color={colors.accent} />
           <Text style={styles.selfPromptLabel}>{(label || 'Mission').toUpperCase()}</Text>
+          <TurnTime timestamp={timestamp} />
         </View>
         <Markdown text={text} />
       </View>
     </View>
   );
 });
+
+function TurnTime({
+  timestamp,
+  flushToTranscriptEdge = false,
+}: {
+  timestamp?: number;
+  flushToTranscriptEdge?: boolean;
+}) {
+  if (timestamp == null) return null;
+  const label = new Date(timestamp).toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return (
+    <Text
+      style={[styles.turnTime, flushToTranscriptEdge && styles.turnTimeFlushRight]}
+      testID="oa-message-turn-time"
+    >
+      {label}
+    </Text>
+  );
+}
+
+function DayDivider({ timestamp }: { timestamp: number }) {
+  const label = new Date(timestamp).toLocaleDateString(undefined, {
+    weekday: 'long',
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+  return (
+    <View
+      style={styles.dayDivider}
+      testID="oa-message-day-divider"
+      accessibilityLabel={`Messages from ${label}`}
+    >
+      <Text style={styles.dayDividerText}>{label}</Text>
+    </View>
+  );
+}
 
 const ToolCard = memo(function ToolCard({
   toolInfo, fallbackText, onOpenMemory, toolInvocationId, durableStatus,
@@ -884,6 +953,18 @@ const styles = StyleSheet.create({
   loadEarlierText: {
     fontSize: 11, color: colors.textMuted, fontFamily: font.mono,
   },
+  dayDivider: {
+    alignSelf: 'center',
+    paddingHorizontal: 10, paddingVertical: 4,
+    marginTop: 12, marginBottom: 6,
+    borderRadius: radius.pill,
+    borderWidth: 1, borderColor: colors.borderLight,
+    backgroundColor: colors.surface,
+  },
+  dayDividerText: {
+    color: colors.textMuted, fontFamily: font.mono,
+    fontSize: 9.5, lineHeight: 13,
+  },
   // User
   userBlock: {
     position: 'relative',
@@ -902,6 +983,14 @@ const styles = StyleSheet.create({
     fontSize: 10, fontWeight: '600', color: colors.primary,
     textTransform: 'uppercase', letterSpacing: 0.8,
   },
+  turnTime: {
+    color: colors.textMuted, fontFamily: font.mono,
+    fontSize: 9.5, lineHeight: 13,
+    marginLeft: 8,
+  },
+  // User bubbles inset their content by 12px. Let only the timestamp reach the
+  // shared transcript edge so human, agent and mission times form one column.
+  turnTimeFlushRight: { marginRight: -12 },
   userText: {
     fontSize: 14, lineHeight: 22, color: colors.text,
     fontWeight: '400',
@@ -972,6 +1061,7 @@ const styles = StyleSheet.create({
   assistantHead: {
     flexDirection: 'row', alignItems: 'center', gap: 2, marginBottom: 6,
   },
+  headerSpacer: { flex: 1 },
   assistantLabel: {
     fontSize: 10, fontWeight: '600', color: colors.primary,
     textTransform: 'uppercase', letterSpacing: 0.8,

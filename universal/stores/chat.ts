@@ -47,11 +47,15 @@ function canonicalMessageToChat(message: SessionMessage): ChatMessage {
   // Feed the server payload straight through the canonical normalizer so
   // additive CAS metadata is never lost while projecting history into chat.
   const attachments = normalizedAttachments(message.attachments);
+  const parsedTimestamp = Date.parse(message.created_at);
   return {
     id: message.id,
     role: message.role,
     text: message.text,
-    timestamp: Date.parse(message.created_at) || Date.now(),
+    // Never manufacture a current time for an old/malformed row. The shared
+    // transcript renderer intentionally hides metadata when no real timestamp
+    // exists.
+    timestamp: Number.isFinite(parsedTimestamp) && parsedTimestamp > 0 ? parsedTimestamp : 0,
     ordinal: message.ordinal,
     durableStatus: message.status,
     completeness: message.completeness,
@@ -692,8 +696,10 @@ interface ChatState {
   createSession: () => string;
   setActiveSession: (id: string) => void;
   removeSession: (id: string) => void;
-  /** Rename a session locally and on the server. */
-  renameSession: (id: string, title: string) => void;
+  /** Rename a session optimistically, rolling back if durable persistence fails. */
+  renameSession: (id: string, title: string) => Promise<void>;
+  /** Apply a server-confirmed title without writing it back. */
+  applySessionTitle: (id: string, title: string) => void;
   /** Populate local sessions from the server's persisted list. */
   hydrateFromServer: (entries: SessionEntry[]) => void;
   /** Mark hydration as done even when the server returned no sessions. */
@@ -860,14 +866,36 @@ export const useChat = create<ChatState>((set, get) => ({
     return { sessions, activeSessionId };
   }),
 
-  renameSession: (id, title) => {
+  renameSession: async (id, rawTitle) => {
+    const title = rawTitle.trim().slice(0, 200);
+    if (!title) throw new Error('A conversation name is required.');
+    const previousTitle = get().sessions.find((session) => session.id === id)?.title;
     set((s) => ({
       sessions: s.sessions.map((se) =>
         se.id !== id ? se : { ...se, title },
       ),
     }));
-    updateSessionMetadata(id, { title }).catch(() => {});
+    try {
+      await updateSessionMetadata(id, { title });
+    } catch (error) {
+      // Do not undo a newer rename that completed while this request was in
+      // flight. Roll back only the optimistic value owned by this attempt.
+      set((s) => ({
+        sessions: s.sessions.map((se) =>
+          se.id !== id || se.title !== title
+            ? se
+            : { ...se, title: previousTitle || 'New Chat' },
+        ),
+      }));
+      throw error;
+    }
   },
+
+  applySessionTitle: (id, title) => set((state) => ({
+    sessions: state.sessions.map((session) =>
+      session.id === id ? { ...session, title } : session,
+    ),
+  })),
 
   hydrateFromServer: (entries) => {
     if (!entries || entries.length === 0) return;

@@ -6,6 +6,7 @@ import { useConnection, directedAccountId, rememberDirectedAccount } from '../st
 import { useChat } from '../stores/chat';
 import { useNavHistory, trailHref } from '../stores/navHistory';
 import { ConfirmProvider } from '../components/ConfirmDialog';
+import { RenameSessionProvider } from '../components/RenameSessionDialog';
 import Header from '../components/Header';
 import { JarvisCanvas } from '../components/jarvis';
 
@@ -180,27 +181,29 @@ export default function RootLayout() {
 
   return (
     <ConfirmProvider>
-      <NavHistoryRecorder />
-      <JarvisCanvas style={styles.root} showBrackets={false} showEdgeTicks={false} showGrid={false}>
-        {/* Window chrome (drag strip + custom traffic-light controls) for
-            frameless Win/Linux only. macOS uses native traffic lights in
-            the sidebar; plain web / native render no chrome. */}
-        {isDesktop && !isMac && <Header />}
-        <Animated.View style={[styles.content, { opacity: fadeAnim }]}>
-          <ThemeProvider value={navDarkTheme}>
-            <Stack
-              screenOptions={{
-                headerShown: false,
-                contentStyle: { backgroundColor: 'transparent' },
-                cardStyle: { backgroundColor: 'transparent' },
-              } as any}
-            >
-              <Stack.Screen name="index" />
-              <Stack.Screen name="(tabs)" />
-            </Stack>
-          </ThemeProvider>
-        </Animated.View>
-      </JarvisCanvas>
+      <RenameSessionProvider>
+        <NavHistoryRecorder />
+        <JarvisCanvas style={styles.root} showBrackets={false} showEdgeTicks={false} showGrid={false}>
+          {/* Window chrome (drag strip + custom traffic-light controls) for
+              frameless Win/Linux only. macOS uses native traffic lights in
+              the sidebar; plain web / native render no chrome. */}
+          {isDesktop && !isMac && <Header />}
+          <Animated.View style={[styles.content, { opacity: fadeAnim }]}>
+            <ThemeProvider value={navDarkTheme}>
+              <Stack
+                screenOptions={{
+                  headerShown: false,
+                  contentStyle: { backgroundColor: 'transparent' },
+                  cardStyle: { backgroundColor: 'transparent' },
+                } as any}
+              >
+                <Stack.Screen name="index" />
+                <Stack.Screen name="(tabs)" />
+              </Stack>
+            </ThemeProvider>
+          </Animated.View>
+        </JarvisCanvas>
+      </RenameSessionProvider>
     </ConfirmProvider>
   );
 }
