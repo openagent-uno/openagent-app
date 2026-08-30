@@ -93,9 +93,9 @@ test('the right drawer stays below Expo Router and is mounted only by detail-cap
   assert.match(drawer, /<NavigationContainer documentTitle=\{\{ enabled: false \}\}>/);
   assert.match(drawer, /defaultStatus=\{isOpen \? 'open' : 'closed'\}/);
   assert.match(drawer, /drawerType: layout\.isPhone \? 'front' : 'permanent'/);
-  assert.match(drawer, /webDrawerWidthTransition\(motionDuration\)/);
+  assert.match(drawer, /webDrawerWidthTransition\(isResizing \? 0 : motionDuration\)/);
   assert.match(drawer, /useRetainedPresence\(/);
-  assert.match(tabsLayout, /webDrawerWidthTransition\(motionDuration\)/);
+  assert.match(tabsLayout, /webDrawerWidthTransition\(isResizing \? 0 : motionDuration\)/);
   assert.match(tabsLayout, /testID="navigation-drawer-content"/);
   assert.match(drawer, /const onNavigate = isPhone \? requestClose : undefined/);
   assert.match(drawer, /Math\.max\(topInset, isPhone \? insets\.top : 0\)/);

@@ -34,6 +34,7 @@ export default function PrimaryButton({
     <TouchableOpacity
       activeOpacity={activeOpacity}
       disabled={disabled}
+      accessibilityRole="button"
       // @ts-ignore web className
       {...(Platform.OS === 'web' ? { className: 'oa-hover-lift' } : {})}
       style={[styles.touchable, disabled && styles.disabled, style]}

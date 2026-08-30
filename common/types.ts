@@ -241,6 +241,7 @@ export type ServerMessage =
   // ``GET /api/sessions/{id}/context``. Clients that don't know it ignore it.
   | { type: 'context_report'; session_id: string; report: SessionContext; seq?: number; ts_ms?: number }
   | { type: 'pong' }
+  | { type: 'agent_identity_changed'; name: string; revision: string }
   // Resource-change ping: a list the desktop app might be showing
   // moved on the server. Subscribed stores refetch on receipt.
   | { type: 'resource_event'; resource: ResourceKind; action: ResourceAction; id?: string }
@@ -1473,6 +1474,17 @@ export interface AgentConfig {
   channels?: Record<string, any>;
   services?: Record<string, any>;
   memory?: { db_path?: string; vault_path?: string };
+}
+
+export interface AgentIdentity {
+  name: string;
+  /** User-defined persona layer, never OpenAgent's framework prompt. */
+  system_prompt: string;
+  revision: string;
+  framework_prompt_mutable: false;
+  restart_required?: boolean;
+  effective?: 'next_turn';
+  changed?: Array<'name' | 'system_prompt'>;
 }
 
 // ── REST API — vault, config ──

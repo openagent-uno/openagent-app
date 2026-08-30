@@ -44,11 +44,17 @@ import { globalSearchAvailable, useSearch } from '../stores/search';
 import { openSearchTarget } from '../services/searchNavigation';
 import { sessionEntryFromActivity } from '../services/api';
 import type { ActivityItem, SearchTarget } from '../../common/unified-history';
-import { historyKindsForFilters } from '../../common/history-feed-policy';
+import {
+  historyKindsForFilters,
+  isTopLevelSidebarActivity,
+  localSessionIdsMissingFromHistory,
+} from '../../common/history-feed-policy';
+import { chatSessionIntent } from '../../common/search-navigation';
 import { useConfirm } from './ConfirmDialog';
 import PopupMenu from './PopupMenu';
 import { useEvents } from '../stores/events';
 import { useUIViews } from '../stores/uiViews';
+import type { UIViewSummary } from '../../common/ui-views';
 import AgentSwitcher from './AgentSwitcher';
 import BrandLogo from './BrandLogo';
 import WindowControls from './WindowControls';
@@ -93,7 +99,7 @@ interface FeedItem {
   label: string;
   ts: number;
   active?: boolean;
-  dotColor?: string | null;
+  statusTone?: 'success' | 'error' | null;
   onPress: () => void;
   // Set only on manual chat rows — deleting (with confirmation) a chat and
   // the sub-agent sessions it spawned. Runs (workflow / scheduled) leave it
@@ -124,7 +130,6 @@ export default function Sidebar({
     return 'chat';
   }, [segments]);
 
-  const navIndex = NAV.findIndex((n) => n.match === activeSeg);
   const searchSupport = useSearch((state) => state.support);
   const searchCapabilities = useSearch((state) => state.capabilities);
   const canSearch = globalSearchAvailable({ support: searchSupport, capabilities: searchCapabilities });
@@ -136,8 +141,8 @@ export default function Sidebar({
   };
 
   const startSession = () => {
-    useChat.getState().createSession();
-    router.push('/chat' as any);
+    const id = useChat.getState().createSession();
+    router.push(chatSessionIntent(id) as any);
     onNavigate?.();
   };
 
@@ -187,88 +192,25 @@ export default function Sidebar({
             onPress={() => useSearch.getState().show()}
             // @ts-ignore web hover
             {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
-            style={[styles.searchRow, styles.newRowFull]}
+            style={styles.searchButton}
             accessibilityRole="button"
             accessibilityLabel="Search"
           >
             <Feather name="search" size={15} color={colors.textSecondary} />
-            <Text style={styles.searchRowText}>Search</Text>
-            {Platform.OS === 'web' ? <Text style={styles.searchShortcut}>⌘P</Text> : null}
           </Pressable>
         ) : null}
       </View>
 
-      {/* ── Workspace nav ── */}
-      <View style={styles.nav}>
-        {NAV.map((item) => {
-          const isActive = navIndex >= 0 && item.match === activeSeg;
-          return (
-            <Pressable
-              key={item.href}
-              onPress={() => go(item.href)}
-              // @ts-ignore web hover
-              {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
-              style={[
-                styles.row,
-                { height: ROW_H, marginBottom: ROW_GAP },
-                styles.rowFull,
-                isActive && styles.rowActive,
-              ]}
-              accessibilityRole="button"
-              accessibilityState={{ selected: isActive }}
-              accessibilityLabel={item.label}
-            >
-              <Feather
-                name={item.icon}
-                size={15}
-                color={isActive ? colors.accent : colors.textSecondary}
-              />
-              <Text
-                style={[styles.rowLabel, isActive && styles.rowLabelActive]}
-                numberOfLines={1}
-              >
-                {item.label}
-              </Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      {/* ── Workspace nav + Views + Recent: one infinite scroller ── */}
+      <RecentFeed
+        activeSeg={activeSeg}
+        activeViewId={routeParams.id}
+        customViews={customViews}
+        onOpenRoute={go}
+        onNavigate={onNavigate}
+      />
 
-      {customViews.length > 0 ? (
-        <FlatList
-          style={styles.viewList}
-          contentContainerStyle={styles.viewListContent}
-          data={customViews}
-          keyExtractor={(item) => item.id}
-          showsVerticalScrollIndicator={false}
-          renderItem={({ item, index }) => {
-            const selected = activeSeg === 'views' && routeParams.id === item.id;
-            const showGroup = !!item.sidebarGroup
-              && customViews[index - 1]?.sidebarGroup !== item.sidebarGroup;
-            return (
-              <View>
-                {showGroup ? <Text style={styles.viewGroup} numberOfLines={1}>{item.sidebarGroup}</Text> : null}
-                <Pressable
-                  onPress={() => go(`/views/${encodeURIComponent(item.id)}`)}
-                  style={[styles.viewRow, selected && styles.viewRowActive]}
-                  accessibilityRole="button"
-                  accessibilityState={{ selected }}
-                  accessibilityLabel={item.title}
-                  {...(Platform.OS === 'web' ? { className: 'oa-side-row' } as any : {})}
-                >
-                  <View style={[styles.viewDot, item.status !== 'active' && styles.viewDotStale]} />
-                  <Text style={[styles.viewText, selected && styles.rowLabelActive]} numberOfLines={1}>{item.title}</Text>
-                </Pressable>
-              </View>
-            );
-          }}
-        />
-      ) : null}
-
-      {/* ── Recent feed ── */}
-      <RecentFeed activeSeg={activeSeg} onNavigate={onNavigate} />
-
-      {/* ── Footer: agent (left) + Settings/System (right) ── */}
+      {/* ── Footer: agent picker + square utility actions ── */}
       <View style={[styles.footer, styles.footerFull]}>
         <View style={styles.footerRule} />
         {isReconnecting && (
@@ -280,16 +222,8 @@ export default function Sidebar({
             <Text style={styles.reconnectText} numberOfLines={1}>Reconnecting…</Text>
           </View>
         )}
-        {/* Two rows, not one. Six things — avatar, agent name, chevron and
-            three action buttons — do not fit across a 220px sidebar: the name is
-            the only flexible item, so it collapsed to 23px and rendered
-            "es…" for "esound-agent" (measured). Which agent you are talking to
-            is the single most important word down here, and the row below it
-            was empty space. */}
-        <View style={styles.footerAgentRow}>
+        <View style={styles.footerActionRow}>
           <AgentSwitcher variant="compact" />
-        </View>
-        <View style={styles.footerRow}>
           <FooterIcon icon="settings" label="Settings" active={activeSeg === 'settings'} onPress={() => go('/settings')} />
           <FooterIcon icon="file-text" label="Logs" active={activeSeg === 'logs'} onPress={() => go('/logs')} />
           <FooterIcon icon="activity" label="System" active={activeSeg === 'system'} onPress={() => go('/system')} />
@@ -327,7 +261,19 @@ function FooterIcon({
 
 // ── Recent activities ──
 
-function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?: () => void }) {
+function RecentFeed({
+  activeSeg,
+  activeViewId,
+  customViews,
+  onOpenRoute,
+  onNavigate,
+}: {
+  activeSeg: string;
+  activeViewId?: string;
+  customViews: UIViewSummary[];
+  onOpenRoute: (href: string) => void;
+  onNavigate?: () => void;
+}) {
   const router = useRouter();
   const segments = useSegments();
   const params = useGlobalSearchParams<{ id?: string }>();
@@ -407,7 +353,7 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
       for (const item of unifiedItems) {
         // Delegated child sessions stay reachable from their parent transcript
         // and from global search, but never become top-level Recent rows.
-        if (item.kind === 'delegated_session') continue;
+        if (!isTopLevelSidebarActivity(item)) continue;
         if (item.kind === 'chat') {
           if (!filters.chat) continue;
         } else if (item.kind === 'workflow_run') {
@@ -423,10 +369,29 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
         );
         if (mapped) items.push(mapped);
       }
+      // The normalized history index only owns durable activity. A new chat
+      // has no durable row until its in-flight turn is committed, but it must
+      // remain navigable while the user visits Settings/Memory/etc. Overlay
+      // those local/live roots and let the durable row replace them by the
+      // same session identity as soon as history_changed arrives.
+      if (filters.chat) {
+        const missingIds = new Set(localSessionIdsMissingFromHistory(sessions, unifiedItems));
+        for (const session of sessions) {
+          if (!missingIds.has(session.id)) continue;
+          items.push(chatFeedItem(
+            session,
+            router,
+            activeSessionId,
+            onChat,
+            onNavigate,
+            () => confirmAndRemove(session.id, session.title || 'New Chat'),
+          ));
+        }
+      }
       // Every v2 page was explicitly requested by the user reaching the end
       // of the feed, so keep it visible. Re-applying the legacy 60-row cap
       // here made subsequent pages load over the network and then disappear.
-      return items;
+      return items.sort((a, b) => b.ts - a.ts);
     }
     if (unifiedSupport !== 'legacy') return items;
     if (filters.chat) {
@@ -434,20 +399,14 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
         // Sub-agent (delegation) sessions are navigable only from their
         // parent's transcript card — never the recent feed.
         if (isHiddenChildSession(s)) continue;
-        items.push({
-          key: `c-${s.id}`,
-          icon: 'message-circle',
-          label: s.title || 'New Chat',
-          ts: toMs(s.lastActiveAt ?? lastMsgTs(s.messages)),
-          active: onChat && s.id === activeSessionId,
-          dotColor: s.isProcessing ? colors.warning : s.hasUnread ? colors.accent : null,
-          onPress: () => {
-            useChat.getState().setActiveSession(s.id);
-            router.push('/chat' as any);
-            onNavigate?.();
-          },
-          onDelete: () => confirmAndRemove(s.id, s.title || 'New Chat'),
-        });
+        items.push(chatFeedItem(
+          s,
+          router,
+          activeSessionId,
+          onChat,
+          onNavigate,
+          () => confirmAndRemove(s.id, s.title || 'New Chat'),
+        ));
       }
     }
     if (filters.workflow) {
@@ -476,41 +435,6 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
 
   return (
     <View style={styles.recent}>
-      <View style={styles.recentDivider} />
-      <View style={styles.recentHeader}>
-        <Text style={styles.recentHeading}>Recent</Text>
-        {/* Same shared PopupMenu as the delete actions — here hosting the
-            multi-select activity filter (toggles stay open; dismiss on scrim). */}
-        <PopupMenu
-          triggerIcon="sliders"
-          triggerSize={13}
-          triggerColor={!allOn ? colors.accent : colors.textMuted}
-          triggerStyle={[styles.filterBtn, !allOn && styles.filterBtnActive]}
-          accessibilityLabel="Filter recent activity"
-          menuWidth={176}
-        >
-          {() => FILTERS.map((f) => (
-            <Pressable
-              key={f.key}
-              onPress={() => setFilter(f.key, !filters[f.key])}
-              style={styles.filterItem}
-              accessibilityRole="checkbox"
-              accessibilityState={{ checked: filters[f.key] }}
-              // @ts-ignore web hover
-              {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
-            >
-              <Feather name={f.icon} size={13} color={colors.textSecondary} />
-              <Text style={styles.filterItemText}>{f.label}</Text>
-              <Feather
-                name={filters[f.key] ? 'check-square' : 'square'}
-                size={14}
-                color={filters[f.key] ? colors.accent : colors.textMuted}
-              />
-            </Pressable>
-          ))}
-        </PopupMenu>
-      </View>
-
       <FlatList
         style={styles.recentScroll}
         contentContainerStyle={styles.recentContent}
@@ -526,6 +450,111 @@ function RecentFeed({ activeSeg, onNavigate }: { activeSeg: string; onNavigate?:
         onEndReached={() => {
           if (unifiedSupport === 'v2') void loadMoreHistory();
         }}
+        ListHeaderComponent={(
+          <View>
+            <View style={styles.nav}>
+              {NAV.map((item) => {
+                const isActive = item.match === activeSeg;
+                return (
+                  <Pressable
+                    key={item.href}
+                    onPress={() => onOpenRoute(item.href)}
+                    // @ts-ignore web hover
+                    {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
+                    style={[
+                      styles.row,
+                      { height: ROW_H, marginBottom: ROW_GAP },
+                      styles.rowFull,
+                      isActive && styles.rowActive,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: isActive }}
+                    accessibilityLabel={item.label}
+                  >
+                    <Feather
+                      name={item.icon}
+                      size={15}
+                      color={isActive ? colors.accent : colors.textSecondary}
+                    />
+                    <Text
+                      style={[styles.rowLabel, isActive && styles.rowLabelActive]}
+                      numberOfLines={1}
+                    >
+                      {item.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            {customViews.length > 0 ? (
+              <View style={styles.viewSection}>
+                {customViews.map((item, index) => {
+                  const selected = activeSeg === 'views' && activeViewId === item.id;
+                  const showGroup = !!item.sidebarGroup
+                    && customViews[index - 1]?.sidebarGroup !== item.sidebarGroup;
+                  return (
+                    <View key={item.id}>
+                      {showGroup ? (
+                        <Text style={styles.viewGroup} numberOfLines={1}>{item.sidebarGroup}</Text>
+                      ) : null}
+                      <Pressable
+                        onPress={() => onOpenRoute(`/views/${encodeURIComponent(item.id)}`)}
+                        style={[styles.viewRow, selected && styles.viewRowActive]}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected }}
+                        accessibilityLabel={item.title}
+                        {...(Platform.OS === 'web' ? { className: 'oa-side-row' } as any : {})}
+                      >
+                        <Feather
+                          name="layout"
+                          size={15}
+                          color={selected ? colors.accent : colors.textSecondary}
+                        />
+                        <Text style={[styles.viewText, selected && styles.rowLabelActive]} numberOfLines={1}>
+                          {item.title}
+                        </Text>
+                      </Pressable>
+                    </View>
+                  );
+                })}
+              </View>
+            ) : null}
+            <View style={styles.recentDivider} />
+            <View style={styles.recentHeader}>
+              <Text style={styles.recentHeading}>Recent</Text>
+              {/* Same shared PopupMenu as the delete actions — here hosting the
+                  multi-select activity filter (toggles stay open; dismiss on scrim). */}
+              <PopupMenu
+                triggerIcon="sliders"
+                triggerSize={13}
+                triggerColor={!allOn ? colors.accent : colors.textMuted}
+                triggerStyle={[styles.filterBtn, !allOn && styles.filterBtnActive]}
+                accessibilityLabel="Filter recent activity"
+                menuWidth={176}
+              >
+                {() => FILTERS.map((f) => (
+                  <Pressable
+                    key={f.key}
+                    onPress={() => setFilter(f.key, !filters[f.key])}
+                    style={styles.filterItem}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked: filters[f.key] }}
+                    // @ts-ignore web hover
+                    {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
+                  >
+                    <Feather name={f.icon} size={13} color={colors.textSecondary} />
+                    <Text style={styles.filterItemText}>{f.label}</Text>
+                    <Feather
+                      name={filters[f.key] ? 'check-square' : 'square'}
+                      size={14}
+                      color={filters[f.key] ? colors.accent : colors.textMuted}
+                    />
+                  </Pressable>
+                ))}
+              </PopupMenu>
+            </View>
+          </View>
+        )}
         ListEmptyComponent={unifiedLoading ? (
           <ActivityIndicator size="small" color={colors.textMuted} style={styles.recentLoader} />
         ) : unifiedError ? (
@@ -550,8 +579,9 @@ function feedKeyExtractor(item: FeedItem): string {
 function renderFeedItem({ item }: { item: FeedItem }) {
   return (
     <View
+      testID={`oa-history-feed-row-${item.key}`}
       // @ts-ignore web hover + entrance
-      {...(Platform.OS === 'web' ? { className: 'oa-side-row oa-fade-in' } : {})}
+      {...(Platform.OS === 'web' ? { className: 'oa-feed-row oa-fade-in' } : {})}
       style={[styles.feedRow, item.active && styles.feedRowActive]}
     >
       <Pressable
@@ -560,13 +590,18 @@ function renderFeedItem({ item }: { item: FeedItem }) {
         accessibilityRole="button"
         accessibilityState={{ selected: !!item.active }}
         accessibilityLabel={item.label}
+        {...(Platform.OS === 'web' ? { className: 'oa-feed-row-control' } : {})}
       >
-        <Feather name={item.icon} size={13} color={item.active ? colors.accent : colors.textMuted} />
+        <Feather
+          name={item.icon}
+          size={15}
+          color={item.active ? colors.accent : colors.textMuted}
+          testID={item.statusTone ? `oa-history-status-icon-${item.statusTone}` : undefined}
+        />
         <Text style={[styles.feedText, item.active && styles.feedTextActive]} numberOfLines={1}>
           {item.label}
         </Text>
         {item.ts ? <Text style={styles.feedMeta}>{relTime(item.ts)}</Text> : null}
-        {item.dotColor ? <View style={[styles.feedDot, { backgroundColor: item.dotColor }]} /> : null}
       </Pressable>
       {item.onDelete ? (
         <PopupMenu
@@ -574,6 +609,7 @@ function renderFeedItem({ item }: { item: FeedItem }) {
           triggerSize={15}
           triggerColor={colors.textMuted}
           triggerStyle={styles.feedMenuBtn}
+          triggerClassName="oa-feed-row-control"
           accessibilityLabel={`Options for ${item.label}`}
           items={[
             { label: 'Delete', icon: 'trash-2', destructive: true, onPress: item.onDelete },
@@ -626,7 +662,7 @@ function runItem(
     label: r.parentName,
     ts: toMs(r.startedAt),
     active: activeRunId === r.id,
-    dotColor: runStatusColor(r.status),
+    statusTone: historyStatusTone(r.status),
     onPress: () => {
       router.push(target as any);
       onNavigate?.();
@@ -675,12 +711,15 @@ function unifiedFeedItem(
   }
   const sessionId = target.kind === 'chat' ? target.session_id : null;
   return {
-    key: `${prefix}-${item.id}`,
+    // A local live overlay and its eventual durable history row represent the
+    // same conversation. Keep one React identity across that hand-off so the
+    // row never flickers or briefly duplicates when persistence catches up.
+    key: sessionId ? `c-session:${sessionId}` : `${prefix}-${item.id}`,
     icon,
     label: item.title,
     ts: Date.parse(item.occurred_at),
     active: sessionId ? onChat && sessionId === activeSessionId : activeRunId === item.resource_id,
-    dotColor: item.live ? colors.warning : item.status ? runStatusColor(item.status) : null,
+    statusTone: item.live ? 'success' : item.status ? historyStatusTone(item.status) : null,
     onPress: () => {
       if (target.kind === 'chat') {
         const entry = sessionEntryFromActivity(item);
@@ -693,11 +732,39 @@ function unifiedFeedItem(
   };
 }
 
-function runStatusColor(status: string): string {
-  if (status === 'success') return colors.success;
-  if (status === 'failed' || status === 'rejected') return colors.error;
-  if (status === 'running' || status === 'received') return colors.warning;
-  return colors.textMuted;
+function chatFeedItem(
+  session: ReturnType<typeof useChat.getState>['sessions'][number],
+  router: ReturnType<typeof useRouter>,
+  activeSessionId: string | null,
+  onChat: boolean,
+  onNavigate?: () => void,
+  onDelete?: () => void,
+): FeedItem {
+  return {
+    key: `c-session:${session.id}`,
+    icon: 'message-circle',
+    label: session.title || 'New Chat',
+    ts: toMs(session.lastActiveAt ?? lastMsgTs(session.messages)),
+    active: onChat && session.id === activeSessionId,
+    statusTone: session.isProcessing || session.hasUnread ? 'success' : null,
+    onPress: () => {
+      useChat.getState().setActiveSession(session.id);
+      router.push(chatSessionIntent(session.id) as any);
+      onNavigate?.();
+    },
+    onDelete,
+  };
+}
+
+function historyStatusTone(status: string): 'success' | 'error' | null {
+  const normalized = status.toLowerCase();
+  if (['failed', 'failure', 'error', 'rejected', 'cancelled', 'canceled', 'timeout', 'timed_out'].includes(normalized)) {
+    return 'error';
+  }
+  if (['success', 'succeeded', 'completed', 'complete', 'running', 'received', 'active', 'processing', 'queued'].includes(normalized)) {
+    return 'success';
+  }
+  return null;
 }
 
 function lastMsgTs(messages: { timestamp: number }[]): number {
@@ -749,7 +816,12 @@ const styles = StyleSheet.create({
   brandFull: { gap: spacing.sm },
 
   // New session row
-  actionGroup: { gap: ROW_GAP, marginBottom: spacing.sm },
+  actionGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginBottom: 0,
+  },
   newRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -758,11 +830,18 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     backgroundColor: colors.primaryLight,
   },
-  newRowFull: { gap: 10, paddingHorizontal: 10, height: ROW_H },
+  newRowFull: { flex: 1, gap: 10, paddingHorizontal: 10, height: ROW_H },
   newRowText: { fontFamily: font.sans, fontSize: 13.5, color: colors.text, fontWeight: '600' },
-  searchRow: { flexDirection: 'row', alignItems: 'center', borderRadius: radius.md },
-  searchRowText: { flex: 1, fontFamily: font.sans, fontSize: 13.5, color: colors.textSecondary, fontWeight: '500' },
-  searchShortcut: { fontFamily: font.mono, fontSize: 9.5, color: colors.textMuted },
+  searchButton: {
+    width: ROW_H,
+    height: ROW_H,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: 'transparent',
+  },
 
   // Nav
   nav: { position: 'relative' },
@@ -771,14 +850,11 @@ const styles = StyleSheet.create({
   rowActive: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
   rowLabel: { fontFamily: font.sans, fontSize: 13.5, color: colors.textSecondary, fontWeight: '500' },
   rowLabelActive: { color: colors.text, fontWeight: '600' },
-  viewList: { maxHeight: 116, marginTop: 2, marginBottom: 2 },
-  viewListContent: { paddingLeft: 17 },
+  viewSection: { marginTop: 2, marginBottom: spacing.sm },
   viewGroup: { paddingHorizontal: 9, paddingTop: 4, paddingBottom: 2, fontFamily: font.sans, fontSize: 8.5, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.7, color: colors.textMuted },
-  viewRow: { height: 27, paddingHorizontal: 9, flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: radius.sm },
-  viewRowActive: { backgroundColor: colors.surface },
-  viewDot: { width: 5, height: 5, borderRadius: 3, backgroundColor: colors.success },
-  viewDotStale: { backgroundColor: colors.textMuted },
-  viewText: { flex: 1, fontFamily: font.sans, fontSize: 11.5, color: colors.textSecondary },
+  viewRow: { height: ROW_H, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', gap: 10, borderRadius: radius.md, marginBottom: ROW_GAP },
+  viewRowActive: { backgroundColor: colors.surface, borderWidth: 1, borderColor: colors.border },
+  viewText: { flex: 1, fontFamily: font.sans, fontSize: 13.5, color: colors.textSecondary, fontWeight: '500' },
 
   // Recent
   recent: { flex: 1, minHeight: 0, marginTop: spacing.sm, position: 'relative' },
@@ -803,6 +879,7 @@ const styles = StyleSheet.create({
   recentError: { fontFamily: font.sans, fontSize: 11.5, lineHeight: 16, color: colors.error, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs },
   recentLoader: { marginVertical: spacing.md },
   feedRow: {
+    height: ROW_H,
     flexDirection: 'row',
     alignItems: 'center',
     borderRadius: radius.md,
@@ -811,21 +888,19 @@ const styles = StyleSheet.create({
   },
   feedRowMain: {
     flex: 1,
+    height: '100%',
     minWidth: 0,
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing.sm,
-    paddingLeft: spacing.sm,
-    paddingRight: spacing.xs,
-    paddingVertical: 4,
+    gap: 10,
+    paddingHorizontal: 10,
   },
   feedRowActive: { backgroundColor: colors.surface, borderColor: colors.border },
-  feedText: { flex: 1, minWidth: 0, fontFamily: font.sans, fontSize: 12.5, color: colors.textSecondary },
+  feedText: { flex: 1, minWidth: 0, fontFamily: font.sans, fontSize: 13.5, color: colors.textSecondary },
   feedTextActive: { color: colors.text, fontWeight: '600' },
   feedMeta: { fontFamily: font.mono, fontSize: 9.5, color: colors.textMuted },
-  feedDot: { width: 6, height: 6, borderRadius: radius.pill },
   feedMenuBtn: {
-    width: 22, height: 22, marginLeft: 2, marginRight: spacing.xs,
+    width: 28, height: 28, marginLeft: 0, marginRight: 2,
     alignItems: 'center', justifyContent: 'center',
     borderRadius: radius.sm,
   },
@@ -843,8 +918,7 @@ const styles = StyleSheet.create({
   reconnectText: {
     fontSize: 11, color: colors.textSecondary, fontFamily: font.mono, letterSpacing: 0.3,
   },
-  footerAgentRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 2 },
-  footerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
-  footerBtn: { width: 36, height: 30, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, borderWidth: 1, borderColor: 'transparent' },
+  footerActionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  footerBtn: { width: ROW_H, height: ROW_H, alignItems: 'center', justifyContent: 'center', borderRadius: radius.md, borderWidth: 1, borderColor: 'transparent' },
   footerBtnActive: { backgroundColor: colors.surface, borderColor: colors.border },
 });

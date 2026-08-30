@@ -18,9 +18,11 @@ export default function AgentSwitcher({ variant }: { variant: Variant }) {
   // panel carries the coordinator-verified routing handle and labels it
   // explicitly, so a saved custom name remains useful without being mistaken
   // for the connection target.
-  const activeName = activePresentation
-    ? activePresentation.alias ?? activePresentation.primary
-    : (agentName || 'Not connected');
+  const activeName = isConnected && agentName
+    ? agentName
+    : activePresentation
+      ? activePresentation.alias ?? activePresentation.primary
+      : 'Not connected';
   const initial = activeName.slice(0, 1).toUpperCase();
   const isElectron = typeof window !== 'undefined' && (window as any).desktop?.isDesktop === true;
   const statusColor = isReconnecting
@@ -95,10 +97,15 @@ export default function AgentSwitcher({ variant }: { variant: Variant }) {
       )}
 
       <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-        <Pressable style={styles.backdrop} onPress={() => setOpen(false)}>
+        <Pressable
+          style={styles.backdrop}
+          onPress={() => setOpen(false)}
+          {...(Platform.OS === 'web' ? ({ dataSet: { oaHover: 'off' } } as any) : {})}
+        >
           <Pressable
             style={styles.modalPanel}
             onPress={(event: any) => event?.stopPropagation?.()}
+            {...(Platform.OS === 'web' ? ({ dataSet: { oaHover: 'off' } } as any) : {})}
           >
             <AgentAccountPanel
               mode={isElectron ? 'open-window' : 'connect'}
@@ -121,7 +128,7 @@ const styles = StyleSheet.create({
   wordmarkRule: { height: 1, backgroundColor: colors.borderLight, width: '70%' },
   compactTrigger: {
     flex: 1, minWidth: 0, flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
-    paddingHorizontal: spacing.xs, paddingVertical: 4, borderRadius: radius.md,
+    height: 32, paddingHorizontal: spacing.xs, borderRadius: radius.md,
   },
   compactAvatar: {
     width: 26, height: 26, borderRadius: radius.pill, backgroundColor: colors.surface,

@@ -45,6 +45,9 @@ export default function CategorySidebar<T extends string>({
               style={[styles.item, isActive && styles.itemActive]}
               onPress={() => onChange(cat.id)}
               activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityState={{ selected: isActive }}
+              accessibilityLabel={cat.label}
             >
               {isActive && <View style={styles.activeBar} />}
               <Feather

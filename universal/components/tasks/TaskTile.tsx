@@ -69,6 +69,7 @@ export default function TaskTile({ task, onToggle, onEdit, onHistory, onRemove, 
       activeOpacity={0.9}
       onPress={onEdit}
       style={[styles.tile, !task.enabled && styles.tileDisabled]}
+      accessibilityRole="button"
       accessibilityLabel={`Open task ${task.name}`}
       // @ts-ignore web-only subtle lift
       {...(Platform.OS === 'web' ? { className: 'oa-hover-lift' } : {})}
@@ -108,7 +109,7 @@ export default function TaskTile({ task, onToggle, onEdit, onHistory, onRemove, 
         ) : null}
 
         <View style={styles.footRow}>
-          <TouchableOpacity onPress={onRemove} style={styles.remove} hitSlop={8}>
+          <TouchableOpacity onPress={onRemove} style={styles.remove} hitSlop={8} accessibilityRole="button">
             <Feather name="trash-2" size={12} color={colors.textMuted} />
             <Text style={styles.removeText}>Remove</Text>
           </TouchableOpacity>
@@ -119,6 +120,7 @@ export default function TaskTile({ task, onToggle, onEdit, onHistory, onRemove, 
                 disabled={busy}
                 style={styles.stopBtn}
                 hitSlop={8}
+                accessibilityRole="button"
                 accessibilityLabel={`Stop ${task.name}`}
               >
                 {busy ? (
@@ -134,6 +136,7 @@ export default function TaskTile({ task, onToggle, onEdit, onHistory, onRemove, 
                 disabled={busy}
                 style={styles.runBtn}
                 hitSlop={8}
+                accessibilityRole="button"
                 accessibilityLabel={`Run ${task.name} now`}
               >
                 {busy ? (
@@ -148,6 +151,7 @@ export default function TaskTile({ task, onToggle, onEdit, onHistory, onRemove, 
               onPress={onHistory}
               style={styles.historyBtn}
               hitSlop={8}
+              accessibilityRole="button"
               accessibilityLabel={`Run history for ${task.name}`}
             >
               <Feather name="clock" size={12} color={colors.textMuted} />

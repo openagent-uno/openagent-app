@@ -1,7 +1,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveChatAnchor, searchNavigationIntent } from '../search-navigation.ts';
+import {
+  chatSessionIntent,
+  resolveChatAnchor,
+  searchNavigationIntent,
+} from '../search-navigation.ts';
+
+test('binds every direct Chat entry to its live session id', () => {
+  assert.deepEqual(chatSessionIntent('session-live'), {
+    pathname: '/chat',
+    params: { session: 'session-live' },
+  });
+});
 
 test('maps every canonical SearchTarget to one existing route', () => {
   const cases = [

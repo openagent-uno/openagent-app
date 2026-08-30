@@ -4,7 +4,7 @@
 
 import type {
   VaultNote, InFileSearchResult,
-  GraphData, AgentConfig, ProviderConfig, ModelsResponse,
+  GraphData, AgentConfig, AgentIdentity, ProviderConfig, ModelsResponse,
   UsageData, ModelCatalogEntry, DailyUsageEntry, ScheduledTask,
   CreateScheduledTaskInput, UpdateScheduledTaskInput, TaskRun, MCPEntry,
   ModelEntry, ModelFramework, AvailableModel,
@@ -141,15 +141,17 @@ function clearTimer(init: RequestInit): void {
 async function responseError(res: Response): Promise<ApiError> {
   const text = await res.text();
   let payload: ApiErrorPayload | undefined;
+  let message: string | undefined;
   try {
-    const decoded = JSON.parse(text) as { error?: ApiErrorPayload };
-    if (decoded?.error?.code && decoded.error.message) payload = decoded.error;
+    const decoded = JSON.parse(text) as { error?: ApiErrorPayload | string };
+    if (typeof decoded?.error === 'string') message = decoded.error;
+    else if (decoded?.error?.code && decoded.error.message) payload = decoded.error;
   } catch {
     // Older gateways return plain text. Preserve it below.
   }
   return new ApiError(
     res.status,
-    payload?.message || `API ${res.status}${text ? `: ${text}` : ''}`,
+    payload?.message || message || `API ${res.status}${text ? `: ${text}` : ''}`,
     payload,
   );
 }
@@ -214,7 +216,7 @@ async function patch<T>(path: string, body: object): Promise<T> {
   }, `PATCH ${path}`);
   try {
     const res = await fetch(`${baseUrl}${path}`, init);
-    if (!res.ok) throw new ApiError(res.status, `API ${res.status}: ${await res.text()}`);
+    if (!res.ok) throw await responseError(res);
     return res.json();
   } finally {
     clearTimer(init);
@@ -898,6 +900,20 @@ export async function updateConfigSection(
   });
   if (!res.ok) throw new ApiError(res.status, `API ${res.status}: ${await res.text()}`);
   return res.json();
+}
+
+/** Read the owner-editable agent identity (not the framework prompt). */
+export async function getAgentIdentity(): Promise<AgentIdentity> {
+  return get<AgentIdentity>('/api/agent/identity');
+}
+
+/** Atomically update the agent name and/or user-defined persona. */
+export async function updateAgentIdentity(data: {
+  name?: string;
+  system_prompt?: string;
+  expected_revision?: string;
+}): Promise<AgentIdentity & { ok: boolean }> {
+  return patch<AgentIdentity & { ok: boolean }>('/api/agent/identity', data);
 }
 
 // ── Control API ──

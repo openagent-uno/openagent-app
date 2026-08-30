@@ -64,6 +64,8 @@ export default function McpTile({ entry, onToggle, onRemove, onPress, style }: P
       onPress={onPress}
       disabled={!onPress}
       style={[styles.tile, !entry.enabled && styles.tileDisabled, style]}
+      accessibilityRole="button"
+      accessibilityLabel={`Open connector ${entry.name}`}
       // @ts-ignore web-only class for subtle lift
       {...(Platform.OS === 'web' ? { className: 'oa-hover-lift' } : {})}
     >
@@ -100,7 +102,7 @@ export default function McpTile({ entry, onToggle, onRemove, onPress, style }: P
 
         <View style={styles.footRow}>
           {onRemove ? (
-            <TouchableOpacity onPress={onRemove} style={styles.remove} hitSlop={8}>
+            <TouchableOpacity onPress={onRemove} style={styles.remove} hitSlop={8} accessibilityRole="button">
               <Feather name="trash-2" size={12} color={colors.textMuted} />
               <Text style={styles.removeText}>Remove</Text>
             </TouchableOpacity>

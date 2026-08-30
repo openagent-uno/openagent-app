@@ -80,7 +80,11 @@ export function ConfirmProvider({ children }: { children: ReactNode }) {
         onRequestClose={() => close(false)}
       >
         <View style={styles.overlay}>
-          <Pressable style={StyleSheet.absoluteFill} onPress={() => close(false)} />
+          <Pressable
+            style={StyleSheet.absoluteFill}
+            onPress={() => close(false)}
+            {...(Platform.OS === 'web' ? ({ dataSet: { oaHover: 'off' } } as any) : {})}
+          />
           <View
             style={styles.dialog}
             // @ts-ignore

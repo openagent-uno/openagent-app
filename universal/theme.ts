@@ -386,19 +386,20 @@ function ensureGlobalCss(): void {
     .oa-msg-in { animation: oa-msg-in 0.42s cubic-bezier(0.16, 1, 0.3, 1) both; }
     .oa-slide-in-x { animation: oa-slide-in-x 0.26s cubic-bezier(0.16, 1, 0.3, 1) both; }
     .oa-pulse { animation: oa-pulse-soft 1.6s ease-in-out infinite; }
-    /* Hover-lift: a 1px float on hover + a subtle press-in on active, so
-       buttons feel tactile. Used app-wide via Button / PrimaryButton. */
-    .oa-hover-lift { transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.18s, border-color 0.18s, background-color 0.18s; }
-    .oa-hover-lift:hover { transform: translateY(-1px); }
-    .oa-hover-lift:active { transform: translateY(0) scale(0.97); transition-duration: 0.08s; }
-    /* Icon buttons (paperclip / mic / message actions): a soft cyan wash
-       on hover and a quick squish on press. */
-    .oa-icon-btn { transition: background-color 0.16s ease, color 0.16s ease, transform 0.12s ease; }
-    .oa-icon-btn:hover { background-color: var(--oa-hover); }
-    .oa-icon-btn:active { transform: scale(0.92); }
-    /* Press-only feedback for tappables that shouldn't lift (e.g. Send). */
-    .oa-press { transition: transform 0.12s ease, opacity 0.16s ease, background-color 0.16s ease; }
-    .oa-press:active { transform: scale(0.92); }
+    /* Shared desktop interaction language. Pointer feedback is always a
+       translucent app-colour surface / border or a text highlight — never a
+       scale transform. Existing call-sites keep these class names so Button,
+       PrimaryButton, tiles, composer controls and message actions all inherit
+       the same behaviour without per-screen hover state. */
+    .oa-hover-lift, .oa-icon-btn, .oa-press, .oa-side-row, .oa-feed-row,
+    [data-testid^="oa-history-feed-row-"], .oa-card-hover {
+      transition: background-color 0.16s ease, border-color 0.16s ease,
+        color 0.16s ease, opacity 0.12s ease, box-shadow 0.16s ease;
+    }
+    .oa-hover-lift:active, .oa-icon-btn:active, .oa-press:active {
+      background-color: var(--oa-primarySoft);
+      opacity: 0.88;
+    }
     /* The chat composer reacts to focus from any child input via
        :focus-within — border brightens and the bar lifts a hair. Crisp,
        no blur glow. */
@@ -406,12 +407,69 @@ function ensureGlobalCss(): void {
     .oa-composer:focus-within { border-color: var(--oa-primary); transform: translateY(-1px); }
     /* Expandable cards (tool calls, delegations): a gentle border/bg lift
        on hover so they read as interactive. */
-    .oa-card-hover { transition: border-color 0.18s ease, background-color 0.18s ease, transform 0.18s ease; }
-    .oa-card-hover:hover { border-color: var(--oa-borderStrong); background-color: var(--oa-hover); }
-    /* Sidebar / list rows: a soft cyan wash on hover, with a quick
-       color transition so nav and recent rows feel responsive. */
-    .oa-side-row { transition: background-color 0.16s ease, color 0.16s ease; border-radius: 8px; }
-    .oa-side-row:hover { background-color: var(--oa-hover); }
+    /* Sidebar / list rows share the same rounded hit surface. */
+    .oa-side-row, .oa-feed-row, [data-testid^="oa-history-feed-row-"] {
+      border-radius: 8px;
+    }
+    @media (hover: hover) and (pointer: fine) {
+      .oa-hover-lift:hover, .oa-icon-btn:hover, .oa-press:hover,
+      .oa-side-row:hover, .oa-feed-row:hover {
+        background-color: var(--oa-hover);
+        border-color: var(--oa-borderStrong);
+      }
+      [data-testid^="oa-history-feed-row-"]:hover {
+        background-color: var(--oa-hover);
+        border-color: transparent;
+      }
+      [data-testid^="oa-history-feed-row-"]:hover
+      [data-testid="oa-history-status-icon-success"] {
+        color: var(--oa-success) !important;
+      }
+      [data-testid^="oa-history-feed-row-"]:hover
+      [data-testid="oa-history-status-icon-error"] {
+        color: var(--oa-error) !important;
+      }
+      .oa-card-hover:hover {
+        border-color: var(--oa-borderStrong);
+        background-color: var(--oa-hover);
+      }
+      /* RN Web does not forward arbitrary className values on every host
+         View. Roles cover accessible controls, while focusable DIVs cover raw
+         Pressable/TouchableOpacity call-sites during the shared-component
+         migration. A translucent background layer preserves existing active,
+         destructive and pill states instead of replacing their geometry. */
+      :where(
+        button:not(:disabled), a[href],
+        [role="button"], [role="link"], [role="menuitem"],
+        [role="checkbox"], [role="radio"], [role="switch"], [role="tab"],
+        div[tabindex="0"]:not([role="separator"])
+      ):not([aria-disabled="true"]):not([data-oa-hover="off"]):hover {
+        background-image: linear-gradient(var(--oa-hover), var(--oa-hover));
+      }
+      /* Recent is one compound row with two semantic controls. The wrapper
+         owns its hover so moving onto the dots never shrinks or doubles the
+         highlighted surface. Keyboard focus remains on each child control. */
+      .oa-feed-row .oa-feed-row-control:hover,
+      [data-testid^="oa-history-feed-row-"] > [role="button"]:hover {
+        background-color: transparent;
+        background-image: none;
+        border-color: transparent;
+      }
+    }
+    .oa-hover-lift:focus-visible, .oa-icon-btn:focus-visible,
+    .oa-press:focus-visible, .oa-side-row:focus-visible,
+    .oa-card-hover:focus-visible {
+      box-shadow: inset 0 0 0 1px var(--oa-borderStrong);
+    }
+    :where(
+      button:not(:disabled), a[href],
+      [role="button"], [role="link"], [role="menuitem"],
+      [role="checkbox"], [role="radio"], [role="switch"], [role="tab"],
+      div[tabindex="0"]:not([role="separator"])
+    ):not([aria-disabled="true"]):not([data-oa-hover="off"]):focus-visible {
+      outline: 1px solid var(--oa-borderStrong);
+      outline-offset: -1px;
+    }
     /* Show on hover: any child with inline opacity:0 inside an
        .oa-row-hover container becomes visible when the row is hovered.
        Used by message actions (Copy / Edit / Regenerate / etc). */
@@ -452,15 +510,21 @@ function ensureGlobalCss(): void {
        ring. The border transition is owned by each field's inline style. */
     input:focus-visible, textarea:focus-visible { box-shadow: none; border-color: var(--oa-primary) !important; }
     button { font-family: inherit; }
+    button, a[href], [role="button"], [role="link"], [role="menuitem"],
+    [role="checkbox"], [role="radio"], [role="switch"], [role="tab"] {
+      cursor: pointer;
+      transition: background-color 0.16s ease, border-color 0.16s ease,
+        color 0.16s ease, box-shadow 0.16s ease;
+    }
+    button:disabled, [aria-disabled="true"] { cursor: default; }
     a { color: var(--oa-primary); text-decoration: none; }
     a:hover { text-decoration: underline; text-shadow: 0 0 6px var(--oa-accentGlow); }
     ::selection { background: var(--oa-primarySoft); color: var(--oa-text); }
-    /* Respect users who ask for less motion — drop entrance animations
-       and interaction transforms, keep functional state changes. */
+    /* Respect users who ask for less motion — drop entrance animations and
+       the remaining functional focus translation. Hover itself is colour-only. */
     @media (prefers-reduced-motion: reduce) {
       .oa-fade-in, .oa-slide-up, .oa-msg-in, .oa-slide-in-x { animation: none !important; }
-      .oa-hover-lift:hover, .oa-hover-lift:active, .oa-icon-btn:active,
-      .oa-press:active, .oa-composer:focus-within { transform: none !important; }
+      .oa-composer:focus-within { transform: none !important; }
     }
   `;
 }

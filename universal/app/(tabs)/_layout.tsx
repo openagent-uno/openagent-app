@@ -16,10 +16,11 @@
  */
 
 import { createDrawerNavigator } from '@react-navigation/drawer';
-import { useRouter, withLayoutContext } from 'expo-router';
-import { useCallback, useEffect } from 'react';
+import { usePathname, useRouter, withLayoutContext } from 'expo-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Platform, View } from 'react-native';
 import Sidebar from '../../components/Sidebar';
+import DrawerResizeHandle from '../../components/DrawerResizeHandle';
 import GlobalSearchOverlay from '../../components/search/GlobalSearchOverlay';
 import { HeaderMenu, themedHeader } from '../../components/screenHeader';
 import { useLayout } from '../../hooks/useLayout';
@@ -32,6 +33,8 @@ import { useConnection } from '../../stores/connection';
 import { useChat } from '../../stores/chat';
 import { globalSearchAvailable, useSearch } from '../../stores/search';
 import { useNavigationSidebar } from '../../stores/navigationSidebar';
+import { useDrawerPreferences } from '../../stores/drawerPreferences';
+import { useSessionDetailsDrawer } from '../../stores/sessionDetailsDrawer';
 import { useUIViews } from '../../stores/uiViews';
 import { openSearchTarget } from '../../services/searchNavigation';
 import type { SearchOpenMetadata } from '../../../common/search-navigation';
@@ -39,6 +42,11 @@ import { sessionEntryFromActivity } from '../../services/api';
 import type { EventCause, SearchTarget } from '../../../common/unified-history';
 import { colors } from '../../theme';
 import { drawerMotionDuration, resolvedDrawerWidth } from '../../../common/drawer-motion';
+import {
+  NAVIGATION_DRAWER_DEFAULT_WIDTH,
+  clampDrawerWidth,
+  responsiveDrawerWidthBounds,
+} from '../../../common/drawer-resize';
 
 const { Navigator } = createDrawerNavigator();
 const Drawer = withLayoutContext(Navigator);
@@ -54,14 +62,31 @@ async function initializeAccountSearch(accountId: string, force = false): Promis
 export default function AppDrawerLayout() {
   const layout = useLayout();
   const router = useRouter();
+  const pathname = usePathname();
   const accountId = useConnection((state) => state.activeAccountId);
   const ws = useConnection((state) => state.ws);
   const wideSidebarOpen = useNavigationSidebar((state) => state.isOpen);
+  const navigationWidth = useDrawerPreferences((state) => state.navigationWidth);
+  const detailsWidth = useDrawerPreferences((state) => state.sessionDetailsWidth);
+  const setNavigationWidth = useDrawerPreferences((state) => state.setNavigationWidth);
+  const sessionDetailsOpen = useSessionDetailsDrawer((state) => state.isOpen);
+  const [isResizing, setIsResizing] = useState(false);
   const reducedMotion = useReducedMotion();
   // Two widths, one toggleable drawer. Wide layouts start open; phones start
   // closed. There is no collapsed icon-only middle stage.
   const permanent = !layout.isPhone;
-  const expandedWidth = permanent ? 244 : 296;
+  const detailsRouteActive = pathname === '/chat' || pathname.startsWith('/runs/');
+  const resizeBounds = useMemo(() => responsiveDrawerWidthBounds(
+    'navigation',
+    layout.width,
+    {
+      otherDrawerOpen: sessionDetailsOpen && detailsRouteActive,
+      otherDrawerWidth: detailsWidth,
+    },
+  ), [detailsRouteActive, detailsWidth, layout.width, sessionDetailsOpen]);
+  const expandedWidth = permanent
+    ? clampDrawerWidth(navigationWidth || NAVIGATION_DRAWER_DEFAULT_WIDTH, resizeBounds)
+    : 296;
   const width = resolvedDrawerWidth(expandedWidth, !permanent, wideSidebarOpen);
   const motionDuration = drawerMotionDuration(reducedMotion);
   const sidebarInertRef = useWebInert(!wideSidebarOpen);
@@ -163,6 +188,16 @@ export default function AppDrawerLayout() {
                       : {})}
                   >
                     <Sidebar />
+                    {wideSidebarOpen && Platform.OS === 'web' ? (
+                      <DrawerResizeHandle
+                        side="left"
+                        width={expandedWidth}
+                        bounds={resizeBounds}
+                        label="Resize navigation sidebar"
+                        onChange={setNavigationWidth}
+                        onResizingChange={setIsResizing}
+                      />
+                    ) : null}
                   </View>
                 )
               : (
@@ -185,7 +220,9 @@ export default function AppDrawerLayout() {
               overflow: 'hidden',
               backgroundColor: 'transparent',
               borderRightWidth: 0,
-              ...(permanent ? webDrawerWidthTransition(motionDuration) : undefined),
+              ...(permanent
+                ? webDrawerWidthTransition(isResizing ? 0 : motionDuration)
+                : undefined),
             },
             overlayColor: 'transparent',
             swipeEnabled: !permanent,
@@ -194,7 +231,11 @@ export default function AppDrawerLayout() {
             // regardless of the drawer width.
             sceneStyle: {
               backgroundColor: colors.bg,
-              borderLeftWidth: permanent && !wideSidebarOpen ? 0 : 1,
+              // On desktop web the resize handle owns the one visible
+              // boundary line. Native/mobile keep the original scene divider.
+              borderLeftWidth: Platform.OS === 'web' && permanent
+                ? 0
+                : permanent && !wideSidebarOpen ? 0 : 1,
               borderLeftColor: colors.borderLight,
             },
           }}

@@ -100,6 +100,7 @@ export default function WorkflowTile({
       activeOpacity={0.9}
       onPress={onEdit}
       style={[styles.tile, !workflow.enabled && styles.tileDisabled]}
+      accessibilityRole="button"
       accessibilityLabel={`Open workflow ${workflow.name}`}
       testID={`workflow-row-${workflow.name}`}
       // @ts-ignore web-only subtle lift
@@ -150,7 +151,7 @@ export default function WorkflowTile({
         {meta ? <Text style={styles.meta} numberOfLines={1}>{meta}</Text> : null}
 
         <View style={styles.footRow}>
-          <TouchableOpacity onPress={onRemove} style={styles.remove} hitSlop={8}>
+          <TouchableOpacity onPress={onRemove} style={styles.remove} hitSlop={8} accessibilityRole="button">
             <Feather name="trash-2" size={12} color={colors.textMuted} />
             <Text style={styles.removeText}>Remove</Text>
           </TouchableOpacity>
@@ -162,6 +163,7 @@ export default function WorkflowTile({
                 style={styles.runBtn}
                 hitSlop={8}
                 testID={`stop-${workflow.name}`}
+                accessibilityRole="button"
                 accessibilityLabel={`Stop the running ${workflow.name}`}
               >
                 {stopping ? (
@@ -179,6 +181,7 @@ export default function WorkflowTile({
                 style={styles.runBtn}
                 hitSlop={8}
                 testID={`run-${workflow.name}`}
+                accessibilityRole="button"
                 accessibilityLabel={`Run ${workflow.name} now`}
               >
                 <Feather name="play" size={12} color={colors.primary} />
@@ -189,6 +192,7 @@ export default function WorkflowTile({
               onPress={onHistory}
               style={styles.historyBtn}
               hitSlop={8}
+              accessibilityRole="button"
               accessibilityLabel={`Run history for ${workflow.name}`}
             >
               <Feather name="clock" size={12} color={colors.textMuted} />

@@ -120,6 +120,7 @@ function CommandPaletteBase({ visible, onClose, entries, placeholder = 'Switch s
         onPress={onClose}
         accessibilityLabel="Close palette"
         activeOpacity={1}
+        {...(Platform.OS === 'web' ? ({ dataSet: { oaHover: 'off' } } as any) : {})}
       />
       <View
         style={styles.panel}

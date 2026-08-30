@@ -75,6 +75,8 @@ import {
 } from '../services/api';
 import { useChat } from '../stores/chat';
 import { useConnection } from '../stores/connection';
+import { useDrawerPreferences } from '../stores/drawerPreferences';
+import { useNavigationSidebar } from '../stores/navigationSidebar';
 import { useSearch } from '../stores/search';
 import {
   useSessionDetailsDrawer,
@@ -90,13 +92,18 @@ import {
   webDrawerWidthTransition,
 } from '../hooks/useDrawerMotion';
 import ContextPanel from './ContextPanel';
+import DrawerResizeHandle from './DrawerResizeHandle';
 import {
   drawerContentRetentionDuration,
   drawerMotionDuration,
   resolvedDrawerWidth,
 } from '../../common/drawer-motion';
+import {
+  SESSION_DETAILS_DRAWER_DEFAULT_WIDTH,
+  clampDrawerWidth,
+  responsiveDrawerWidthBounds,
+} from '../../common/drawer-resize';
 
-const DETAILS_WIDTH = 344;
 const RightDrawer = createDrawerNavigator();
 
 interface RelatedState {
@@ -1723,6 +1730,7 @@ function DrawerContent({
       importantForAccessibility={isOpen ? 'auto' : 'no-hide-descendants'}
       style={[
         styles.drawerSurface,
+        Platform.OS === 'web' && !isPhone && styles.drawerSurfaceResizeBoundary,
         { paddingTop: resolvedTopInset },
         isPhone && { paddingBottom: insets.bottom },
       ]}
@@ -1788,8 +1796,23 @@ export default function SessionDetailsDrawerShell({
 }) {
   const layout = useLayout();
   const isOpen = useSessionDetailsDrawer((state) => state.isOpen);
+  const detailsWidth = useDrawerPreferences((state) => state.sessionDetailsWidth);
+  const navigationWidth = useDrawerPreferences((state) => state.navigationWidth);
+  const setDetailsWidth = useDrawerPreferences((state) => state.setSessionDetailsWidth);
+  const navigationOpen = useNavigationSidebar((state) => state.isOpen);
+  const [isResizing, setIsResizing] = useState(false);
   const reducedMotion = useReducedMotion();
-  const expandedWidth = Math.min(DETAILS_WIDTH, Math.max(280, layout.width * 0.88));
+  const resizeBounds = useMemo(() => responsiveDrawerWidthBounds(
+    'session-details',
+    layout.width,
+    { otherDrawerOpen: navigationOpen, otherDrawerWidth: navigationWidth },
+  ), [layout.width, navigationOpen, navigationWidth]);
+  const expandedWidth = layout.isPhone
+    ? Math.min(
+        SESSION_DETAILS_DRAWER_DEFAULT_WIDTH,
+        Math.max(280, layout.width * 0.88),
+      )
+    : clampDrawerWidth(detailsWidth || SESSION_DETAILS_DRAWER_DEFAULT_WIDTH, resizeBounds);
   const motionDuration = drawerMotionDuration(reducedMotion);
   const width = resolvedDrawerWidth(expandedWidth, layout.isPhone, isOpen);
   const contentPresent = useRetainedPresence(
@@ -1803,7 +1826,19 @@ export default function SessionDetailsDrawerShell({
           <RightDrawer.Navigator
             defaultStatus={isOpen ? 'open' : 'closed'}
             drawerContent={() => (
-              <DrawerContent topInset={topInset} present={contentPresent} />
+              <View style={styles.drawerHost}>
+                <DrawerContent topInset={topInset} present={contentPresent} />
+                {!layout.isPhone && isOpen && Platform.OS === 'web' ? (
+                  <DrawerResizeHandle
+                    side="right"
+                    width={expandedWidth}
+                    bounds={resizeBounds}
+                    label="Resize session details drawer"
+                    onChange={setDetailsWidth}
+                    onResizingChange={setIsResizing}
+                  />
+                ) : null}
+              </View>
             )}
             screenOptions={{
               headerShown: false,
@@ -1815,7 +1850,7 @@ export default function SessionDetailsDrawerShell({
                 backgroundColor: 'transparent',
                 borderLeftWidth: 0,
                 ...(!layout.isPhone
-                  ? webDrawerWidthTransition(motionDuration)
+                  ? webDrawerWidthTransition(isResizing ? 0 : motionDuration)
                   : undefined),
               },
               sceneStyle: { backgroundColor: colors.bg },
@@ -1834,12 +1869,14 @@ export default function SessionDetailsDrawerShell({
 
 const styles = StyleSheet.create({
   workspace: { flex: 1 },
+  drawerHost: { flex: 1, position: 'relative' },
   drawerSurface: {
     flex: 1,
     backgroundColor: colors.sidebar,
     borderLeftWidth: 1,
     borderLeftColor: colors.borderLight,
   },
+  drawerSurfaceResizeBoundary: { borderLeftWidth: 0 },
   root: { flex: 1 },
   topBar: {
     minHeight: 74,

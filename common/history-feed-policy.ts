@@ -33,6 +33,59 @@ export function historyKindsForFilters(filters: HistoryFeedFilters): ActivityKin
   return kinds;
 }
 
+const HIDDEN_CHILD_ACTIVITY_ORIGINS = new Set([
+  'delegation', 'scheduler', 'workflow', 'event',
+]);
+
+/**
+ * Only first-class roots belong in the flat Recent feed. Child sessions stay
+ * searchable and navigable from their parent/run screen, but must not consume
+ * a second top-level row. The origin/parent guards protect mixed-version data
+ * where a delegated session may temporarily arrive with kind="chat".
+ */
+export function isTopLevelSidebarActivity(item: ActivityItem): boolean {
+  if (item.kind === 'delegated_session') return false;
+  if (item.kind !== 'chat') return true;
+  if (item.origin && HIDDEN_CHILD_ACTIVITY_ORIGINS.has(item.origin)) return false;
+  return item.parent?.kind !== 'session';
+}
+
+export interface LocalHistorySession {
+  id: string;
+  origin?: string;
+  parentSessionId?: string;
+}
+
+/**
+ * History v2 is durable by design, so a brand-new turn does not necessarily
+ * have a row there until its first run is committed. The client store is the
+ * authority for that short live window. Return top-level local sessions that
+ * are not represented by the current history page, so Recent keeps the active
+ * conversation reachable while its assistant reply is still streaming.
+ *
+ * The overlay is deliberately identity-only: the Sidebar reads presentation
+ * state (title, processing dot, timestamp) from the live ChatSession itself.
+ */
+export function localSessionIdsMissingFromHistory(
+  sessions: readonly LocalHistorySession[],
+  history: readonly ActivityItem[],
+): string[] {
+  const durableIds = new Set<string>();
+  for (const item of history) {
+    if (item.kind !== 'chat' && item.kind !== 'delegated_session') continue;
+    const sessionId = item.session_id || item.resource_id;
+    if (sessionId) durableIds.add(sessionId);
+  }
+
+  return sessions
+    .filter((session) => {
+      if (durableIds.has(session.id)) return false;
+      if (session.parentSessionId) return false;
+      return !session.origin || !HIDDEN_CHILD_ACTIVITY_ORIGINS.has(session.origin);
+    })
+    .map((session) => session.id);
+}
+
 export function normalizeHistoryKinds(kinds: readonly ActivityKind[]): ActivityKind[] {
   const selected = new Set(kinds);
   return ORDERED_ACTIVITY_KINDS.filter((kind) => selected.has(kind));

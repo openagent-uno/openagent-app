@@ -301,7 +301,12 @@ function AttachmentPreview({ attachment, onClose }: {
       onRequestClose={onClose}
     >
       <View style={styles.previewOverlay}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} accessibilityLabel="Close preview" />
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={onClose}
+          accessibilityLabel="Close preview"
+          {...(Platform.OS === 'web' ? ({ dataSet: { oaHover: 'off' } } as any) : {})}
+        />
         {attachment && (
           <View style={[styles.previewPanel, { height: panelH }]}>
             <View style={styles.previewHead}>

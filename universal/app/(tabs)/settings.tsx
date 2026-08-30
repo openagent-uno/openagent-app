@@ -92,7 +92,14 @@ export default function SettingsScreen() {
   const router = useRouter();
   const headerInset = useHeaderInset();
   const { agentName, agentVersion, config: connConfig, activeAccountId, accounts, disconnect, removeAccount } = useConnection();
-  const { config: agentConfig, loadConfig, updateSection } = useConfig();
+  const {
+    config: agentConfig,
+    identityError,
+    identityLoading,
+    loadConfig,
+    updateSection,
+    updateIdentity,
+  } = useConfig();
   const voiceCfg = useVoiceConfig((s) => s.config);
   const setVoiceCfg = useVoiceConfig((s) => s.setConfig);
   const resetVoiceCfg = useVoiceConfig((s) => s.reset);
@@ -144,7 +151,7 @@ export default function SettingsScreen() {
     if (connConfig) {
       loadConfig();
     }
-  }, [connConfig]);
+  }, [connConfig, loadConfig]);
 
   useEffect(() => {
     if (!agentConfig) return;
@@ -198,6 +205,14 @@ export default function SettingsScreen() {
     const ok = await updateSection(section, data);
     if (ok) {
       setSaved(label);
+      setTimeout(() => setSaved(null), 3000);
+    }
+  };
+
+  const saveIdentity = async () => {
+    const identity = await updateIdentity(name, systemPrompt);
+    if (identity) {
+      setSaved('identity');
       setTimeout(() => setSaved(null), 3000);
     }
   };
@@ -301,8 +316,14 @@ export default function SettingsScreen() {
         <SaveBtn
           label="Save Identity"
           saved={saved === 'identity'}
-          onPress={() => saveSection('name', name, 'identity').then(() => saveSection('system_prompt', systemPrompt, 'identity'))}
+          busy={identityLoading}
+          onPress={saveIdentity}
         />
+        {!!identityError && (
+          <Text style={[styles.fieldHint, { color: colors.error, marginTop: 8 }]}>
+            {identityError}
+          </Text>
+        )}
       </Card>
     </>
   );
@@ -844,12 +865,23 @@ function VoiceField({
   );
 }
 
-function SaveBtn({ label, saved, onPress }: { label: string; saved: boolean; onPress: () => void }) {
+function SaveBtn({
+  label,
+  saved,
+  busy = false,
+  onPress,
+}: {
+  label: string;
+  saved: boolean;
+  busy?: boolean;
+  onPress: () => void;
+}) {
   return (
     <Button
       variant="primary"
-      label={saved ? 'Saved' : label}
+      label={busy ? 'Saving…' : saved ? 'Saved' : label}
       icon={saved ? 'check' : undefined}
+      disabled={busy}
       onPress={onPress}
       style={styles.saveBtn}
       fullWidth

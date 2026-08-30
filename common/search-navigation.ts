@@ -6,6 +6,16 @@ export interface SearchNavigationIntent {
   params: Record<string, string>;
 }
 
+/**
+ * Every route into Chat carries the session identity. A bare `/chat` route is
+ * ambiguous once React Navigation keeps multiple Chat entries in its stack:
+ * returning from Settings can otherwise restore an older route parameter and
+ * hide a newer turn that is still streaming in memory.
+ */
+export function chatSessionIntent(sessionId: string): SearchNavigationIntent {
+  return { pathname: '/chat', params: { session: sessionId } };
+}
+
 /** Presentation metadata that lets Chat replace a lazy search-result stub
  * with the canonical title without loading any message content eagerly. */
 export interface SearchOpenMetadata {
@@ -91,7 +101,7 @@ export function searchNavigationIntent(
 ): SearchNavigationIntent {
   switch (target.kind) {
     case 'chat':
-      return { pathname: '/chat', params: { session: target.session_id } };
+      return chatSessionIntent(target.session_id);
     case 'chat_message':
       return {
         pathname: '/chat',

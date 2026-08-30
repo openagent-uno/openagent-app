@@ -52,6 +52,9 @@ export default function SectionTabs<T extends string>({
               activeOpacity={0.75}
               onPress={() => onChange(tab.id)}
               style={[styles.tab, isActive && styles.tabActive]}
+              accessibilityRole="tab"
+              accessibilityState={{ selected: isActive }}
+              accessibilityLabel={tab.label}
             >
               <Feather
                 name={tab.icon}

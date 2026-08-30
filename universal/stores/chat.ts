@@ -338,30 +338,112 @@ function hasOpenLocalTurn(session: ChatSession): boolean {
   return false;
 }
 
+type ToolPhase = ReturnType<typeof toolPhase>;
+
+const TOOL_PHASE_PRECEDENCE: Record<ToolPhase, number> = {
+  running: 0,
+  completed: 1,
+  stopped: 2,
+  error: 3,
+};
+
+/**
+ * Merge a later wire frame without letting an out-of-order, weaker lifecycle
+ * state reopen a terminal tool call. Metadata is still additive (for example
+ * a late started frame may carry args or execution_host), while error/stopped
+ * states remain sticky and may correct an earlier optimistic completion.
+ */
+function mergeToolLifecycle(existing: ToolInfo, incoming: ToolInfo): ToolInfo {
+  const existingPhase = toolPhase(existing);
+  const incomingPhase = toolPhase(incoming);
+  const merged: ToolInfo = { ...existing, ...incoming };
+
+  if (TOOL_PHASE_PRECEDENCE[incomingPhase] >= TOOL_PHASE_PRECEDENCE[existingPhase]) {
+    return merged;
+  }
+
+  // These three fields determine toolPhase and the terminal card copy. When
+  // the stronger frame omitted one of them, remove the weaker frame's value
+  // instead of accidentally manufacturing a contradictory hybrid state.
+  for (const key of ['status', 'tool_call_error', 'result'] as const) {
+    if (Object.prototype.hasOwnProperty.call(existing, key)) {
+      merged[key] = existing[key];
+    } else {
+      delete merged[key];
+    }
+  }
+  return merged;
+}
+
 export function appendOrPatchTool(messages: ChatMessage[], toolInfo: ToolInfo): ChatMessage[] {
   const phase = toolPhase(toolInfo);
   const msgs = [...messages];
   const callId = toolInfo.tool_call_id;
   const childSid = toolInfo.child_session_id;
+  // Provider tool-call ids identify an invocation inside a model turn; they
+  // are not guaranteed to be unique for the lifetime of a long session.  A
+  // new turn may therefore legitimately reuse an old id. Restrict live-frame
+  // reconciliation to the open/current turn (everything after its latest
+  // user/seed message) so idempotency can never rewrite durable history.
+  let currentTurnStart = 0;
+  for (let i = msgs.length - 1; i >= 0; i -= 1) {
+    if (msgs[i].role !== 'user') continue;
+    currentTurnStart = i + 1;
+    break;
+  }
   const matches = (existing: ToolInfo): boolean => {
     if (callId && existing.tool_call_id) return existing.tool_call_id === callId;
     if (childSid && existing.child_session_id) return existing.child_session_id === childSid;
     return existing.tool_name === toolInfo.tool_name;
   };
 
-  for (let i = msgs.length - 1; i >= 0; i--) {
+  // tool_call_id is the stable identity of one invocation. Patch it for every
+  // phase, not just running -> terminal: a gateway retry, reconnect, or an
+  // older server that emits both completed and error must still render one
+  // card. If an earlier client update already left duplicates in memory,
+  // collapse them at the first subsequent frame while keeping the original
+  // row/id (and therefore the invocation's place in transcript order).
+  if (callId) {
+    const indexes: number[] = [];
+    for (let i = currentTurnStart; i < msgs.length; i += 1) {
+      if (msgs[i].toolInfo?.tool_call_id === callId) indexes.push(i);
+    }
+    if (indexes.length > 0) {
+      const keep = indexes[0];
+      let merged = msgs[keep].toolInfo!;
+      for (let i = 1; i < indexes.length; i += 1) {
+        merged = mergeToolLifecycle(merged, msgs[indexes[i]].toolInfo!);
+      }
+      merged = mergeToolLifecycle(merged, toolInfo);
+      const duplicates = new Set(indexes.slice(1));
+      return msgs
+        .filter((_, index) => !duplicates.has(index))
+        .map((message, index) => (
+          index === keep ? { ...message, toolInfo: merged } : message
+        ));
+    }
+  }
+
+  // child_session_id is also a stable identity when a legacy frame omitted a
+  // call id. Treat it idempotently, but do not deduplicate by tool name alone:
+  // same-name invocations may legitimately execute concurrently.
+  if (!callId && childSid) {
+    for (let i = msgs.length - 1; i >= currentTurnStart; i--) {
+      const existing = msgs[i].toolInfo;
+      if (existing?.child_session_id !== childSid) continue;
+      msgs[i] = { ...msgs[i], toolInfo: mergeToolLifecycle(existing, toolInfo) };
+      return msgs;
+    }
+  }
+
+  for (let i = msgs.length - 1; i >= currentTurnStart; i--) {
     const existing = msgs[i].toolInfo;
     if (!existing) continue;
-    if (phase === 'running') {
-      if (callId && existing.tool_call_id === callId) {
-        msgs[i] = { ...msgs[i], toolInfo: { ...existing, ...toolInfo } };
-        return msgs;
-      }
-    } else if (matches(existing) && toolPhase(existing) === 'running') {
+    if (phase !== 'running' && matches(existing) && toolPhase(existing) === 'running') {
       // Completion/error frames may be intentionally sparse. Preserve the
       // identity and execution boundary learned from the started frame while
       // letting every field the terminal frame does carry win.
-      msgs[i] = { ...msgs[i], toolInfo: { ...existing, ...toolInfo } };
+      msgs[i] = { ...msgs[i], toolInfo: mergeToolLifecycle(existing, toolInfo) };
       return msgs;
     }
   }
@@ -705,6 +787,10 @@ export const useChat = create<ChatState>((set, get) => ({
       title: 'New Chat',
       messages: [],
       isProcessing: false,
+      // An empty local session is not in durable history yet. Give it real
+      // recency immediately so the v2 Sidebar overlay keeps it visible at the
+      // top instead of sorting its timestamp-less row below the loaded page.
+      lastActiveAt: Math.floor(Date.now() / 1000),
     };
     set((s) => ({
       sessions: [...s.sessions, session],

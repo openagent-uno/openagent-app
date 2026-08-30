@@ -1160,6 +1160,17 @@ function _openWebsocket(
         if (!isCurrent() || !get().isConnected) return;
         useChat.getState().settleStaleTurns(attachedAt);
       }, STALE_TURN_GRACE_MS);
+    } else if (msg.type === 'agent_identity_changed') {
+      if (!isCurrent()) return;
+      // A profile update can originate in Settings or from agent-manager.
+      // The server deliberately omits the persona text from this broadcast.
+      set({ agentName: msg.name });
+      // Settings owns the owner-scoped persona text and optimistic revision;
+      // reconcile them from REST instead of putting private prompt content on
+      // a broadcast frame received by every connected client.
+      void import('./config').then(({ useConfig }) => {
+        void useConfig.getState().loadConfig();
+      }).catch(() => {});
     } else if (msg.type === 'auth_error') {
       finalize();
       if (!isCurrent()) return;

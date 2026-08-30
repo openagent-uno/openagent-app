@@ -19,7 +19,7 @@ import {
 import type { Attachment } from '../../../common/types';
 import { runRoutePath, type RunLaunchTarget, type MemoryTarget } from '../../../common/types';
 import { attachmentsForSend } from '../../../common/attachments';
-import { resolveChatAnchor } from '../../../common/search-navigation';
+import { chatSessionIntent, resolveChatAnchor } from '../../../common/search-navigation';
 import { useConnection } from '../../stores/connection';
 import { useChat } from '../../stores/chat';
 import { useEvents } from '../../stores/events';
@@ -364,6 +364,15 @@ export default function ChatScreen() {
   // session. Guard with a ref so this one-way application never ping-pongs
   // with the store's own ``setActiveSession`` → URL update.
   const appliedParamRef = useRef<string | null>(null);
+  const startNewSession = useCallback(() => {
+    const id = createSession();
+    // Commit both sources of navigation truth together. The store keeps the
+    // live transcript while Chat is unmounted; the route makes that exact
+    // transcript reachable again when returning from Settings or another tab.
+    appliedParamRef.current = id;
+    routerRef.current.push(chatSessionIntent(id) as any);
+    return id;
+  }, [createSession]);
   useEffect(() => {
     const want = typeof routeParams.session === 'string' ? routeParams.session : undefined;
     if (!want) {
@@ -787,7 +796,7 @@ export default function ChatScreen() {
       // Cmd/Ctrl+K — new chat session.
       if (mod && !e.shiftKey && !e.altKey && (e.key === 'k' || e.key === 'K')) {
         e.preventDefault();
-        createSession();
+        startNewSession();
         return;
       }
 
@@ -814,7 +823,7 @@ export default function ChatScreen() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [createSession]);
+  }, [startNewSession]);
 
   // Switch the LLM pin for the active session. We must close the WS
   // session so the next sendMessage re-opens it with the new pin —
@@ -832,7 +841,7 @@ export default function ChatScreen() {
     // model, the menu closed, the chip stayed on "Auto" and nothing said
     // why. Picking a model IS an intent to start a conversation, so create
     // the session and pin it — the same gesture the user thought they made.
-    const sessionId = activeSessionId ?? createSession();
+    const sessionId = activeSessionId ?? startNewSession();
     if (!sessionId) return;
     const previous = sessions.find((s) => s.id === sessionId)?.llmPin;
     setLlmPin(sessionId, modelId);
@@ -855,7 +864,7 @@ export default function ChatScreen() {
         if (ws) ws.sendSessionClose(sessionId);
       }
     })();
-  }, [ws, activeSessionId, sessions, setLlmPin, createSession]);
+  }, [ws, activeSessionId, sessions, setLlmPin, startNewSession]);
 
   // Reconcile the chip with the server's pin whenever a session becomes
   // active: it may have been pinned from another client, or by a `/model`
@@ -1318,7 +1327,7 @@ export default function ChatScreen() {
     {
       name: 'new',
       description: 'Start a new chat',
-      action: () => createSession(),
+      action: startNewSession,
     },
     {
       name: 'clear',

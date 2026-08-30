@@ -339,6 +339,7 @@ export default function GlobalSearchOverlayShared({ platform, onOpenTarget }: Pr
           onPress={() => state.hide()}
           accessibilityRole="button"
           accessibilityLabel="Close search"
+          {...(Platform.OS === 'web' ? ({ dataSet: { oaHover: 'off' } } as any) : {})}
         />
         <BlurView
           intensity={2.6}

@@ -69,6 +69,7 @@ export default function EventTile({
       activeOpacity={0.9}
       onPress={onEdit}
       style={[styles.tile, !event.enabled && styles.tileDisabled]}
+      accessibilityRole="button"
       accessibilityLabel={`Open event ${event.name}`}
       // @ts-ignore web-only subtle lift
       {...(Platform.OS === 'web' ? { className: 'oa-hover-lift' } : {})}
@@ -109,7 +110,7 @@ export default function EventTile({
         </Text>
 
         <View style={styles.footRow}>
-          <TouchableOpacity onPress={onRemove} style={styles.remove} hitSlop={8}>
+          <TouchableOpacity onPress={onRemove} style={styles.remove} hitSlop={8} accessibilityRole="button">
             <Feather name="trash-2" size={12} color={colors.textMuted} />
             <Text style={styles.removeText}>Remove</Text>
           </TouchableOpacity>
@@ -119,6 +120,7 @@ export default function EventTile({
               disabled={busy}
               style={styles.runBtn}
               hitSlop={8}
+              accessibilityRole="button"
               accessibilityLabel={`Send a test delivery to ${event.name}`}
             >
               {busy ? (
@@ -132,6 +134,7 @@ export default function EventTile({
               onPress={onHistory}
               style={styles.historyBtn}
               hitSlop={8}
+              accessibilityRole="button"
               accessibilityLabel={`Delivery history for ${event.name}`}
             >
               <Feather name="clock" size={12} color={colors.textMuted} />

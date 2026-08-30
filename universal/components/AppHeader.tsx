@@ -11,14 +11,15 @@ import { View, Text, Pressable, StyleSheet, Platform } from 'react-native';
 import Feather from '@expo/vector-icons/Feather';
 import { useRouter } from 'expo-router';
 import { useChat } from '../stores/chat';
+import { chatSessionIntent } from '../../common/search-navigation';
 import { colors, font, radius, spacing } from '../theme';
 
 export default function AppHeader({ onMenu }: { onMenu: () => void }) {
   const router = useRouter();
 
   const newSession = () => {
-    useChat.getState().createSession();
-    router.push('/chat' as any);
+    const id = useChat.getState().createSession();
+    router.push(chatSessionIntent(id) as any);
   };
 
   return (

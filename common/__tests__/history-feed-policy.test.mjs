@@ -5,6 +5,8 @@ import {
   historyCoversAllKinds,
   historyKindsForFilters,
   historyRequestKey,
+  isTopLevelSidebarActivity,
+  localSessionIdsMissingFromHistory,
   mergeBoundedHistory,
   sessionDiscoveryStrategy,
 } from '../history-feed-policy.ts';
@@ -39,6 +41,38 @@ test('maps sidebar filters to canonical server kinds', () => {
     historyKindsForFilters({ chat: false, workflow: false, task: false, event: false }),
     [],
   );
+});
+
+test('flat Recent hides child sessions but keeps every first-class run', () => {
+  const base = item('root', '2026-01-03T00:00:00Z');
+  assert.equal(isTopLevelSidebarActivity(base), true);
+  assert.equal(isTopLevelSidebarActivity({ ...base, kind: 'delegated_session' }), false);
+  assert.equal(isTopLevelSidebarActivity({ ...base, origin: 'delegation' }), false);
+  assert.equal(isTopLevelSidebarActivity({
+    ...base,
+    parent: { kind: 'session', id: 'parent', title: 'Parent' },
+  }), false);
+  for (const kind of ['workflow_run', 'scheduled_run', 'event_delivery']) {
+    assert.equal(isTopLevelSidebarActivity({ ...base, kind }), true);
+  }
+});
+
+test('v2 Recent overlays unpersisted live chats without duplicating durable rows', () => {
+  const durable = item('activity-durable', '2026-01-03T00:00:00Z');
+  durable.session_id = 'session-durable';
+  const delegated = {
+    ...item('activity-child', '2026-01-03T00:00:00Z'),
+    kind: 'delegated_session',
+    session_id: 'session-child-indexed',
+  };
+
+  assert.deepEqual(localSessionIdsMissingFromHistory([
+    { id: 'session-live' },
+    { id: 'session-durable' },
+    { id: 'session-child', origin: 'delegation', parentSessionId: 'session-parent' },
+    { id: 'session-child-indexed', origin: 'delegation' },
+    { id: 'scheduler:run', origin: 'scheduler' },
+  ], [durable, delegated]), ['session-live']);
 });
 
 test('pagination deduplicates, sorts and caps retained history', () => {

@@ -51,6 +51,7 @@ export default function PopupMenu({
   align = 'right',
   menuWidth = DEFAULT_MENU_WIDTH,
   stopPropagation = true,
+  triggerClassName,
 }: {
   /** Action rows — each closes the menu then runs ``onPress``. Omit when
    *  passing ``children`` for fully custom content (e.g. multi-select
@@ -72,6 +73,9 @@ export default function PopupMenu({
   /** Stop the open-press from bubbling to a parent Pressable (e.g. a list
    *  row that would otherwise navigate). Default true. */
   stopPropagation?: boolean;
+  /** Optional web interaction class. Defaults to the shared row hover; list
+   *  rows can supply a child-control class when their parent owns the hover. */
+  triggerClassName?: string;
 }) {
   const triggerRef = useRef<View>(null);
   const [anchor, setAnchor] = useState<Anchor | null>(null);
@@ -116,13 +120,20 @@ export default function PopupMenu({
         accessibilityRole="button"
         accessibilityLabel={accessibilityLabel}
         // @ts-ignore web hover
-        {...(Platform.OS === 'web' ? { className: 'oa-side-row' } : {})}
+        {...(Platform.OS === 'web'
+          ? { className: triggerClassName || 'oa-side-row' }
+          : {})}
       >
         <Feather name={triggerIcon} size={triggerSize} color={triggerColor} />
       </Pressable>
 
       <Modal visible={!!anchor} transparent animationType="none" onRequestClose={close}>
-        <Pressable style={styles.scrim} onPress={close} accessibilityLabel="Dismiss menu" />
+        <Pressable
+          style={styles.scrim}
+          onPress={close}
+          accessibilityLabel="Dismiss menu"
+          {...(Platform.OS === 'web' ? ({ dataSet: { oaHover: 'off' } } as any) : {})}
+        />
         {menuPos && (
           <View style={[styles.menu, menuPos, glassStyle]}>
             {children

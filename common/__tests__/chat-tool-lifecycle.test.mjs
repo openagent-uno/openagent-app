@@ -43,9 +43,20 @@ const bundle = await build({
 });
 
 const bundledSource = bundle.outputFiles[0].text;
-const { appendOrPatchTool, preserveToolMetadataAcrossReplay } = await import(
+const { appendOrPatchTool, preserveToolMetadataAcrossReplay, useChat } = await import(
   `data:text/javascript;base64,${Buffer.from(bundledSource).toString('base64')}`
 );
+
+test('a new local chat has recency before its first durable history row exists', () => {
+  useChat.setState({ sessions: [], activeSessionId: null, sessionsHydrated: true });
+  const before = Math.floor(Date.now() / 1000);
+  const id = useChat.getState().createSession();
+  const session = useChat.getState().sessions.find((entry) => entry.id === id);
+
+  assert.equal(useChat.getState().activeSessionId, id);
+  assert.ok(session);
+  assert.ok(session.lastActiveAt >= before);
+});
 
 test('a sparse terminal frame preserves execution host from the started frame', () => {
   const executionHost = {
@@ -85,6 +96,164 @@ test('a sparse terminal frame preserves execution host from the started frame', 
   assert.equal(patched[0].toolInfo.result, 'written');
   assert.equal(patched[0].toolInfo.status, 'success');
   assert.equal(messages[0].toolInfo.result, undefined);
+});
+
+test('an error after completion corrects the same tool card instead of duplicating it', () => {
+  const messages = [{
+    id: 'tool-message-1',
+    role: 'tool',
+    text: 'Creating view',
+    timestamp: 1,
+    toolInfo: {
+      tool_name: 'ui_create_view',
+      tool_call_id: 'call-create-view',
+      tool_args: { title: 'Release smoke' },
+      status: 'running',
+    },
+  }];
+
+  const completed = appendOrPatchTool(messages, {
+    tool_name: 'ui_create_view',
+    tool_call_id: 'call-create-view',
+    result: 'view created',
+    status: 'completed',
+  });
+  const failed = appendOrPatchTool(completed, {
+    tool_name: 'ui_create_view',
+    tool_call_id: 'call-create-view',
+    tool_call_error: true,
+    result: 'schema validation failed',
+    status: 'error',
+  });
+
+  assert.equal(failed.length, 1);
+  assert.equal(failed[0].id, 'tool-message-1');
+  assert.equal(failed[0].toolInfo.tool_call_error, true);
+  assert.equal(failed[0].toolInfo.result, 'schema validation failed');
+  assert.equal(failed[0].toolInfo.status, 'error');
+  assert.deepEqual(failed[0].toolInfo.tool_args, { title: 'Release smoke' });
+});
+
+test('repeated terminal frames are idempotent by tool call id', () => {
+  const completed = {
+    tool_name: 'filesystem_write_file',
+    tool_call_id: 'call-write',
+    result: 'written',
+    status: 'completed',
+  };
+
+  const first = appendOrPatchTool([], completed);
+  const repeated = appendOrPatchTool(first, {
+    ...completed,
+    result: 'written once',
+  });
+
+  assert.equal(repeated.length, 1);
+  assert.equal(repeated[0].id, first[0].id);
+  assert.equal(repeated[0].toolInfo.result, 'written once');
+});
+
+test('a late running frame cannot downgrade an error terminal state', () => {
+  const failed = appendOrPatchTool([], {
+    tool_name: 'filesystem_write_file',
+    tool_call_id: 'call-write',
+    tool_call_error: true,
+    result: 'permission denied',
+    status: 'error',
+  });
+  const lateStart = appendOrPatchTool(failed, {
+    tool_name: 'filesystem_write_file',
+    tool_call_id: 'call-write',
+    tool_args: { path: '/root/forbidden' },
+    tool_call_error: false,
+    status: 'running',
+  });
+
+  assert.equal(lateStart.length, 1);
+  assert.equal(lateStart[0].id, failed[0].id);
+  assert.equal(lateStart[0].toolInfo.tool_call_error, true);
+  assert.equal(lateStart[0].toolInfo.result, 'permission denied');
+  assert.equal(lateStart[0].toolInfo.status, 'error');
+  assert.deepEqual(lateStart[0].toolInfo.tool_args, { path: '/root/forbidden' });
+});
+
+test('same-name concurrent tools retain call-id ordering and identity', () => {
+  const first = appendOrPatchTool([], {
+    tool_name: 'filesystem_read_file',
+    tool_call_id: 'call-a',
+    tool_args: { path: '/tmp/a' },
+  });
+  const bothRunning = appendOrPatchTool(first, {
+    tool_name: 'filesystem_read_file',
+    tool_call_id: 'call-b',
+    tool_args: { path: '/tmp/b' },
+  });
+  const firstCompleted = appendOrPatchTool(bothRunning, {
+    tool_name: 'filesystem_read_file',
+    tool_call_id: 'call-a',
+    result: 'a',
+    status: 'completed',
+  });
+
+  assert.equal(firstCompleted.length, 2);
+  assert.deepEqual(
+    firstCompleted.map((message) => message.toolInfo.tool_call_id),
+    ['call-a', 'call-b'],
+  );
+  assert.equal(firstCompleted[0].toolInfo.result, 'a');
+  assert.equal(firstCompleted[1].toolInfo.result, undefined);
+});
+
+test('a reused tool call id in a later turn cannot rewrite the earlier card', () => {
+  const history = [{
+    id: 'user-old',
+    role: 'user',
+    text: 'read the old file',
+    timestamp: 1,
+  }, {
+    id: 'tool-old',
+    role: 'tool',
+    text: 'Read old.txt',
+    timestamp: 2,
+    toolInfo: {
+      tool_name: 'filesystem_read_file',
+      tool_call_id: 'provider-reused-id',
+      tool_args: { path: '/tmp/old.txt' },
+      result: 'old contents',
+      status: 'completed',
+    },
+  }, {
+    id: 'assistant-old',
+    role: 'assistant',
+    text: 'The old file is ready.',
+    timestamp: 3,
+  }, {
+    id: 'user-new',
+    role: 'user',
+    text: 'now read the new file',
+    timestamp: 4,
+  }];
+
+  const started = appendOrPatchTool(history, {
+    tool_name: 'filesystem_read_file',
+    tool_call_id: 'provider-reused-id',
+    tool_args: { path: '/tmp/new.txt' },
+    status: 'running',
+  });
+  const completed = appendOrPatchTool(started, {
+    tool_name: 'filesystem_read_file',
+    tool_call_id: 'provider-reused-id',
+    result: 'new contents',
+    status: 'completed',
+  });
+
+  assert.equal(completed.length, history.length + 1);
+  assert.equal(completed[1].id, 'tool-old');
+  assert.equal(completed[1].toolInfo.result, 'old contents');
+  assert.deepEqual(completed[1].toolInfo.tool_args, { path: '/tmp/old.txt' });
+  assert.equal(completed[4].toolInfo.tool_call_id, 'provider-reused-id');
+  assert.equal(completed[4].toolInfo.result, 'new contents');
+  assert.deepEqual(completed[4].toolInfo.tool_args, { path: '/tmp/new.txt' });
 });
 
 test('a reconnect replay cannot erase execution host from an observed tool call', () => {

@@ -49,6 +49,9 @@ export default function TabStrip<T extends string>({
             key={tab.id}
             activeOpacity={0.75}
             onPress={() => onChange(tab.id)}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: isActive }}
+            accessibilityLabel={tab.label}
             style={[
               styles.tab,
               fullWidth && { flex: 1 },

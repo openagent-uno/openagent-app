@@ -2,9 +2,10 @@
  * MessageList — shared message-display layer.
  *
  * Renders a session's transcript with the same look on both Chat and
- * Voice tabs: user prompts as left-rule quotes, assistant replies as
- * full-width prose, tool calls as inline expandable cards. The status
- * row ("Thinking…") trails the last message while ``isProcessing``.
+ * Voice tabs: user prompts as soft rounded surfaces, assistant replies as
+ * full-width prose, tool calls as inline expandable cards. Consecutive rows
+ * from one speaker share a single author header. The status row ("Thinking…")
+ * trails the last message while ``isProcessing``.
  *
  * Both screens share this so a stylistic change to message bubbles
  * lands uniformly. Pass ``maxItems`` to compact the view (Voice tab
@@ -34,6 +35,7 @@ import {
 } from '../../common/types';
 import type { MessagePart } from '../../common/ui-views';
 import { attachmentKey } from '../../common/attachments';
+import { messageHeaderVisibility } from '../../common/message-groups';
 import {
   compactToolFallback,
   legacyToolInfoFromText,
@@ -112,6 +114,10 @@ function MessageListBase({
     [messages, capped, maxItems, shown],
   );
   const hiddenCount = capped ? 0 : Math.max(0, messages.length - visible.length);
+  const headerVisibility = useMemo(
+    () => messageHeaderVisibility(visible),
+    [visible],
+  );
   const resolvedAnchorMessageId = useMemo(() => {
     if (anchorMessageId) return anchorMessageId;
     if (!anchorToolInvocationId) return undefined;
@@ -162,8 +168,9 @@ function MessageListBase({
     }
     return null;
   }, [visible]);
-  const renderMessage = (msg: ChatMessage) => {
+  const renderMessage = (msg: ChatMessage, index: number) => {
     const isAnchor = msg.id === resolvedAnchorMessageId;
+    const showAuthorHeader = headerVisibility[index] ?? true;
     const renderKey = msg.role === 'tool'
       ? toolMessageRenderKey(msg.id, msg.toolInfo, msg.toolInvocationId)
       : msg.id;
@@ -241,6 +248,7 @@ function MessageListBase({
           id={msg.id} text={msg.text} attachments={msg.attachments}
           parts={msg.parts}
           author={msg.author} fallbackLabel={currentUserHandle}
+          showHeader={showAuthorHeader}
           onEdit={onEditUser}
         />,
       );
@@ -250,6 +258,7 @@ function MessageListBase({
         text={msg.text} model={msg.model} attachments={msg.attachments}
         parts={msg.parts}
         streaming={msg.streaming} author={msg.author}
+        showHeader={showAuthorHeader}
         onRegenerate={msg.id === lastAssistantId && !isProcessing ? onRegenerate : undefined}
       />,
     );
@@ -315,7 +324,7 @@ export default MessageList;
 // ── Atoms ────────────────────────────────────────────────────────────
 
 const UserMessage = memo(function UserMessage({
-  id, text, attachments, parts, author, fallbackLabel, onEdit,
+  id, text, attachments, parts, author, fallbackLabel, showHeader, onEdit,
 }: {
   id: string;
   text: string;
@@ -323,38 +332,42 @@ const UserMessage = memo(function UserMessage({
   parts?: MessagePart[];
   author?: MessageAuthor;
   fallbackLabel?: string;
+  showHeader: boolean;
   onEdit?: (id: string, newText: string) => void;
 }) {
   const label = author?.display || author?.handle || fallbackLabel || 'You';
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(text);
+  const actions = !editing ? (
+    <View style={[styles.msgActions, !showHeader && styles.continuationActions]}>
+      <CopyButton text={text} />
+      {onEdit && (
+        <TouchableOpacity
+          style={styles.msgActionBtn}
+          // @ts-ignore — web hover/press affordance
+          {...(Platform.OS === 'web' ? { className: 'oa-icon-btn' } : {})}
+          onPress={() => { setDraft(text); setEditing(true); }}
+          accessibilityLabel="Edit message"
+        >
+          <Feather name="edit-2" size={11} color={colors.textMuted} />
+        </TouchableOpacity>
+      )}
+    </View>
+  ) : null;
   return (
     <View
-      style={styles.userBlock}
+      style={[styles.userBlock, !showHeader && styles.userContinuation]}
+      testID="oa-user-message"
       // @ts-ignore
       {...(Platform.OS === 'web' ? { className: 'oa-msg-in oa-row-hover' } : {})}
     >
-      <View style={styles.userRule} />
-      <View style={styles.userBody}>
-        <View style={styles.userHead}>
-          <Text style={styles.userLabel}>{label}</Text>
-          {!editing && (
-            <View style={styles.msgActions}>
-              <CopyButton text={text} />
-              {onEdit && (
-                <TouchableOpacity
-                  style={styles.msgActionBtn}
-                  // @ts-ignore — web hover/press affordance
-                  {...(Platform.OS === 'web' ? { className: 'oa-icon-btn' } : {})}
-                  onPress={() => { setDraft(text); setEditing(true); }}
-                  accessibilityLabel="Edit message"
-                >
-                  <Feather name="edit-2" size={11} color={colors.textMuted} />
-                </TouchableOpacity>
-              )}
-            </View>
-          )}
-        </View>
+      <View style={[styles.userBody, !showHeader && styles.continuationBody]}>
+        {showHeader ? (
+          <View style={styles.userHead} testID="oa-human-message-header">
+            <Text style={styles.userLabel}>{label}</Text>
+            {actions}
+          </View>
+        ) : actions}
         {editing ? (
           <>
             <View style={styles.editBox}>
@@ -414,7 +427,7 @@ const UserMessage = memo(function UserMessage({
 });
 
 const AssistantMessage = memo(function AssistantMessage({
-  text, model, attachments, parts, streaming, author, onRegenerate,
+  text, model, attachments, parts, streaming, author, showHeader, onRegenerate,
 }: {
   text: string;
   model?: string;
@@ -422,37 +435,41 @@ const AssistantMessage = memo(function AssistantMessage({
   parts?: MessagePart[];
   streaming?: boolean;
   author?: MessageAuthor;
+  showHeader: boolean;
   onRegenerate?: () => void;
 }) {
   const label = author?.display || 'OpenAgent';
+  const actions = !streaming ? (
+    <View style={[styles.msgActions, !showHeader && styles.continuationActions]}>
+      <CopyButton text={text} />
+      {onRegenerate && (
+        <TouchableOpacity
+          style={styles.msgActionBtn}
+          // @ts-ignore — web hover/press affordance
+          {...(Platform.OS === 'web' ? { className: 'oa-icon-btn' } : {})}
+          onPress={onRegenerate}
+          accessibilityLabel="Regenerate response"
+        >
+          <Feather name="refresh-cw" size={11} color={colors.textMuted} />
+        </TouchableOpacity>
+      )}
+    </View>
+  ) : null;
   return (
     <View
-      style={styles.assistantBlock}
+      style={[styles.assistantBlock, !showHeader && styles.assistantContinuation]}
+      testID="oa-assistant-message"
       // @ts-ignore
       {...(Platform.OS === 'web' ? { className: 'oa-msg-in oa-row-hover' } : {})}
     >
-      <View style={styles.assistantHead}>
-        <View style={styles.assistantDot} />
-        <Text style={styles.assistantLabel}>{label}</Text>
-        {model && <Text style={styles.modelText}>· {model}</Text>}
-        {!streaming && (
-          <View style={styles.msgActions}>
-            <CopyButton text={text} />
-            {onRegenerate && (
-              <TouchableOpacity
-                style={styles.msgActionBtn}
-                // @ts-ignore — web hover/press affordance
-                {...(Platform.OS === 'web' ? { className: 'oa-icon-btn' } : {})}
-                onPress={onRegenerate}
-                accessibilityLabel="Regenerate response"
-              >
-                <Feather name="refresh-cw" size={11} color={colors.textMuted} />
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
-      </View>
-      <View style={styles.assistantBody}>
+      {showHeader ? (
+        <View style={styles.assistantHead} testID="oa-agent-message-header">
+          <Text style={styles.assistantLabel} testID="oa-agent-message-label">{label}</Text>
+          {model && <Text style={styles.modelText}>· {model}</Text>}
+          {actions}
+        </View>
+      ) : actions}
+      <View style={[styles.assistantBody, !showHeader && styles.continuationBody]}>
         {parts?.length ? <OrderedParts parts={parts} assistant /> : (
           <>
             <Markdown text={text} streaming={streaming} />
@@ -869,14 +886,13 @@ const styles = StyleSheet.create({
   },
   // User
   userBlock: {
-    flexDirection: 'row', alignItems: 'stretch',
-    paddingVertical: 10, paddingLeft: 2,
+    position: 'relative',
+    paddingVertical: 10, paddingHorizontal: 12,
+    marginVertical: 4,
+    borderRadius: radius.md,
+    backgroundColor: colors.hover,
   },
-  userRule: {
-    width: 2, backgroundColor: colors.primary,
-    borderRadius: 1, marginRight: 12,
-    opacity: 0.7,
-  },
+  userContinuation: { paddingTop: 8 },
   userBody: { flex: 1, paddingVertical: 2 },
   userHead: {
     flexDirection: 'row', alignItems: 'center', marginBottom: 4,
@@ -905,14 +921,22 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase', letterSpacing: 0.8, marginLeft: 6,
   },
 
-  // Hover action buttons (Copy / Edit / Regenerate) — appear in the
-  // message header. Web-only hover-reveal is layered on via the
-  // ``.oa-row-hover`` global class (see theme.ts).
+  // Hover action buttons (Copy / Edit / Regenerate) — live in the first
+  // message header, or at the top-right of a grouped continuation. Web-only
+  // hover-reveal is layered on via ``.oa-row-hover`` (see theme.ts).
   msgActions: {
     flexDirection: 'row', gap: 2, marginLeft: 'auto',
     // @ts-ignore — web-only opacity for hover-reveal; native always-shown
     ...(Platform.OS === 'web' ? { opacity: 0, transition: 'opacity 0.16s' as any } : {}),
   },
+  continuationActions: Platform.OS === 'web'
+    ? {
+        position: 'absolute', top: 4, right: 4, zIndex: 1,
+      }
+    : {
+        alignSelf: 'flex-end', marginBottom: 2,
+      },
+  continuationBody: Platform.OS === 'web' ? { paddingRight: 52 } : {},
   msgActionBtn: {
     width: 22, height: 22, borderRadius: radius.xs,
     alignItems: 'center', justifyContent: 'center',
@@ -943,19 +967,13 @@ const styles = StyleSheet.create({
   editSendText: { fontSize: 12, color: colors.textInverse, fontWeight: '600' },
 
   // Assistant
-  assistantBlock: { paddingVertical: 10 },
+  assistantBlock: { position: 'relative', paddingVertical: 10 },
+  assistantContinuation: { paddingTop: 2 },
   assistantHead: {
     flexDirection: 'row', alignItems: 'center', gap: 2, marginBottom: 6,
   },
-  assistantDot: {
-    width: 6, height: 6, borderRadius: 3,
-    backgroundColor: colors.primary,
-    marginRight: 8,
-    // @ts-ignore web: gradient background
-    ...(Platform.OS === 'web' ? { backgroundImage: 'linear-gradient(135deg, #d94841, #f3a33a)' } : {}),
-  },
   assistantLabel: {
-    fontSize: 10, fontWeight: '600', color: colors.text,
+    fontSize: 10, fontWeight: '600', color: colors.primary,
     textTransform: 'uppercase', letterSpacing: 0.8,
   },
   modelText: {
