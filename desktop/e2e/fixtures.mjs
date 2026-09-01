@@ -244,6 +244,13 @@ export class DeterministicGateway {
     this.runMessages = messages;
   }
 
+  sendChatFrame(frame) {
+    const payload = JSON.stringify(frame);
+    for (const socket of this.chatServer.clients) {
+      if (socket.readyState === WebSocket.OPEN) socket.send(payload);
+    }
+  }
+
   disconnectCapabilities() {
     this.acceptCapabilities = false;
     const socket = this.capabilitySocket;

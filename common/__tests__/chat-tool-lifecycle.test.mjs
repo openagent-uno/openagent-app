@@ -354,3 +354,84 @@ test('a reconnect replay cannot erase execution host from an observed tool call'
   assert.equal(merged[1].toolInfo.result, 'written');
   assert.equal(replay[1].toolInfo.execution_host, undefined);
 });
+
+test('the first reasoning frame creates a live sub-agent stub', () => {
+  useChat.setState({
+    sessions: [],
+    activeSessionId: 'parent',
+    sessionsHydrated: true,
+    sessionHistoryMode: 'v2',
+  });
+  const childId = 'parent::sub::researcher::run-1';
+
+  useChat.getState().handleServerMessage({
+    type: 'reasoning',
+    session_id: childId,
+    active: true,
+  });
+
+  const child = useChat.getState().sessions.find((entry) => entry.id === childId);
+  assert.ok(child, 'the reasoning frame must not be dropped before metadata hydration');
+  assert.equal(child.origin, 'delegation');
+  assert.equal(child.parentSessionId, 'parent');
+  assert.equal(child.isProcessing, true);
+  assert.equal(child.isReasoning, true);
+
+  useChat.getState().setActiveSession(childId);
+  const focused = useChat.getState().sessions.find((entry) => entry.id === childId);
+  assert.equal(useChat.getState().activeSessionId, childId);
+  assert.equal(focused.isReasoning, true);
+
+  useChat.getState().handleServerMessage({
+    type: 'reasoning',
+    session_id: childId,
+    active: false,
+  });
+  assert.equal(
+    useChat.getState().sessions.find((entry) => entry.id === childId).isReasoning,
+    false,
+  );
+});
+
+test('metadata hydration cannot roll an in-flight transcript back', () => {
+  const live = {
+    id: 'live-session',
+    title: 'Live chat',
+    messages: [
+      { id: 'u-live', role: 'user', text: 'latest request', timestamp: 1 },
+      {
+        id: 'a-live', role: 'assistant', text: 'partial reply', timestamp: 2,
+        streaming: true,
+      },
+    ],
+    isProcessing: true,
+    isReasoning: true,
+    statusText: 'Working',
+  };
+  useChat.setState({
+    sessions: [live, {
+      id: 'other-session', title: 'Other', messages: [], isProcessing: false,
+    }],
+    activeSessionId: 'live-session',
+    sessionsHydrated: true,
+    sessionHistoryMode: 'v2',
+  });
+
+  // A history/title event may carry false until the durable run projection
+  // catches up. It is metadata, not proof that this local turn ended.
+  useChat.getState().hydrateFromServer([{
+    session_id: 'live-session',
+    title: 'Live chat',
+    _live: false,
+    last_active_at: 10,
+  }]);
+
+  useChat.getState().setActiveSession('other-session');
+  useChat.getState().setActiveSession('live-session');
+  const restored = useChat.getState().sessions.find((entry) => entry.id === 'live-session');
+  assert.deepEqual(restored.messages, live.messages);
+  assert.equal(restored.isProcessing, true);
+  assert.equal(restored.isReasoning, true);
+  assert.equal(restored.statusText, 'Working');
+  assert.equal(restored.messages.at(-1).streaming, true);
+});

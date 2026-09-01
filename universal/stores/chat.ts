@@ -331,17 +331,6 @@ function clearLiveFlags(session: ChatSession, contextReport?: SessionContext): C
   };
 }
 
-function hasOpenLocalTurn(session: ChatSession): boolean {
-  if (session.isProcessing) return true;
-  if (session.messages.some((m) => m.role === 'assistant' && m.streaming)) return true;
-  for (let i = session.messages.length - 1; i >= 0; i--) {
-    const msg = session.messages[i];
-    if (msg.role === 'assistant' && msg.text.trim()) return false;
-    if (msg.role === 'user') return true;
-  }
-  return false;
-}
-
 type ToolPhase = ReturnType<typeof toolPhase>;
 
 const TOOL_PHASE_PRECEDENCE: Record<ToolPhase, number> = {
@@ -901,25 +890,17 @@ export const useChat = create<ChatState>((set, get) => ({
     if (!entries || entries.length === 0) return;
     const existing = get().sessions;
     const existingIds = new Set(existing.map((s) => s.id));
-    const existingById = new Map(existing.map((s) => [s.id, s]));
     // Metadata (parent/origin link, title, recency) keyed by id, so an
     // event-driven re-hydrate can refresh links on sessions already in the
     // store — used to attach a child to its parent once the server announces
     // it — WITHOUT clobbering live messages / isProcessing / draftInput.
     const metaById = new Map<string, Partial<ChatSession>>();
-    const liveById = new Map<string, boolean>();
-    const settleIds = new Set<string>();
     const imported: ChatSession[] = [];
     for (const e of entries) {
       const sid = e.session_id;
       if (!sid) continue;
-      if (typeof e._live === 'boolean') liveById.set(sid, e._live);
       const meta = sessionMetaFromEntry(e);
       if (existingIds.has(sid)) {
-        const prev = existingById.get(sid);
-        if (e._live === false && (prev?.isProcessing || prev?.isReasoning)) {
-          settleIds.add(sid);
-        }
         metaById.set(sid, {
           ...meta,
           // Carry the server title so a lazy-created sub-agent stub gets its
@@ -953,26 +934,21 @@ export const useChat = create<ChatState>((set, get) => ({
           const { title: serverTitle, ...rest } = meta;
           const titlePatch = serverTitle && (se.title === 'Sub-agent' || se.title === 'New Chat')
             ? { title: serverTitle } : {};
-          const serverLive = liveById.get(se.id);
-          const settledPatch = serverLive === false ? {
-            isProcessing: false,
-            isReasoning: false,
-            statusText: undefined,
-            messages: se.messages.map((m) =>
-              m.role === 'assistant' && m.streaming ? { ...m, streaming: false } : m,
-            ),
-          } : {};
-          return { ...se, ...rest, ...titlePatch, ...settledPatch };
+          // Session-list metadata is not a turn-lifecycle authority. Its
+          // `_live=false` can race a just-started turn (for example the title
+          // PATCH that follows the first user message) before the server's
+          // durable run projection catches up. Clearing the optimistic user
+          // row/stream here made a chat roll back to its last completed turn
+          // when the user navigated away and back. Terminal stream frames and
+          // reconnect `live_state` are the only paths allowed to settle a
+          // locally-open turn.
+          return { ...se, ...rest, ...titlePatch };
         }),
         ...imported,
       ],
       sessionsHydrated: true,
       activeSessionId: autoSelectId,
     }));
-    settleIds.forEach((sid) => {
-      get().reconcileSession(sid);
-      get().refreshContext(sid);
-    });
     // Fetch only the newest canonical message page for the auto-selected
     // v2 session (legacy agents keep their old runs loader) — but ONLY when
     // it's a freshly
@@ -1286,8 +1262,11 @@ export const useChat = create<ChatState>((set, get) => ({
     // exactly like any session once its row exists.
     let stubAdded = false;
     if (
-      (msg.type === 'status' || msg.type === 'delta' || msg.type === 'response'
-        || msg.type === 'seed' || msg.type === 'session_compacted' || msg.type === 'text_final')
+      (
+        msg.type === 'status' || msg.type === 'delta' || msg.type === 'response'
+        || msg.type === 'seed' || msg.type === 'session_compacted' || msg.type === 'text_final'
+        || (msg.type === 'reasoning' && msg.active)
+      )
       && msg.session_id
       && !s.sessions.some((x) => x.id === msg.session_id)
     ) {
@@ -1303,7 +1282,7 @@ export const useChat = create<ChatState>((set, get) => ({
           {
             id: msg.session_id,
             messages: [],
-            isProcessing: false,
+            isProcessing: msg.type === 'reasoning' ? msg.active : false,
             // Tag from the id shape so a hidden child (sub-agent, scheduled
             // firing, workflow node) stays hidden from the sidebar — its origin
             // metadata never arrives via the (excluded) history list.
@@ -1377,17 +1356,19 @@ export const useChat = create<ChatState>((set, get) => ({
       // Transient reasoning signal: flip the matching session's animated
       // "Reasoning" indicator on/off. ``active=true`` → thinking with no
       // visible output yet; ``active=false`` → output started or turn ended.
-      // Cosmetic + session-scoped; if the row doesn't exist yet (a child
-      // session whose first frame is a reasoning ping) we simply drop it —
-      // the next status/delta frame creates the stub and a later reasoning
-      // frame updates it.
+      // The reasoning ping is frequently the FIRST frame emitted by a child.
+      // The lazy-stub path above therefore creates the row and opens its local
+      // turn before this branch runs, so navigating into that child paints the
+      // same animated indicator as the parent immediately.
       return {
         sessions: s.sessions.map((ses) =>
           ses.id !== msg.session_id
             ? ses
-            : msg.active && !hasOpenLocalTurn(ses)
-              ? clearLiveFlags(ses)
-              : { ...ses, isReasoning: msg.active },
+            : {
+              ...ses,
+              isProcessing: msg.active ? true : ses.isProcessing,
+              isReasoning: msg.active,
+            },
         ),
       };
     }

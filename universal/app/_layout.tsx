@@ -95,6 +95,7 @@ export default function RootLayout() {
         || msg.type === 'response'
         || msg.type === 'seed'
         || msg.type === 'text_final'
+        || msg.type === 'reasoning'
         || msg.type === 'error'
         || msg.type === 'session_compacted'
       ) {
