@@ -28,7 +28,7 @@ def main():
     actual=subprocess.check_output(['git','rev-parse','HEAD'],cwd=args.canonical,text=True).strip()
     if actual!=source:raise ValueError('Canonical checkout differs from the approved source')
     subprocess.run(['git','diff','--quiet','HEAD'],cwd=args.canonical,check=True)
-    req=urllib.request.Request('https://api.github.com/repos/openagent-uno/openagent/actions/runs/'+run,headers={'Authorization':'Bearer '+os.environ['GH_TOKEN'],'Accept':'application/vnd.github+json'})
+    req=urllib.request.Request('https://api.github.com/repos/openagent-uno/openagent/actions/runs/'+run,headers={'Accept':'application/vnd.github+json'})
     with urllib.request.urlopen(req,timeout=30) as response:receipt=json.load(response)
     if receipt.get('head_sha')!=source or receipt.get('conclusion')!='success' or receipt.get('event')!='workflow_dispatch' or receipt.get('path')!='.github/workflows/host-tools-bundles.yml':
         raise ValueError('CI candidate source, event, path or conclusion differs')

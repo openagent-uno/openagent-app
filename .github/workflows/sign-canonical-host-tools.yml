@@ -16,6 +16,11 @@ on:
         required: true
         type: string
 
+      staging_tag:
+        description: Optional operator-owned private draft staging after a cross-repository download denial
+        required: false
+        type: string
+
 permissions:
   contents: read
   actions: read
@@ -26,6 +31,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  STAGING_TAG: ${{ inputs.staging_tag }}
   CANONICAL_SOURCE: ${{ inputs.source_sha }}
   CANONICAL_RUN: ${{ inputs.canonical_run_id }}
   CANDIDATE_INDEX_SHA256: ${{ inputs.candidate_index_sha256 }}
@@ -56,6 +62,7 @@ jobs:
         with:
           python-version: '3.11'
       - uses: actions/download-artifact@v4
+        if: inputs.staging_tag == ''
         with:
           repository: openagent-uno/openagent
           github-token: ${{ github.token }}
@@ -63,12 +70,25 @@ jobs:
           name: host-tools-candidate-metadata
           path: input
       - uses: actions/download-artifact@v4
+        if: inputs.staging_tag == ''
         with:
           repository: openagent-uno/openagent
           github-token: ${{ github.token }}
           run-id: ${{ inputs.canonical_run_id }}
           name: host-tools-${{ matrix.platform }}
           path: input
+      - name: Retrieve the exact private draft fallback without exporting credentials
+        if: inputs.staging_tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python executor/scripts/verify-draft-host-staging.py > staging-qualification.json
+          gh release download "$STAGING_TAG" --repo "$GITHUB_REPOSITORY" --dir input \
+            --pattern release-index.json --pattern 'openagent_host_tools-1.0.0b6-py3-none-any.whl' \
+            --pattern 'openagent-host-tools-${{ matrix.platform }}.tar.gz' \
+            --pattern 'openagent-host-tools-${{ matrix.platform }}.tar.gz.sha256'
       - name: Verify signing attestation invariants
         if: matrix.platform == 'darwin-arm64'
         run: python -m unittest discover -s executor/tests-host-signing -q
@@ -138,12 +158,22 @@ jobs:
         with:
           python-version: '3.11'
       - uses: actions/download-artifact@v4
+        if: inputs.staging_tag == ''
         with:
           repository: openagent-uno/openagent
           github-token: ${{ github.token }}
           run-id: ${{ inputs.canonical_run_id }}
           name: host-tools-local-candidate
           path: dist
+      - name: Retrieve all original payloads from the exact private draft fallback
+        if: inputs.staging_tag != ''
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python executor/scripts/verify-draft-host-staging.py > staging-qualification.json
+          gh release download "$STAGING_TAG" --repo "$GITHUB_REPOSITORY" --dir dist
       - name: Verify all original canonical payloads before replacing signed targets
         env:
           GH_TOKEN: ${{ github.token }}
