@@ -110,6 +110,13 @@ jobs:
         run: python executor/scripts/verify-canonical-host-tools.py input --canonical canonical --platform ${{ matrix.platform }} > input-qualification.json
       - name: Extract the already verified native payload
         run: python canonical/packages/host-tools/scripts/verify_bundle_archive.py input/openagent-host-tools-${{ matrix.platform }}.tar.gz canonical/packages/host-tools/dist --expect-platform ${{ matrix.platform }}
+      - name: Install the verified public Python closure for manifest and smoke helpers
+        shell: bash
+        run: |
+          set -euo pipefail
+          python canonical/packages/host-tools/scripts/prepare_public_wheels.py wheelhouse
+          python -m pip install wheelhouse/*.whl input/openagent_host_tools-1.0.0b6-py3-none-any.whl
+          python -m pip check
       - name: Sign and notarize using this executor's existing identity
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
