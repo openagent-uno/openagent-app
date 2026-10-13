@@ -20,6 +20,8 @@ proof={'schema':1,'qualification':'signed-native-candidate','source_repository':
        'candidate_retrieval':'private-draft' if os.environ.get('STAGING_TAG') else 'canonical-actions-artifact','macos_signed_notarized_targets':['darwin-arm64','darwin-x64'],
        'unchanged_native_targets':['linux-arm64','linux-x64','win32-arm64','win32-x64'],
        'windows_authenticode_claimed':False,'public_release_created':False,
+       'linux_arm64_coverage':{'native_core':True,'native_computer_control':True,'browser_catalog_probe':True,'browser_navigation':False},
+       'acceptance_boundary':'Synthetic CI fixtures; no real-provider OAuth or persisted user-profile acceptance',
        'original_archives':original['platforms'],'final_archives':final['platforms']}
 (root/'qualification.json').write_text(json.dumps(proof,indent=2)+'\n',encoding='utf-8')
 entries=[]

@@ -28,7 +28,7 @@ class SigningAttestation(unittest.TestCase):
             proof=json.loads((root/'qualification.json').read_text()) if (root/'qualification.json').exists() else None
             return result.returncode,proof
     def test_signed_macs_preserve_other_targets_and_do_not_claim_windows_signature(self):
-        code,proof=self.fixture();self.assertEqual(code,0);self.assertFalse(proof['windows_authenticode_claimed'])
+        code,proof=self.fixture();self.assertEqual(code,0);self.assertFalse(proof['windows_authenticode_claimed']);self.assertFalse(proof['linux_arm64_coverage']['browser_navigation'])
         self.assertEqual(proof['unchanged_native_targets'],['linux-arm64','linux-x64','win32-arm64','win32-x64'])
     def test_changed_original_target_source_or_wheel_has_no_attestation(self):
         for defect in ('linux','source','wheel'):
