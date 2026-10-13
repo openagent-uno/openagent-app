@@ -1,0 +1,179 @@
+name: Sign canonical Host Tools candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Exact approved canonical OpenAgent main source SHA
+        required: true
+        type: string
+      canonical_run_id:
+        description: Successful canonical unsigned Host Tools qualification run
+        required: true
+        type: string
+      candidate_index_sha256:
+        description: Root-reviewed SHA256 of the canonical candidate release-index.json
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: canonical-host-tools-signing
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  CANONICAL_SOURCE: ${{ inputs.source_sha }}
+  CANONICAL_RUN: ${{ inputs.canonical_run_id }}
+  CANDIDATE_INDEX_SHA256: ${{ inputs.candidate_index_sha256 }}
+
+jobs:
+  macos-sign:
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: macos-15, platform: darwin-arm64}
+          - {runner: macos-15-intel, platform: darwin-x64}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: executor
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: openagent-uno/openagent
+          ref: ${{ inputs.source_sha }}
+          path: canonical
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          repository: openagent-uno/openagent
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.canonical_run_id }}
+          name: host-tools-candidate-metadata
+          path: input
+      - uses: actions/download-artifact@v4
+        with:
+          repository: openagent-uno/openagent
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.canonical_run_id }}
+          name: host-tools-${{ matrix.platform }}
+          path: input
+      - name: Verify signing attestation invariants
+        if: matrix.platform == 'darwin-arm64'
+        run: python -m unittest discover -s executor/tests-host-signing -q
+      - name: Require the existing Apple release credentials
+        shell: bash
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in CSC_LINK CSC_KEY_PASSWORD APPLE_ID APPLE_APP_SPECIFIC_PASSWORD APPLE_TEAM_ID; do
+            test -n "${!name:-}" || { echo "Missing existing release credential: $name" >&2; exit 1; }
+          done
+      - name: Verify the immutable candidate before signing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python executor/scripts/verify-canonical-host-tools.py input --canonical canonical --platform ${{ matrix.platform }} > input-qualification.json
+      - name: Extract the already verified native payload
+        run: python canonical/packages/host-tools/scripts/verify_bundle_archive.py input/openagent-host-tools-${{ matrix.platform }}.tar.gz canonical/packages/host-tools/dist --expect-platform ${{ matrix.platform }}
+      - name: Sign and notarize using this executor's existing identity
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: canonical/packages/host-tools/scripts/sign_macos_bundle.sh canonical/packages/host-tools/dist/${{ matrix.platform }}
+      - name: Verify the signed native payload and repackage
+        shell: bash
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          python canonical/packages/host-tools/scripts/build_standalone.py --manifest-only --expect-platform ${{ matrix.platform }}
+          python canonical/packages/host-tools/scripts/snapshot_sidecar_manifests.py canonical/packages/host-tools/dist/${{ matrix.platform }} --check
+          python canonical/packages/host-tools/scripts/smoke_bundle.py canonical/packages/host-tools/dist/${{ matrix.platform }} --computer-control expect-granted
+          python canonical/packages/host-tools/scripts/package_bundle.py canonical/packages/host-tools/dist/${{ matrix.platform }}
+          canonical/packages/host-tools/scripts/verify_macos_archive.sh canonical/packages/host-tools/dist/openagent-host-tools-${{ matrix.platform }}.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: canonical-signed-host-tools-${{ matrix.platform }}
+          path: |
+            canonical/packages/host-tools/dist/openagent-host-tools-*.tar.gz
+            canonical/packages/host-tools/dist/openagent-host-tools-*.tar.gz.sha256
+            input-qualification.json
+          if-no-files-found: error
+          retention-days: 14
+
+  assemble:
+    needs: macos-sign
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: executor
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: openagent-uno/openagent
+          ref: ${{ inputs.source_sha }}
+          path: canonical
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          repository: openagent-uno/openagent
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.canonical_run_id }}
+          name: host-tools-local-candidate
+          path: dist
+      - name: Verify all original canonical payloads before replacing signed targets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python executor/scripts/verify-canonical-host-tools.py dist --canonical canonical > original-qualification.json
+          cp dist/release-index.json original-release-index.json
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: canonical-signed-host-tools-*
+          path: signed
+      - name: Merge only the two signed macOS targets and retain the four original native targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in darwin-arm64 darwin-x64; do
+            cp "signed/canonical-signed-host-tools-$target/openagent-host-tools-$target.tar.gz" dist/
+            cp "signed/canonical-signed-host-tools-$target/openagent-host-tools-$target.tar.gz.sha256" dist/
+          done
+          python canonical/packages/host-tools/scripts/release_index.py dist --source-commit "$CANONICAL_SOURCE" --source-repository openagent-uno/openagent
+          python executor/scripts/finalize-canonical-host-tools.py dist original-release-index.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: canonical-host-tools-signed-candidate
+          path: |
+            dist/openagent-host-tools-*.tar.gz
+            dist/openagent-host-tools-*.tar.gz.sha256
+            dist/openagent_host_tools-*.whl
+            dist/release-index.json
+            dist/qualification.json
+            dist/SHA256SUMS
+            original-qualification.json
+          if-no-files-found: error
+          retention-days: 14
