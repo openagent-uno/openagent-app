@@ -53,7 +53,7 @@ jobs:
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
-      - name: Require exact checkout and ten isolated contracts without signing credentials
+      - name: Require exact checkout and eleven isolated contracts without signing credentials
         run: |
           set -euo pipefail
           set +x
@@ -66,7 +66,7 @@ jobs:
           import os, re
           from pathlib import Path
           text = Path(os.environ['RUNNER_TEMP'], 'keychain-bridge-pure-contracts.log').read_text()
-          assert re.search(r'^Ran 10 tests in ', text, re.M)
+          assert re.search(r'^Ran 11 tests in ', text, re.M)
           assert re.search(r'^OK$', text, re.M) and 'skipped' not in text.lower()
           PY
       - name: Qualify one actual owned Developer ID canary and exact cleanup
@@ -124,7 +124,7 @@ jobs:
           # Workflow's checked-in bytes must equal the candidate hashed above.
           assert Path('.github/workflows/qualified-keychain-bridge-qualification.yml').read_bytes() == (
               root / 'qualified-keychain-bridge-qualification.yml').read_bytes()
-          print('KEYCHAIN_BRIDGE_QUALIFICATION_PASS pure_contracts=10 actual_canary=1 cleanup=true')
+          print('KEYCHAIN_BRIDGE_QUALIFICATION_PASS pure_contracts=11 actual_canary=1 cleanup=true')
           print('receipt_sha256=' + hashlib.sha256(path.read_bytes()).hexdigest())
           PY
       # This executor artifact contains only closed safe qualification metadata.

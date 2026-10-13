@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import secrets
 import shutil
@@ -20,6 +21,7 @@ TEAM = "B4KWCQFY8V"
 SCHEMA = "qualified-keychain-candidate-v1"
 PREFIX = "signing-keychain-"
 LIMIT = 2 * 1024 * 1024
+CANARY_SOURCE = b"int main(void){return 0;}\n"
 
 
 class BridgeError(Exception):
@@ -110,17 +112,62 @@ def child_environment():
     return env
 
 
-def command(args, phase, *, input_data=None):
+def command(args, phase, *, input_data=None, environment=None, cwd=None):
     # All output remains private in memory, including security errors; argv is
     # never emitted. No subprocess inherits the PKCS12 or its password.
     try:
         result = subprocess.run(args, input=input_data, stdout=subprocess.PIPE,
-                                stderr=subprocess.PIPE, env=child_environment(), timeout=90, check=False)
+                                stderr=subprocess.PIPE,
+                                env=child_environment() if environment is None else environment,
+                                cwd=cwd, timeout=90, check=False)
     except (OSError, subprocess.TimeoutExpired):
         raise BridgeError(phase + "-execution") from None
     require(len(result.stdout) <= LIMIT and len(result.stderr) <= LIMIT, phase + "-output-size")
-    require(result.returncode == 0, phase + "-failed")
+    if result.returncode != 0:
+        reason = phase + "-failed"
+        if phase == "canary-execute":
+            if result.returncode < 0:
+                try:
+                    name = signal.Signals(-result.returncode).name
+                except ValueError:
+                    name = "OTHER"
+                reason += ": signal=" + name
+            else:
+                reason += ": exit=" + (str(result.returncode) if result.returncode <= 255 else "OTHER")
+        raise BridgeError(reason)
     return result.stdout
+
+
+def compile_canary(root):
+    # The helper itself rechecks the hosted guard before any file or compiler
+    # operation. Its sole input is the existing owned root, not external code.
+    runner_temp, context = hosted_context()
+    require(root.parent == runner_temp and re.fullmatch(PREFIX + r"[A-Za-z0-9_-]+", root.name),
+            "canary-owned-root")
+    info = root.lstat()
+    require(stat.S_ISDIR(info.st_mode) and info.st_uid == os.getuid()
+            and stat.S_IMODE(info.st_mode) == 0o700 and root.resolve() == root,
+            "canary-owned-root-contract")
+    state = json.loads(regular_private(root / "ownership.json"))
+    require(state.get("context") == context and state.get("ownedRoot") == str(root),
+            "canary-owned-state")
+    architecture = platform.machine()
+    require(architecture in ("arm64", "x86_64"), "canary-native-architecture")
+    source = root / "signing-canary.c"
+    canary = root / "signing-canary"
+    require(not canary.exists() and not canary.is_symlink(), "canary-fresh-output")
+    write_private(source, CANARY_SOURCE)
+    # No inherited CFLAGS, LDFLAGS, CPATH, SDKROOT, DEVELOPER_DIR, DYLD_* or
+    # external library/loader inputs. Only the runner's Apple SDK/toolchain.
+    environment = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": str(root)}
+    command(["/usr/bin/xcrun", "--sdk", "macosx", "clang", "-arch", architecture,
+             "-Werror", "-O0", "-x", "c", str(source), "-o", str(canary)],
+            "canary-compile", environment=environment, cwd=root)
+    info = canary.lstat()
+    require(stat.S_ISREG(info.st_mode) and info.st_uid == os.getuid() and info.st_nlink == 1,
+            "canary-output-contract")
+    os.chmod(canary, 0o700)
+    return canary
 
 
 def search_list():
@@ -244,11 +291,9 @@ def prepare(args, runner_temp, context):
                                                      "-p", "codesigning", keychain], "find-identity").decode())
         certificate_sha = cert_proof(command(["/usr/bin/security", "find-certificate", "-a", "-p", keychain],
                                               "find-certificate"), digest)
-        # Copy only a first-party OS Mach-O into the owned root. No compilation,
-        # package mutation, deep signing, entitlements or ad hoc fallback.
-        canary = root / "signing-canary"
-        shutil.copyfile("/usr/bin/true", canary)
-        os.chmod(canary, 0o700)
+        # A tiny first-party native canary avoids re-signing an OS platform
+        # executable. Signature, timestamp, execution and cleanup stay mandatory.
+        canary = compile_canary(root)
         command(["/usr/bin/codesign", "--force", "--sign", digest, "--keychain", keychain,
                  "--options", "runtime", "--timestamp", "--identifier", app_id + ".signing-canary",
                  str(canary)], "canary-sign")
