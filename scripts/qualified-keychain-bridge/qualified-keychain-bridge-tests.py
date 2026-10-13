@@ -112,6 +112,45 @@ class CandidateContracts(unittest.TestCase):
                 self.assertEqual(command.call_count, 1)
                 self.assertTrue(keychain.exists())
 
+    def test_fixed_first_party_canary_compile_is_hosted_owned_and_has_no_injection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            runner_temp = Path(directory).resolve()
+            root = runner_temp / (bridge.PREFIX + "contract")
+            root.mkdir(mode=0o700)
+            with patch.object(bridge, "hosted_context", side_effect=bridge.BridgeError("hosted-macos-only")), \
+                    patch.object(bridge, "command") as command:
+                with self.assertRaisesRegex(bridge.BridgeError, "hosted-macos-only"):
+                    bridge.compile_canary(root)
+                command.assert_not_called()
+                self.assertEqual(list(root.iterdir()), [])
+            context = {"applicationId": "org.example.signing"}
+            bridge.write_private(root / "ownership.json", bridge.json_bytes({"context": context, "ownedRoot": str(root)}))
+            def compile_command(args, phase, **options):
+                self.assertEqual(phase, "canary-compile")
+                self.assertEqual(args, ["/usr/bin/xcrun", "--sdk", "macosx", "clang", "-arch", "arm64",
+                                       "-Werror", "-O0", "-x", "c", str(root / "signing-canary.c"),
+                                       "-o", str(root / "signing-canary")])
+                self.assertEqual((root / "signing-canary.c").read_bytes(), b"int main(void){return 0;}\n")
+                self.assertEqual(options, {"environment": {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "TMPDIR": str(root)}, "cwd": root})
+                bridge.write_private(root / "signing-canary", b"mocked compiler output")
+                return b""
+            injected = {"CFLAGS": "BAD_INPUT", "LDFLAGS": "BAD_INPUT", "SDKROOT": "BAD_INPUT",
+                        "DEVELOPER_DIR": "BAD_INPUT", "DYLD_INSERT_LIBRARIES": "BAD_INPUT", "CPATH": "BAD_INPUT"}
+            with patch.object(bridge, "hosted_context", return_value=(runner_temp, context)), \
+                    patch.object(bridge.platform, "machine", return_value="arm64"), \
+                    patch.object(bridge, "command", side_effect=compile_command), \
+                    patch.object(bridge.shutil, "copyfile", side_effect=AssertionError("OS binary copy forbidden")), \
+                    patch.dict(os.environ, injected):
+                self.assertEqual(bridge.compile_canary(root), root / "signing-canary")
+            # The only newly published failure detail is a bounded return code
+            # or signal enum, never arguments, environment or process output.
+            for returncode, suffix in ((-9, "signal=SIGKILL"), (126, "exit=126"), (9999, "exit=OTHER")):
+                result = type("Result", (), {"returncode": returncode, "stdout": b"PRIVATE_OUTPUT", "stderr": b"PRIVATE_ERROR"})()
+                with patch.object(bridge.subprocess, "run", return_value=result):
+                    with self.assertRaisesRegex(bridge.BridgeError, suffix) as rejected:
+                        bridge.command(["PRIVATE_ARG"], "canary-execute")
+                self.assertNotIn("PRIVATE", str(rejected.exception))
+
 
 @unittest.skipUnless(HOSTED and os.environ.get("SIGNING_TEST_KEYCHAIN_BRIDGE") == "true",
                      "explicit future remote signing authorization required")

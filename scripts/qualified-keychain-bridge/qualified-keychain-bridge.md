@@ -28,9 +28,13 @@ certificate SHA256, exact Team OU/identity, actual owned canary SHA256, and
 ownership state. It is never uploaded. It explicitly records
 `packageQualified=false` and `publicRelease=false`.
 
-The signing canary is a copy of `/usr/bin/true` in the owned private directory,
-signed with Developer ID, explicit `--keychain`, hardened runtime and trusted
-timestamp. Verification must show exact Team, explicit application identifier
+The signing canary is first-party fixed C (`int main(void){return 0;}`), compiled
+only after the hosted guard, inside the owned directory, with `/usr/bin/xcrun`
+and explicit native arm64/x86_64 Apple clang target. Compilation receives only
+a fixed system PATH and owned TMPDIR: no supplied source/payload, CFLAGS,
+LDFLAGS, SDKROOT, DEVELOPER_DIR, CPATH or DYLD injection variables. It is signed
+with Developer ID, explicit `--keychain`, hardened runtime and trusted timestamp.
+Verification must show exact Team, explicit application identifier
 and Developer ID authority, followed by actual execution. No ad hoc signing,
 `--deep` signing, global trust changes, key export or new permissions are used.
 
@@ -56,13 +60,13 @@ behavior. See the primary [26.x signing documentation](https://www.electron.buil
 
 ## Future remote qualification only
 
-`python3 qualified-keychain-bridge-tests.py CandidateContracts` contains ten
+`python3 qualified-keychain-bridge-tests.py CandidateContracts` contains eleven
 focused hosted-only contracts. All skip outside hosted macOS. The actual canary
 test requires explicit `SIGNING_TEST_KEYCHAIN_BRIDGE=true` and a newly reviewed
 remote job using existing secrets. No test has been run.
 
 `qualified-keychain-bridge-qualification.yml` is an isolated future manual job:
-only ten pure contracts and one actual owned canary, Python 3.12 and pinned
+only eleven pure contracts and one actual owned canary, Python 3.12 and pinned
 actions. It requires reviewed executor SHA == event SHA == checked-out Git HEAD.
 It accepts no adopter source/payload, assembly, installer, notarization, new
 secret or approval prompt. The repository may be public; only safe source/run,
@@ -80,3 +84,15 @@ receipt. Source/workflow hashes and executor SHA/run/attempt are bound; both
 `packageQualified` and `publicRelease` remain false. Only closed safe metadata
 may become a seven-day artifact. No repository API write, workflow installation,
 dispatch or signing has been performed for this candidate.
+
+The previous reviewed source `00a153b7aaaebd604c0d5ca13cf1549f2a3ba4f1`
+ran remotely as `38481784992`: ten pure contracts passed; its OS-binary canary
+passed the certificate/OU and strict signature phases but failed at execution
+(`canary-execute-failed`). No successful qualification receipt was produced.
+The failure did not preserve a return code or establish an arm64e/platform-binary
+cause. The new fixed first-party canary removes OS binary re-signing from the
+contract without bypassing execution. A failed execution now reports only a
+bounded numeric exit code or signal enum; arguments, stdout/stderr and secrets
+remain private. The additional pure contract covers guard-before-compile,
+fixed source, owned output, clean compiler environment and sanitized failure
+details. These changes have not been executed or tested locally or remotely.
