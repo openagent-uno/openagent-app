@@ -154,7 +154,7 @@ jobs:
 
   assemble:
     needs: macos-sign
-    if: always() && (needs.macos-sign.result == 'success' || inputs.signed_run_id != '')
+    if: always() && !cancelled() && (needs.macos-sign.result == 'success' || inputs.signed_run_id != '')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:

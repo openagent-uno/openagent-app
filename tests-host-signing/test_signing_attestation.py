@@ -23,7 +23,7 @@ class SigningAttestation(unittest.TestCase):
             root=Path(tmp);(root/'release-index.json').write_text(json.dumps(final))
             original_path=root/'original.json';original_path.write_text(json.dumps(original))
             result=subprocess.run([sys.executable,str(SCRIPT),str(root),str(original_path)],capture_output=True,
-                env=dict(os.environ,CANONICAL_RUN='1',CANDIDATE_INDEX_SHA256='0'*64,
+                env=dict(os.environ,SIGNED_RUN='',CANONICAL_RUN='1',CANDIDATE_INDEX_SHA256='0'*64,
                          GITHUB_REPOSITORY='openagent-uno/openagent-app',GITHUB_SHA='1'*40,GITHUB_RUN_ID='2'))
             proof=json.loads((root/'qualification.json').read_text()) if (root/'qualification.json').exists() else None
             return result.returncode,proof
