@@ -1,0 +1,137 @@
+# PRIVATE SOURCE CANDIDATE ONLY; not installed, tested or dispatched.
+# Root must review and coordinate the exact executor commit before activation.
+name: Isolated keychain bridge qualification candidate
+on:
+  workflow_dispatch:
+    inputs:
+      executor_sha:
+        description: Reviewed full executor commit containing only the qualification candidate
+        required: true
+        type: string
+      application_id:
+        description: Explicit reverse-DNS identifier for the owned signing canary
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: qualified-keychain-signing
+  cancel-in-progress: false
+jobs:
+  bridge-only:
+    if: ${{ github.repository == 'openagent-uno/openagent-app' && github.event_name == 'workflow_dispatch' }}
+    runs-on: macos-15
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    env:
+      REVIEWED_EXECUTOR_SHA: ${{ inputs.executor_sha }}
+      SIGNING_APPLICATION_ID: ${{ inputs.application_id }}
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+    steps:
+      - name: Require the reviewed manual executor before checkout or secrets
+        run: |
+          set -euo pipefail
+          set +x
+          umask 077
+          test "$GITHUB_REPOSITORY" = openagent-uno/openagent-app
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$RUNNER_OS" = macOS
+          [[ "$REVIEWED_EXECUTOR_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$REVIEWED_EXECUTOR_SHA"
+          [[ "$SIGNING_APPLICATION_ID" =~ ^([A-Za-z][A-Za-z0-9-]*\.)+[A-Za-z][A-Za-z0-9-]*$ ]]
+          test "${#SIGNING_APPLICATION_ID}" -le 255
+          # No application payload is accepted, even in a public executor.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.executor_sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Require exact checkout and ten isolated contracts without signing credentials
+        run: |
+          set -euo pipefail
+          set +x
+          umask 077
+          test "$(git rev-parse HEAD)" = "$REVIEWED_EXECUTOR_SHA"
+          test -z "$(git status --porcelain)"
+          cd scripts/qualified-keychain-bridge
+          python3 qualified-keychain-bridge-tests.py CandidateContracts -v 2>&1 | tee "$RUNNER_TEMP/keychain-bridge-pure-contracts.log"
+          python3 - <<'PY'
+          import os, re
+          from pathlib import Path
+          text = Path(os.environ['RUNNER_TEMP'], 'keychain-bridge-pure-contracts.log').read_text()
+          assert re.search(r'^Ran 10 tests in ', text, re.M)
+          assert re.search(r'^OK$', text, re.M) and 'skipped' not in text.lower()
+          PY
+      - name: Qualify one actual owned Developer ID canary and exact cleanup
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SIGNING_TEST_KEYCHAIN_BRIDGE: 'true'
+          SIGNING_KEYCHAIN_QUALIFICATION_OUTPUT: ${{ runner.temp }}/keychain-bridge-qualification.json
+        run: |
+          set -euo pipefail
+          set +x
+          umask 077
+          python3 scripts/qualified-keychain-bridge/qualified-keychain-bridge-tests.py ActualHostedCanary -v
+      - name: Require real cleanup and exact candidate source before retaining safe metadata
+        run: |
+          set -euo pipefail
+          set +x
+          python3 - <<'PY'
+          import hashlib, json, os, re, stat
+          from pathlib import Path
+          root = Path('scripts/qualified-keychain-bridge')
+          path = Path(os.environ['RUNNER_TEMP'], 'keychain-bridge-qualification.json')
+          info = path.lstat()
+          assert stat.S_ISREG(info.st_mode) and stat.S_IMODE(info.st_mode) == 0o600 and info.st_nlink == 1
+          assert info.st_size < 32768
+          q = json.loads(path.read_text())
+          assert set(q) == {'schema', 'result', 'context', 'team', 'applicationId', 'bridgeSourceSHA256',
+                            'certificateSHA256', 'identitySHA1', 'canarySHA256', 'canaryVerified',
+                            'canaryExecuted', 'cleanupConfirmed', 'originalSearchListRestored',
+                            'ownedKeychainDeleted', 'ownedRootDeleted', 'publicRelease', 'packageQualified', 'scope'}
+          assert set(q['context']) == {'runId', 'runAttempt', 'executorCommit', 'job',
+                                      'executorRepository', 'applicationId'}
+          assert q['schema'] == 'qualified-keychain-qualification-v1' and q['result'] == 'passed'
+          assert q['context']['executorCommit'] == os.environ['REVIEWED_EXECUTOR_SHA']
+          assert q['context']['runId'] == os.environ['GITHUB_RUN_ID']
+          assert q['context']['runAttempt'] == os.environ['GITHUB_RUN_ATTEMPT']
+          assert q['context']['job'] == os.environ['GITHUB_JOB']
+          assert q['context']['executorRepository'] == os.environ['GITHUB_REPOSITORY']
+          assert q['team'] == 'B4KWCQFY8V' and q['applicationId'] == os.environ['SIGNING_APPLICATION_ID']
+          assert q['context']['applicationId'] == os.environ['SIGNING_APPLICATION_ID']
+          for field in ('canaryVerified', 'canaryExecuted', 'cleanupConfirmed', 'originalSearchListRestored',
+                        'ownedKeychainDeleted', 'ownedRootDeleted'):
+              assert q[field] is True
+          assert q['publicRelease'] is False and q['packageQualified'] is False
+          assert q['scope'] == 'hosted keychain and owned Developer ID canary only'
+          assert re.fullmatch(r'[0-9A-F]{40}', q['identitySHA1'])
+          for field in ('certificateSHA256', 'canarySHA256'):
+              assert re.fullmatch(r'[0-9a-f]{64}', q[field])
+          expected = {'qualified-keychain-bridge.sh', 'qualified-keychain-bridge.py',
+                      'qualified-keychain-bridge-tests.py', 'qualified-keychain-bridge-qualification.yml'}
+          assert set(q['bridgeSourceSHA256']) == expected
+          for name, digest in q['bridgeSourceSHA256'].items():
+              assert hashlib.sha256((root / name).read_bytes()).hexdigest() == digest
+          # Workflow's checked-in bytes must equal the candidate hashed above.
+          assert Path('.github/workflows/qualified-keychain-bridge-qualification.yml').read_bytes() == (
+              root / 'qualified-keychain-bridge-qualification.yml').read_bytes()
+          print('KEYCHAIN_BRIDGE_QUALIFICATION_PASS pure_contracts=10 actual_canary=1 cleanup=true')
+          print('receipt_sha256=' + hashlib.sha256(path.read_bytes()).hexdigest())
+          PY
+      # This executor artifact contains only closed safe qualification metadata.
+      # No PKCS12, keychain, original search list, raw preparation receipt or log.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: keychain-bridge-qualification-${{ github.sha }}
+          path: ${{ runner.temp }}/keychain-bridge-qualification.json
+          if-no-files-found: error
+          retention-days: 7
