@@ -1,9 +1,16 @@
-name: Release
+name: Canonical App updater bridge
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Full immutable commit from openagent-uno/openagent main
+        required: true
+        type: string
+      version:
+        description: Exact canonical App package version (for example 1.1.0-beta.16)
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -11,33 +18,50 @@ permissions:
   attestations: write
 
 concurrency:
-  group: release-${{ github.repository }}-${{ github.ref_name }}
+  group: canonical-app-bridge-${{ inputs.version }}
   cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: canonical/apps/app
 
 jobs:
   verify-tag:
-    name: verify tag and source versions
+    name: verify canonical source and installed identity
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.source.outputs.tag }}
+      version: ${{ steps.source.outputs.version }}
+      channel: ${{ steps.source.outputs.channel }}
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
+          path: executor
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: openagent-uno/openagent
+          ref: ${{ inputs.source_sha }}
+          path: canonical
           fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - name: Require an exact SemVer tag from main matching both packages
+      - name: Test source admission and provenance guards
+        run: node --test "$GITHUB_WORKSPACE/executor/.github/scripts/canonical-app-source.test.mjs"
+      - name: Verify exact canonical commit, source versions, identity and host-tools pins
+        id: source
         shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_VERSION: ${{ inputs.version }}
         run: |
           set -euo pipefail
-          git fetch origin main:refs/remotes/origin/main --no-tags
-          source_commit=$(git rev-parse "$GITHUB_SHA^{commit}")
-          [[ "$source_commit" == "$(git rev-parse HEAD)" ]]
-          git merge-base --is-ancestor "$source_commit" origin/main
-          desktop_version=$(node -p "require('./desktop/package.json').version")
-          universal_version=$(node -p "require('./universal/package.json').version")
-          [[ "$desktop_version" == "$universal_version" ]]
-          [[ "$GITHUB_REF_NAME" == "v$desktop_version" ]]
-          [[ "$desktop_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-beta\.[0-9]+)?$ ]]
+          git -C "$GITHUB_WORKSPACE/canonical" fetch origin main:refs/remotes/origin/main --no-tags
+          node "$GITHUB_WORKSPACE/executor/.github/scripts/canonical-app-source.mjs" \
+            "$GITHUB_WORKSPACE/canonical" "$SOURCE_SHA" "$SOURCE_VERSION"
 
   test:
     name: lint, types, and unit tests
@@ -45,14 +69,35 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: executor
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: openagent-uno/openagent
+          ref: ${{ inputs.source_sha }}
+          path: canonical
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Verify this runner's canonical source
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git -C "$GITHUB_WORKSPACE/canonical" fetch origin main:refs/remotes/origin/main --no-tags
+          node "$GITHUB_WORKSPACE/executor/.github/scripts/canonical-app-source.mjs" \
+            "$GITHUB_WORKSPACE/canonical" "$SOURCE_SHA" "$SOURCE_VERSION" "$RUNNER_TEMP/app-source.json"
       - name: Install universal dependencies
-        working-directory: universal
+        working-directory: canonical/apps/app/universal
         run: npm ci
       - name: Install desktop dependencies
-        working-directory: desktop
+        working-directory: canonical/apps/app/desktop
         run: npm ci
       - name: Run app test gate
         run: bash test.sh
@@ -90,20 +135,41 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: executor
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: openagent-uno/openagent
+          ref: ${{ inputs.source_sha }}
+          path: canonical
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Verify this runner's canonical source
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git -C "$GITHUB_WORKSPACE/canonical" fetch origin main:refs/remotes/origin/main --no-tags
+          node "$GITHUB_WORKSPACE/executor/.github/scripts/canonical-app-source.mjs" \
+            "$GITHUB_WORKSPACE/canonical" "$SOURCE_SHA" "$SOURCE_VERSION" "$RUNNER_TEMP/app-source.json"
       - name: Install Linux build deps
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y rpm libarchive-tools xvfb
       - name: Install universal deps
-        working-directory: universal
+        working-directory: canonical/apps/app/universal
         run: npm ci
       - name: Build web app
-        working-directory: universal
+        working-directory: canonical/apps/app/universal
         run: npx expo export --platform web
       - name: Install desktop deps
-        working-directory: desktop
+        working-directory: canonical/apps/app/desktop
         run: npm ci
       # Consume one immutable, version-pinned host-tools artifact. The
       # packaging entrypoint independently verifies its complete manifest.
@@ -134,12 +200,12 @@ jobs:
             fi
           done
       - name: Build Electron app
-        working-directory: desktop
-        run: npm run ${{ matrix.package_script }} -- ${{ matrix.arch_flag }} --publish never --config.publish.channel "${{ contains(github.ref_name, '-beta.') && 'beta' || 'latest' }}"
+        working-directory: canonical/apps/app/desktop
+        run: npm run ${{ matrix.package_script }} -- ${{ matrix.arch_flag }} --publish never --config.publish.channel "${{ needs.verify-tag.outputs.channel }}"
         env:
           OPENAGENT_REQUIRE_HOST_TOOLS: '1'
           OPENAGENT_HOST_TOOLS_PLATFORM_KEY: ${{ matrix.platform_key }}
-          OPENAGENT_HOST_TOOLS_DIST: ${{ github.workspace }}/.release-deps/host-tools-dist
+          OPENAGENT_HOST_TOOLS_DIST: ${{ github.workspace }}/canonical/apps/app/.release-deps/host-tools-dist
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           CSC_LINK: ${{ runner.os == 'macOS' && secrets.CSC_LINK || '' }}
           CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.CSC_KEY_PASSWORD || '' }}
@@ -147,30 +213,34 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_APP_SPECIFIC_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
       - name: Smoke-test packaged artifacts and update metadata
-        working-directory: desktop
+        working-directory: canonical/apps/app/desktop
         run: node scripts/test-packaged-artifacts.mjs "${{ matrix.platform_key }}"
         env:
           REQUIRE_SIGNED: ${{ runner.os == 'macOS' && 'true' || 'false' }}
+      - name: Stamp canonical payload and legacy executor provenance
+        shell: bash
+        run: node "$GITHUB_WORKSPACE/executor/.github/scripts/stamp-canonical-app-artifacts.mjs" "$RUNNER_TEMP/app-source.json" desktop/release
       - uses: actions/upload-artifact@v4
         with:
           name: desktop-${{ matrix.platform_key }}
+          retention-days: 1
           path: |
-            desktop/release/*.dmg
-            desktop/release/*.zip
-            desktop/release/*.exe
-            desktop/release/*.AppImage
-            desktop/release/*.deb
-            desktop/release/latest.yml
-            desktop/release/latest-mac.yml
-            desktop/release/latest-linux.yml
-            desktop/release/latest-linux-arm64.yml
-            desktop/release/beta.yml
-            desktop/release/beta-mac.yml
-            desktop/release/beta-linux.yml
-            desktop/release/beta-linux-arm64.yml
-            desktop/release/*.blockmap
-            desktop/release/*.sha256
-            desktop/release/release-manifest-*.json
+            canonical/apps/app/desktop/release/*.dmg
+            canonical/apps/app/desktop/release/*.zip
+            canonical/apps/app/desktop/release/*.exe
+            canonical/apps/app/desktop/release/*.AppImage
+            canonical/apps/app/desktop/release/*.deb
+            canonical/apps/app/desktop/release/latest.yml
+            canonical/apps/app/desktop/release/latest-mac.yml
+            canonical/apps/app/desktop/release/latest-linux.yml
+            canonical/apps/app/desktop/release/latest-linux-arm64.yml
+            canonical/apps/app/desktop/release/beta.yml
+            canonical/apps/app/desktop/release/beta-mac.yml
+            canonical/apps/app/desktop/release/beta-linux.yml
+            canonical/apps/app/desktop/release/beta-linux-arm64.yml
+            canonical/apps/app/desktop/release/*.blockmap
+            canonical/apps/app/desktop/release/*.sha256
+            canonical/apps/app/desktop/release/release-manifest-*.json
 
   macos-intel-smoke:
     name: launch packaged macOS Intel installers
@@ -178,35 +248,77 @@ jobs:
     runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: executor
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: openagent-uno/openagent
+          ref: ${{ inputs.source_sha }}
+          path: canonical
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Verify this runner's canonical source
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git -C "$GITHUB_WORKSPACE/canonical" fetch origin main:refs/remotes/origin/main --no-tags
+          node "$GITHUB_WORKSPACE/executor/.github/scripts/canonical-app-source.mjs" \
+            "$GITHUB_WORKSPACE/canonical" "$SOURCE_SHA" "$SOURCE_VERSION" "$RUNNER_TEMP/app-source.json"
       - name: Install verifier dependencies
-        working-directory: desktop
+        working-directory: canonical/apps/app/desktop
         run: npm ci
       - uses: actions/download-artifact@v4
         with:
           name: desktop-darwin-x64
-          path: artifacts
+          path: canonical/apps/app/artifacts
       - name: Verify and launch x64 ZIP and DMG payloads
         run: node desktop/scripts/smoke-macos-installers.mjs artifacts x64
 
   release:
-    needs: [desktop, macos-intel-smoke]
+    needs: [verify-tag, desktop, macos-intel-smoke]
     if: always() && needs.desktop.result == 'success' && needs.macos-intel-smoke.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          path: executor
+          persist-credentials: false
+      - uses: actions/checkout@v4
+        with:
+          repository: openagent-uno/openagent
+          ref: ${{ inputs.source_sha }}
+          path: canonical
+          fetch-depth: 0
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - name: Verify this runner's canonical source
+        shell: bash
+        env:
+          SOURCE_SHA: ${{ inputs.source_sha }}
+          SOURCE_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git -C "$GITHUB_WORKSPACE/canonical" fetch origin main:refs/remotes/origin/main --no-tags
+          node "$GITHUB_WORKSPACE/executor/.github/scripts/canonical-app-source.mjs" \
+            "$GITHUB_WORKSPACE/canonical" "$SOURCE_SHA" "$SOURCE_VERSION" "$RUNNER_TEMP/app-source.json"
       - name: Install release verifier dependencies
-        working-directory: desktop
+        working-directory: canonical/apps/app/desktop
         run: npm ci
       - uses: actions/download-artifact@v4
         with:
           pattern: desktop-*
-          path: artifacts
+          path: canonical/apps/app/artifacts
       - name: Merge per-architecture updater metadata without overwrites
         run: node desktop/scripts/merge-update-metadata.js artifacts artifacts/release-metadata
       - name: Verify exact merged release asset set
@@ -217,75 +329,64 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          release_tag="${{ needs.verify-tag.outputs.tag }}"
           existing_tags=$(gh api --paginate "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq '.[].tag_name')
-          if grep -Fqx -- "$GITHUB_REF_NAME" <<<"$existing_tags"; then
-            echo "Release ${GITHUB_REF_NAME} already exists; publish a new beta tag instead."
+          if grep -Fqx -- "$release_tag" <<<"$existing_tags"; then
+            echo "Release ${release_tag} already exists; publish a new beta tag instead."
             exit 1
           fi
       - name: Attest exact release assets
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
         with:
           subject-path: |
-            artifacts/**/*.dmg
-            artifacts/**/*.zip
-            artifacts/**/*.exe
-            artifacts/**/*.AppImage
-            artifacts/**/*.deb
-            artifacts/release-metadata/*.yml
-            artifacts/**/*.blockmap
-            artifacts/**/*.sha256
-            artifacts/**/release-manifest-*.json
+            canonical/apps/app/artifacts/**/*.dmg
+            canonical/apps/app/artifacts/**/*.zip
+            canonical/apps/app/artifacts/**/*.exe
+            canonical/apps/app/artifacts/**/*.AppImage
+            canonical/apps/app/artifacts/**/*.deb
+            canonical/apps/app/artifacts/release-metadata/*.yml
+            canonical/apps/app/artifacts/**/*.blockmap
+            canonical/apps/app/artifacts/**/*.sha256
+            canonical/apps/app/artifacts/**/release-manifest-*.json
       - name: Upload an unpublished draft release
         id: draft
         uses: softprops/action-gh-release@v2.6.2
         with:
           draft: true
+          tag_name: ${{ needs.verify-tag.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: OpenAgent App ${{ needs.verify-tag.outputs.tag }}
+          body: |
+            Canonical App payload: openagent-uno/openagent@${{ inputs.source_sha }} (apps/app).
+            Historical updater executor: openagent-uno/openagent-app@${{ github.sha }}.
+            Existing application identity, host-tools pins and updater feed are preserved.
+            Draft only: publish after reviewing the exact six-platform asset set.
           files: |
-            artifacts/**/*.dmg
-            artifacts/**/*.zip
-            artifacts/**/*.exe
-            artifacts/**/*.AppImage
-            artifacts/**/*.deb
-            artifacts/release-metadata/*.yml
-            artifacts/**/*.blockmap
-            artifacts/**/*.sha256
-            artifacts/**/release-manifest-*.json
+            canonical/apps/app/artifacts/**/*.dmg
+            canonical/apps/app/artifacts/**/*.zip
+            canonical/apps/app/artifacts/**/*.exe
+            canonical/apps/app/artifacts/**/*.AppImage
+            canonical/apps/app/artifacts/**/*.deb
+            canonical/apps/app/artifacts/release-metadata/*.yml
+            canonical/apps/app/artifacts/**/*.blockmap
+            canonical/apps/app/artifacts/**/*.sha256
+            canonical/apps/app/artifacts/**/release-manifest-*.json
           generate_release_notes: true
           fail_on_unmatched_files: true
           overwrite_files: false
-          prerelease: ${{ contains(github.ref_name, '-beta.') }}
-          make_latest: ${{ contains(github.ref_name, '-beta.') && 'false' || 'true' }}
-      - name: Verify uploaded bytes, then publish atomically
+          prerelease: ${{ needs.verify-tag.outputs.channel == 'beta' }}
+          make_latest: false
+      - name: Verify draft asset inventory and retain publication for review
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_ID: ${{ steps.draft.outputs.id }}
+          SOURCE_CHANNEL: ${{ needs.verify-tag.outputs.channel }}
         shell: bash
         run: |
           set -euo pipefail
-          version="${GITHUB_REF_NAME#v}"
           is_beta=false
-          make_latest=true
-          if [[ "$version" == *-beta.* ]]; then
-            is_beta=true
-            make_latest=false
-          fi
+          if [[ "$SOURCE_CHANNEL" == beta ]]; then is_beta=true; fi
           gh api "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" > release-draft.json
           node desktop/scripts/verify-release-set.mjs artifacts \
-            --release-json release-draft.json \
-            --expect-draft true \
-            --expect-prerelease "$is_beta"
-          node - "$is_beta" "$make_latest" > publish.json <<'NODE'
-          const fs = require('node:fs');
-          fs.writeFileSync(1, JSON.stringify({
-            draft: false,
-            prerelease: process.argv[2] === 'true',
-            make_latest: process.argv[3],
-          }));
-          NODE
-          gh api --method PATCH \
-            "repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID" \
-            --input publish.json > release-published.json
-          node desktop/scripts/verify-release-set.mjs artifacts \
-            --release-json release-published.json \
-            --expect-draft false \
-            --expect-prerelease "$is_beta"
+            --release-json release-draft.json --expect-draft true --expect-prerelease "$is_beta"
+          echo "Verified six-platform draft release $RELEASE_ID; publication requires exact asset review." >> "$GITHUB_STEP_SUMMARY"
