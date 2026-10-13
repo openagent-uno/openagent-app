@@ -169,7 +169,8 @@ jobs:
         working-directory: .e2e-deps/openagent-server
         run: |
           uv venv --python 3.12
-          uv pip install -e .
+          uv pip install -e . 'sqlalchemy[asyncio]==2.1.4'
+          uv pip check
 
       - name: Require the same host-tools release on server and Desktop
         run: cmp desktop/host-tools.lock.json .e2e-deps/openagent-server/host-tools.lock.json
