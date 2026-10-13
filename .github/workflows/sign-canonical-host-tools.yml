@@ -20,6 +20,10 @@ on:
         description: Optional operator-owned private draft staging after a cross-repository download denial
         required: false
         type: string
+      signed_run_id:
+        description: Optional finite reuse of qualified signing run 38467343111 for its assembly path repair
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -35,9 +39,11 @@ env:
   CANONICAL_SOURCE: ${{ inputs.source_sha }}
   CANONICAL_RUN: ${{ inputs.canonical_run_id }}
   CANDIDATE_INDEX_SHA256: ${{ inputs.candidate_index_sha256 }}
+  SIGNED_RUN: ${{ inputs.signed_run_id }}
 
 jobs:
   macos-sign:
+    if: inputs.signed_run_id == ''
     strategy:
       max-parallel: 1
       fail-fast: false
@@ -148,6 +154,7 @@ jobs:
 
   assemble:
     needs: macos-sign
+    if: always() && (needs.macos-sign.result == 'success' || inputs.signed_run_id != '')
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -164,6 +171,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Verify the finite reuse source and both successful native signature gates
+        if: inputs.signed_run_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python -m unittest discover -s executor/tests-host-signing -q
+          python executor/scripts/verify-signed-host-reuse.py > reuse-source-qualification.json
       - uses: actions/download-artifact@v4
         if: inputs.staging_tag == ''
         with:
@@ -189,15 +203,22 @@ jobs:
           cp dist/release-index.json original-release-index.json
       - uses: actions/download-artifact@v4
         with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.signed_run_id || github.run_id }}
           pattern: canonical-signed-host-tools-*
           path: signed
+      - name: Verify the exact qualified signing payloads before merging
+        if: inputs.signed_run_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python executor/scripts/verify-signed-host-reuse.py --payload-directory signed --canonical canonical > reused-signatures.json
       - name: Merge only the two signed macOS targets and retain the four original native targets
         shell: bash
         run: |
           set -euo pipefail
           for target in darwin-arm64 darwin-x64; do
-            cp "signed/canonical-signed-host-tools-$target/openagent-host-tools-$target.tar.gz" dist/
-            cp "signed/canonical-signed-host-tools-$target/openagent-host-tools-$target.tar.gz.sha256" dist/
+            cp "signed/canonical-signed-host-tools-$target/canonical/packages/host-tools/dist/openagent-host-tools-$target.tar.gz" dist/
+            cp "signed/canonical-signed-host-tools-$target/canonical/packages/host-tools/dist/openagent-host-tools-$target.tar.gz.sha256" dist/
           done
           python canonical/packages/host-tools/scripts/release_index.py dist --source-commit "$CANONICAL_SOURCE" --source-repository openagent-uno/openagent
           python executor/scripts/finalize-canonical-host-tools.py dist original-release-index.json
