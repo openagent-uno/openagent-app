@@ -33,6 +33,39 @@ def tar_fixture(file, extras=(), replace_helper=False):
 
 
 class SeedContracts(unittest.TestCase):
+    def test_draft_lookup_uses_only_exact_reviewed_release_id_url(self):
+        with patch.dict(os.environ, {'GITHUB_REPOSITORY': 'neutral/executor'}), \
+             patch.object(seed, 'response', return_value=io.BytesIO(b'{"id":7}')) as response:
+            self.assertEqual(seed.fetch_release(7, 'synthetic-not-a-credential'), {'id': 7})
+        response.assert_called_once_with('https://api.github.com/repos/neutral/executor/releases/7',
+                                         token='synthetic-not-a-credential')
+
+    def test_invalid_release_id_stops_before_request(self):
+        for value in (0, -1, True, '7', 1 << 63):
+            with self.subTest(value=value), patch.object(seed, 'response', side_effect=AssertionError('no API')) as response:
+                with self.assertRaisesRegex(ValueError, 'exact-private-release-id-required'):
+                    seed.fetch_release(value, 'synthetic-not-a-credential')
+                response.assert_not_called()
+
+    def test_wrong_id_or_tag_stops_before_download_or_code_execution(self):
+        for release_id, tag in ((2, 'neutral-input'), (1, 'wrong-tag')):
+            with self.subTest(release_id=release_id, tag=tag), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                args = argparse.Namespace(source='a' * 40, nonce='b' * 32, tag='neutral-input', release_id=1,
+                    index_sha256='c' * 64, asset_set_sha256='d' * 64, packet=root / 'packet',
+                    helpers=root / 'helpers', checkout=root / 'checkout', metadata=root / 'metadata.json')
+                release = {'id': release_id, 'tag_name': tag, 'draft': True, 'prerelease': True}
+                with patch.dict(os.environ, {'GITHUB_ACTIONS': 'true', 'RUNNER_ENVIRONMENT': 'github-hosted',
+                    'GITHUB_REPOSITORY': 'neutral/executor', 'GH_TOKEN': 'synthetic-not-a-credential'}), \
+                     patch.object(seed, 'fetch_release', return_value=release) as fetch, \
+                     patch.object(seed, 'download', side_effect=AssertionError('no download')) as download, \
+                     patch.object(seed.subprocess, 'run', side_effect=AssertionError('no code')) as execute:
+                    with self.assertRaisesRegex(ValueError, 'owned-unpublished-draft-required'):
+                        seed.bootstrap(args)
+                    fetch.assert_called_once_with(1, 'synthetic-not-a-credential')
+                    download.assert_not_called(); execute.assert_not_called()
+                self.assertFalse(args.packet.exists())
+
     def test_default_transport_is_get_only_and_redirect_removes_authorization(self):
         requests = []
         class Opener:
@@ -111,7 +144,7 @@ class SeedContracts(unittest.TestCase):
                        'author': {'login': 'fixture-owner'}, 'assets': rows}
             published = json.loads(json.dumps(release)); published['draft'] = False
             by_id = {row['id']: payloads[row['name']] for row in rows}
-            args = argparse.Namespace(source=source, nonce=nonce, tag='neutral-input',
+            args = argparse.Namespace(source=source, nonce=nonce, tag='neutral-input', release_id=1,
                 index_sha256=hashlib.sha256(index_bytes).hexdigest(),
                 asset_set_sha256=hashlib.sha256(json.dumps(assets, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
                 packet=root / 'packet', helpers=root / 'helpers', checkout=root / 'restored', metadata=root / 'release.json')
