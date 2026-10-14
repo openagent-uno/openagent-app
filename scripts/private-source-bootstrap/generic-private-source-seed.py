@@ -60,8 +60,11 @@ def response(url, *, token, asset=False):
         return opener.open(urllib.request.Request(target.geturl()), timeout=60)
 
 
-def fetch_release(tag, token):
-    url = 'https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/releases/tags/' + tag
+def fetch_release(release_id, token):
+    require(type(release_id) is int and 0 < release_id < 1 << 63, 'exact-private-release-id-required')
+    # An unpublished draft is resolved by its reviewed ID; the tag remains an
+    # independent identity check, never a tag creation/publication workaround.
+    url = 'https://api.github.com/repos/' + os.environ['GITHUB_REPOSITORY'] + '/releases/' + str(release_id)
     with response(url, token=token) as stream:
         body = stream.read((16 << 20) + 1)
     require(len(body) <= 16 << 20, 'bounded-draft-metadata-required')
@@ -132,9 +135,10 @@ def bootstrap(args):
     token = os.environ.get('GH_TOKEN', '')
     require(token and not args.packet.exists() and not args.helpers.exists() and not args.checkout.exists(),
             'token-and-fresh-owned-paths-required')
-    release = fetch_release(args.tag, token)
+    release = fetch_release(args.release_id, token)
     require(release.get('draft') is True and release.get('prerelease') is True
-            and release.get('tag_name') == args.tag and type(release.get('id')) is int,
+            and release.get('tag_name') == args.tag and type(release.get('id')) is int
+            and release['id'] == args.release_id,
             'owned-unpublished-draft-required')
     rows = release.get('assets', [])
     records = {row['name']: row for row in rows}
@@ -162,7 +166,7 @@ def bootstrap(args):
         total += specification['bytes']
         require(total <= 12 << 30, 'aggregate-private-input-budget-exceeded')
         download(records[name], args.packet / name, specification, token)
-    final = fetch_release(args.tag, token)
+    final = fetch_release(args.release_id, token)
     require(immutable_release(final) == immutable_release(release), 'draft-published-or-replaced-during-bootstrap')
     extract_helpers(args.packet / 'source.tar.gz', args.helpers)
     # No API credential is provided to code from the authenticated private TAR.
@@ -183,6 +187,7 @@ if __name__ == '__main__':
         parser.add_argument('--' + name, type=Path, required=True)
     for name in ('tag', 'source', 'nonce', 'index-sha256', 'asset-set-sha256'):
         parser.add_argument('--' + name, required=True)
+    parser.add_argument('--release-id', type=int, required=True)
     try:
         bootstrap(parser.parse_args())
     except Exception:

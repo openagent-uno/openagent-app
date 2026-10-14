@@ -33,6 +33,6 @@ jobs:
               ast.parse((root / name).read_text(encoding='utf-8'), filename=name)
           print('BOOTSTRAP_SEED_SYNTAX_ACCEPTED_NOT_SOURCE_OR_SIGNING_QUALIFICATION')
           PY
-      - name: Exercise seven isolated contracts without credentials, network or application code
+      - name: Exercise isolated contracts without credentials, network or application code
         run: env -u GH_TOKEN -u GITHUB_TOKEN python scripts/private-source-bootstrap/genericseed-tests.py -v
 # No SDK, runtime, private source artifact, keychain, API write or asset upload.

@@ -16,6 +16,14 @@ on:
         description: Existing owned unpublished input draft exact tag
         type: string
         required: true
+      input_release_id:
+        description: Reviewed exact existing unpublished input draft release ID
+        type: string
+        required: true
+      output_release_id:
+        description: Reviewed exact distinct unpublished output draft release ID
+        type: string
+        required: true
       application_id:
         description: Explicit reviewed application identifier matching the private input
         type: string
@@ -49,6 +57,8 @@ jobs:
       SIGN_SOURCE: ${{ inputs.source_sha }}
       SIGN_NONCE: ${{ inputs.nonce }}
       SIGN_INPUT_TAG: ${{ inputs.input_tag }}
+      SIGNING_INPUT_RELEASE_ID: ${{ inputs.input_release_id }}
+      SIGNING_OUTPUT_RELEASE_ID: ${{ inputs.output_release_id }}
       SIGNING_APPLICATION_ID: ${{ inputs.application_id }}
       SIGN_INPUT_INDEX_SHA: ${{ inputs.input_index_sha256 }}
       SIGN_INPUT_ASSET_SET_SHA: ${{ inputs.input_asset_set_sha256 }}
@@ -68,6 +78,12 @@ jobs:
           test "$GITHUB_REPOSITORY" = openagent-uno/openagent-app
           test "$GITHUB_SHA" = "$SIGN_EXECUTOR_SOURCE"
           test "$RUNNER_ENVIRONMENT" = github-hosted
+          python3 - <<'PY'
+          import os,re
+          values=[os.environ[key] for key in ('SIGNING_INPUT_RELEASE_ID','SIGNING_OUTPUT_RELEASE_ID')]
+          assert all(re.fullmatch('[1-9][0-9]{0,18}',value) and int(value)<1<<63 for value in values), 'reviewed positive release IDs required'
+          assert values[0]!=values[1], 'distinct input/output drafts required'
+          PY
           umask 077
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
@@ -94,7 +110,7 @@ jobs:
           python executor/scripts/private-source-bootstrap/generic-private-source-seed.py \
             --packet "$RUNNER_TEMP/private-sign-input" --helpers "$RUNNER_TEMP/private-source-bootstrap" \
             --checkout "$GITHUB_WORKSPACE/canonical-source" --metadata "$RUNNER_TEMP/private-input-release.json" \
-            --tag "$SIGN_INPUT_TAG" --source "$SIGN_SOURCE" --nonce "$SIGN_NONCE" \
+            --release-id "$SIGNING_INPUT_RELEASE_ID" --tag "$SIGN_INPUT_TAG" --source "$SIGN_SOURCE" --nonce "$SIGN_NONCE" \
             --index-sha256 "$SIGN_INPUT_INDEX_SHA" --asset-set-sha256 "$SIGN_INPUT_ASSET_SET_SHA"
       - name: Call the original restored source's full contracts and offline staging
         run: |
