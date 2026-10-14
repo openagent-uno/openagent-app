@@ -1,0 +1,165 @@
+# Manual source-bound signing. Merge only after the seed contracts pass.
+# Input and output remain owned unpublished drafts; no public release.
+name: Sign source-bound private desktop inputs into an owned unpublished draft
+on:
+  workflow_dispatch:
+    inputs:
+      source_sha:
+        description: Reviewed authentic private source commit, full SHA
+        type: string
+        required: true
+      nonce:
+        description: Reviewed fresh lowercase32hex scope
+        type: string
+        required: true
+      input_tag:
+        description: Existing owned unpublished input draft exact tag
+        type: string
+        required: true
+      application_id:
+        description: Explicit reviewed application identifier matching the private input
+        type: string
+        required: true
+      input_index_sha256:
+        description: Reviewed exact private input index bytes SHA256
+        type: string
+        required: true
+      input_asset_set_sha256:
+        description: Reviewed exact canonical input asset map SHA256
+        type: string
+        required: true
+      executor_sha:
+        description: Reviewed complete executor SHA containing the qualified public seed and bridge
+        type: string
+        required: true
+permissions:
+  contents: write
+concurrency:
+  group: private-source-signing
+  cancel-in-progress: false
+jobs:
+  sign-draft:
+    if: ${{ github.repository == 'openagent-uno/openagent-app' && github.event_name == 'workflow_dispatch' }}
+    runs-on: macos-15
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: bash
+    env:
+      SIGN_SOURCE: ${{ inputs.source_sha }}
+      SIGN_NONCE: ${{ inputs.nonce }}
+      SIGN_INPUT_TAG: ${{ inputs.input_tag }}
+      SIGNING_APPLICATION_ID: ${{ inputs.application_id }}
+      SIGN_INPUT_INDEX_SHA: ${{ inputs.input_index_sha256 }}
+      SIGN_INPUT_ASSET_SET_SHA: ${{ inputs.input_asset_set_sha256 }}
+      SIGN_EXECUTOR_SOURCE: ${{ inputs.executor_sha }}
+      PYTHONDONTWRITEBYTECODE: '1'
+      PYTHONUTF8: '1'
+      NODE_OPTIONS: --max-old-space-size=1024
+      EXPO_NO_TELEMETRY: '1'
+      CI: 'true'
+      CARGO_BUILD_JOBS: '2'
+      GOMAXPROCS: '2'
+      MAKEFLAGS: '-j2'
+    steps:
+      - name: Require the exact reviewed executor before checkout
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = openagent-uno/openagent-app
+          test "$GITHUB_SHA" = "$SIGN_EXECUTOR_SOURCE"
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          umask 077
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: ${{ inputs.executor_sha }}
+          path: executor
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24.14.0'
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: '1.26.9'
+          cache: false
+      - name: Bootstrap only hash-bound private code through the minimal generic seed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          # Public seed must be reviewed and tested before removing this job's false guard.
+          python executor/scripts/private-source-bootstrap/generic-private-source-seed.py \
+            --packet "$RUNNER_TEMP/private-sign-input" --helpers "$RUNNER_TEMP/private-source-bootstrap" \
+            --checkout "$GITHUB_WORKSPACE/canonical-source" --metadata "$RUNNER_TEMP/private-input-release.json" \
+            --tag "$SIGN_INPUT_TAG" --source "$SIGN_SOURCE" --nonce "$SIGN_NONCE" \
+            --index-sha256 "$SIGN_INPUT_INDEX_SHA" --asset-set-sha256 "$SIGN_INPUT_ASSET_SET_SHA"
+      - name: Call the original restored source's full contracts and offline staging
+        run: |
+          set -euo pipefail
+          unset GH_TOKEN GITHUB_TOKEN
+          bash canonical-source/tools/release/remote-signing/execute-signing.sh \
+            stage "$SIGN_SOURCE" "$SIGN_NONCE" "$SIGN_INPUT_INDEX_SHA" \
+            "$RUNNER_TEMP/private-sign-input" "$RUNNER_TEMP/private-input-release.json"
+      - name: Require the actual qualified bridge code before importing an identity
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          test "$APPLE_TEAM_ID" = B4KWCQFY8V
+          test "$(git -C executor hash-object scripts/qualified-keychain-bridge/qualified-keychain-bridge.py)" = b2e4b8cca37402fe4b5b3fb8d4eae903add104ab
+          test "$(git -C executor hash-object scripts/qualified-keychain-bridge/qualified-keychain-bridge.sh)" = 0a14e77ee703f4a0c82c0f0a8e5c1eed35f847dd
+          # Exact immutable bridge code is from actual qualification 38484249323/a3309c2d.
+      - name: Prepare the owning keychain and execute its real signed canary
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          executor/scripts/qualified-keychain-bridge/qualified-keychain-bridge.sh \
+            --team B4KWCQFY8V --application-id "$SIGNING_APPLICATION_ID" \
+            --receipt "$RUNNER_TEMP/private-sign-keychain.json"
+      - name: Sign, build, notarize and qualify using only the original private source recipe
+        id: sign
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          unset GH_TOKEN GITHUB_TOKEN CSC_LINK CSC_KEY_PASSWORD
+          bash canonical-source/tools/release/remote-signing/execute-signing.sh \
+            sign "$SIGN_SOURCE" "$SIGN_NONCE" "$SIGN_INPUT_INDEX_SHA" \
+            "$RUNNER_TEMP/private-sign-input" "$RUNNER_TEMP/private-input-release.json"
+      - name: Restore the exact original search list and delete only the owned keychain
+        id: cleanup
+        if: always()
+        run: |
+          set -euo pipefail
+          unset GH_TOKEN GITHUB_TOKEN CSC_LINK CSC_KEY_PASSWORD
+          if test -f "$RUNNER_TEMP/private-sign-keychain.json"; then
+            test "$(git -C executor hash-object scripts/qualified-keychain-bridge/qualified-keychain-bridge.py)" = b2e4b8cca37402fe4b5b3fb8d4eae903add104ab
+            test "$(git -C executor hash-object scripts/qualified-keychain-bridge/qualified-keychain-bridge.sh)" = 0a14e77ee703f4a0c82c0f0a8e5c1eed35f847dd
+            executor/scripts/qualified-keychain-bridge/qualified-keychain-bridge.sh \
+              --cleanup-owned --receipt "$RUNNER_TEMP/private-sign-keychain.json"
+          elif test "${{ steps.sign.outcome }}" = success; then
+            exit 1
+          fi
+      - name: Retain verified final bytes only in the precreated owned unpublished output draft
+        if: ${{ success() && steps.sign.outcome == 'success' && steps.cleanup.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          unset CSC_LINK CSC_KEY_PASSWORD
+          bash canonical-source/tools/release/remote-signing/execute-signing.sh \
+            publish "$SIGN_SOURCE" "$SIGN_NONCE" "$SIGN_INPUT_INDEX_SHA" \
+            "$RUNNER_TEMP/private-sign-input" "$RUNNER_TEMP/private-input-release.json"
+# contents:write is needed only by the final narrow publisher, with its token
+# provided solely to bootstrap/publisher steps. No credential persists in Git.
+# Root creates the EMPTY owned output draft before dispatch. No release/tag is
+# created or published here; no public Actions artifact contains private bytes.
+# Any sign, cleanup, source-binding or upload failure makes the actual job fail.
