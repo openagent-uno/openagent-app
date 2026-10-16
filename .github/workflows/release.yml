@@ -53,7 +53,7 @@ jobs:
         with:
           node-version: '24'
       - name: Test source admission and provenance guards
-        run: node --test "$GITHUB_WORKSPACE/executor/.github/scripts/canonical-app-source.test.mjs"
+        run: node --test "$GITHUB_WORKSPACE/executor/.github/scripts/canonical-app-source.test.mjs" "$GITHUB_WORKSPACE/executor/.github/scripts/staged-app-assets.test.mjs"
       - name: Verify exact canonical commit, source versions, identity and host-tools pins
         id: source
         shell: bash
@@ -70,6 +70,8 @@ jobs:
     name: lint, types, and unit tests
     needs: verify-tag
     runs-on: ubuntu-latest
+    outputs:
+      staging_release_id: ${{ steps.staging.outputs.release_id }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -104,6 +106,13 @@ jobs:
         run: npm ci
       - name: Run app test gate
         run: bash test.sh
+      # Drafts are visible only to repository writers. Transfer files stay out
+      # of Actions artifact/cache storage and never enter the updater feed.
+      - name: Create run-owned unpublished transfer draft
+        id: staging
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node "$GITHUB_WORKSPACE/executor/.github/scripts/staged-app-assets.mjs" create "$RUNNER_TEMP/app-source.json"
 
   desktop:
     needs: [verify-tag, test]
@@ -224,31 +233,16 @@ jobs:
       - name: Stamp canonical payload and legacy executor provenance
         shell: bash
         run: node "$GITHUB_WORKSPACE/executor/.github/scripts/stamp-canonical-app-artifacts.mjs" "$RUNNER_TEMP/app-source.json" desktop/release
-      - uses: actions/upload-artifact@v4
-        with:
-          name: desktop-${{ matrix.platform_key }}
-          retention-days: 1
-          path: |
-            canonical/apps/app/desktop/release/*.dmg
-            canonical/apps/app/desktop/release/*.zip
-            canonical/apps/app/desktop/release/*.exe
-            canonical/apps/app/desktop/release/*.AppImage
-            canonical/apps/app/desktop/release/*.deb
-            canonical/apps/app/desktop/release/latest.yml
-            canonical/apps/app/desktop/release/latest-mac.yml
-            canonical/apps/app/desktop/release/latest-linux.yml
-            canonical/apps/app/desktop/release/latest-linux-arm64.yml
-            canonical/apps/app/desktop/release/beta.yml
-            canonical/apps/app/desktop/release/beta-mac.yml
-            canonical/apps/app/desktop/release/beta-linux.yml
-            canonical/apps/app/desktop/release/beta-linux-arm64.yml
-            canonical/apps/app/desktop/release/*.blockmap
-            canonical/apps/app/desktop/release/*.sha256
-            canonical/apps/app/desktop/release/release-manifest-*.json
+      - name: Stage verified native files without Actions artifact storage
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STAGING_RELEASE_ID: ${{ needs.test.outputs.staging_release_id }}
+        run: node "$GITHUB_WORKSPACE/executor/.github/scripts/staged-app-assets.mjs" upload "$RUNNER_TEMP/app-source.json" "${{ matrix.platform_key }}" desktop/release
 
   macos-intel-smoke:
     name: launch packaged macOS Intel installers
-    needs: desktop
+    needs: [test, desktop]
     runs-on: macos-15-intel
     steps:
       - uses: actions/checkout@v4
@@ -279,15 +273,17 @@ jobs:
       - name: Install verifier dependencies
         working-directory: canonical/apps/app/desktop
         run: npm ci
-      - uses: actions/download-artifact@v4
-        with:
-          name: desktop-darwin-x64
-          path: canonical/apps/app/artifacts
+      - name: Fetch and verify staged Intel files
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STAGING_RELEASE_ID: ${{ needs.test.outputs.staging_release_id }}
+        run: node "$GITHUB_WORKSPACE/executor/.github/scripts/staged-app-assets.mjs" download "$RUNNER_TEMP/app-source.json" darwin-x64 artifacts
       - name: Verify and launch x64 ZIP and DMG payloads
         run: node desktop/scripts/smoke-macos-installers.mjs artifacts x64
 
   release:
-    needs: [verify-tag, desktop, macos-intel-smoke]
+    needs: [verify-tag, test, desktop, macos-intel-smoke]
     if: always() && needs.desktop.result == 'success' && needs.macos-intel-smoke.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -319,10 +315,12 @@ jobs:
       - name: Install release verifier dependencies
         working-directory: canonical/apps/app/desktop
         run: npm ci
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: desktop-*
-          path: canonical/apps/app/artifacts
+      - name: Fetch and verify all six staged platform sets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STAGING_RELEASE_ID: ${{ needs.test.outputs.staging_release_id }}
+        run: node "$GITHUB_WORKSPACE/executor/.github/scripts/staged-app-assets.mjs" download-all "$RUNNER_TEMP/app-source.json" all artifacts
       - name: Merge per-architecture updater metadata without overwrites
         run: node desktop/scripts/merge-update-metadata.js artifacts artifacts/release-metadata
       - name: Verify exact merged release asset set
@@ -394,3 +392,9 @@ jobs:
           node desktop/scripts/verify-release-set.mjs artifacts \
             --release-json release-draft.json --expect-draft true --expect-prerelease "$is_beta"
           echo "Verified six-platform draft release $RELEASE_ID; publication requires exact asset review." >> "$GITHUB_STEP_SUMMARY"
+      - name: Remove only this run's transfer draft after final verification
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STAGING_RELEASE_ID: ${{ needs.test.outputs.staging_release_id }}
+        run: node "$GITHUB_WORKSPACE/executor/.github/scripts/staged-app-assets.mjs" cleanup "$RUNNER_TEMP/app-source.json"
