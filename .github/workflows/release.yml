@@ -53,7 +53,7 @@ jobs:
         with:
           node-version: '24'
       - name: Test source admission and provenance guards
-        run: node --test "$GITHUB_WORKSPACE/executor/.github/scripts/canonical-app-source.test.mjs" "$GITHUB_WORKSPACE/executor/.github/scripts/staged-app-assets.test.mjs"
+        run: node --test "$GITHUB_WORKSPACE/executor/.github/scripts/canonical-app-source.test.mjs" "$GITHUB_WORKSPACE/executor/.github/scripts/staged-app-assets.test.mjs" "$GITHUB_WORKSPACE/executor/.github/scripts/canonical-app-build.test.mjs"
       - name: Verify exact canonical commit, source versions, identity and host-tools pins
         id: source
         shell: bash
@@ -214,7 +214,7 @@ jobs:
           done
       - name: Build Electron app
         working-directory: canonical/apps/app/desktop
-        run: npm run ${{ matrix.package_script }} -- ${{ matrix.arch_flag }} --publish never --config.publish.channel "${{ needs.verify-tag.outputs.channel }}"
+        run: ${{ runner.os == 'macOS' && 'node "$GITHUB_WORKSPACE/executor/.github/scripts/canonical-app-build.mjs" npm' || 'npm' }} run ${{ matrix.package_script }} -- ${{ matrix.arch_flag }} --publish never --config.publish.channel "${{ needs.verify-tag.outputs.channel }}"
         env:
           OPENAGENT_REQUIRE_HOST_TOOLS: '1'
           OPENAGENT_HOST_TOOLS_PLATFORM_KEY: ${{ matrix.platform_key }}
