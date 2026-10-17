@@ -18,6 +18,7 @@ const NATIVE_NAMES = {
   'linux-x64': 'desktop (ubuntu-24.04, build:linux, --x64, linux-x64)',
   'linux-arm64': 'desktop (ubuntu-24.04-arm, build:linux, --arm64, linux-arm64)',
 };
+let failurePhase = 'argument-admission';
 const sha = bytes => crypto.createHash('sha256').update(bytes).digest('hex');
 function id(value) { assert.match(String(value), /^[1-9][0-9]{0,18}$/); return String(value); }
 
@@ -158,12 +159,43 @@ async function jobsFor(run, attempt) {
   return result.jobs;
 }
 
+export function extractFailedBuildLog(raw, platform, channel = 'beta') {
+  assert(Buffer.isBuffer(raw) && raw.length > 0 && raw.length <= (16 << 20));
+  assert(MACS.includes(platform) && ['beta', 'latest'].includes(channel));
+  const arch = platform === 'darwin-arm64' ? '--arm64' : '--x64';
+  const header = `##[group]Run node "$GITHUB_WORKSPACE/executor/.github/scripts/canonical-app-build.mjs" npm run build:mac -- ${arch} --publish never --config.publish.channel "${channel}"`;
+  const lines = []; let start = 0;
+  for (let offset = 0; offset <= raw.length; offset++) {
+    if (offset !== raw.length && raw[offset] !== 10) continue;
+    const end = offset < raw.length ? offset + 1 : offset;
+    const bytes = raw.subarray(start, offset);
+    const text = new TextDecoder('utf8', { fatal: true }).decode(bytes).replace(/\r$/, '');
+    const match = text.match(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{1,9}Z (.*)$/);
+    lines.push({ start, end, text: match?.[1] }); start = end;
+  }
+  const headers = lines.map((line, index) => line.text === header ? index : -1).filter(index => index >= 0);
+  assert.equal(headers.length, 1, 'Require one exact failed native build header');
+  for (let index = headers[0] + 1; index < lines.length; index++) {
+    const line = lines[index];
+    assert(!line.text?.startsWith('##[group]Run ') && line.text !== 'Post job cleanup.', 'Next step before failed build terminal');
+    if (line.text?.startsWith('##[error]Process completed with exit code ')) {
+      assert.equal(line.text, '##[error]Process completed with exit code 1.');
+      return raw.subarray(lines[headers[0]].start, line.end);
+    }
+  }
+  throw new Error('Failed native build terminal missing');
+}
+
 async function failureLogs(natives) {
   const failures = [];
   for (const row of natives.filter(row => row.conclusion === 'failure')) {
+    failurePhase = 'read-original-job-log';
     const log = await readActionsBytes(`/repos/${REPO}/actions/jobs/${row.job_id}/logs`, 16 << 20);
-    assert(transientAppleStapleFailure(log.toString('utf8')), 'Original failure is not the reviewed transient Apple stapler failure');
-    failures.push({ platform: row.platform, job_id: row.job_id, log_sha256: sha(log),
+    failurePhase = 'extract-failed-build-step';
+    const buildLog = extractFailedBuildLog(log, row.platform);
+    failurePhase = 'classify-failed-build-step';
+    assert(transientAppleStapleFailure(buildLog.toString('utf8')), 'Original failure is not the reviewed transient Apple stapler failure');
+    failures.push({ platform: row.platform, job_id: row.job_id, log_sha256: sha(log), build_step_log_sha256: sha(buildLog),
       classification: 'stapler68/NSURLErrorDomain-1005/network-connection-lost; other signing/authentication failures rejected' });
   }
   return failures;
@@ -171,6 +203,7 @@ async function failureLogs(natives) {
 
 async function validateLogAccess(input) {
   // This read-only preflight is allowed while other original native jobs finish.
+  failurePhase = 'read-original-job-metadata';
   const jobs = await jobsFor(input.run_id, input.run_attempt);
   const failed = input.failed_platforms.map(platform => {
     const selected = jobs.filter(job => job.name === NATIVE_NAMES[platform]); assert.equal(selected.length, 1);
@@ -185,7 +218,7 @@ async function validateLogAccess(input) {
   const failures = await failureLogs(failed);
   console.log(JSON.stringify({ original_failure_log_access: 'passed', failures }));
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY,
-    failures.map(row => `Original failure log SHA256: ${row.log_sha256}; classification: ${row.classification}.\n`).join(''));
+    failures.map(row => `Original whole-job log SHA256: ${row.log_sha256}; failed-build-step log SHA256: ${row.build_step_log_sha256}; classification: ${row.classification}.\n`).join(''));
 }
 
 async function admit(proof, input, current) {
@@ -266,5 +299,5 @@ async function main() {
   console.log(`Recovery ${command} complete; original stage remains untouched.`);
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
-  main().catch(() => { console.error('Recovery rejected; preserve both unpublished stages for review.'); process.exitCode = 1; });
+  main().catch(() => { console.error(`Recovery rejected at ${failurePhase}; preserve both unpublished stages for review.`); process.exitCode = 1; });
 }

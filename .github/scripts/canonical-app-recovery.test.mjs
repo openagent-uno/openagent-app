@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { transientAppleStapleFailure } from './canonical-app-build.mjs';
 import { PLATFORMS } from './staged-app-assets.mjs';
 import { recoveryInput, originalContext, validateOriginalRun, validateOriginalAssets,
-  assetInventoryDigest, validateNativeProvenance, validateRecoveryAssets, validateRecoveryGates, readActionsBytes } from './canonical-app-recovery.mjs';
+  assetInventoryDigest, validateNativeProvenance, validateRecoveryAssets, validateRecoveryGates, readActionsBytes, extractFailedBuildLog } from './canonical-app-recovery.mjs';
 
 const env = { ORIGINAL_RUN_ID: '100', ORIGINAL_RUN_ATTEMPT: '1', ORIGINAL_EXECUTOR_SHA: 'a'.repeat(40),
   ORIGINAL_STAGING_RELEASE_ID: '200', RECOVER_PLATFORMS: '["darwin-arm64"]' };
@@ -132,4 +133,27 @@ test('job token is sent only to the GitHub API and never to the signed log redir
     await assert.rejects(readActionsBytes('/repos/openagent-uno/openagent-app/actions/jobs/123/logs', 2, async () => new Response('too large')));
     await assert.rejects(readActionsBytes('/repos/openagent-uno/openagent-app/actions/jobs/123/logs', 100, async () => new Response(null, { status: 403 })));
   } finally { if (saved === undefined) delete process.env.GH_TOKEN; else process.env.GH_TOKEN = saved; }
+});
+
+
+test('classify exact failed build bytes, excluding echoed scripts from earlier successful steps', () => {
+  const line = text => `2026-10-17T07:10:31.1234567Z ${text}\n`;
+  const header = '##[group]Run node "$GITHUB_WORKSPACE/executor/.github/scripts/canonical-app-build.mjs" npm run build:mac -- --arm64 --publish never --config.publish.channel "beta"';
+  const transient = ['Failed to staple your application with code: 68', 'Error Domain=NSURLErrorDomain Code=-1005', 'The network connection was lost.'];
+  const selected = [header, '##[endgroup]', ...transient, '##[error]Process completed with exit code 1.'].map(line).join('');
+  const prefix = '\ufeff' + [ '##[group]Run for required in CSC_LINK CSC_KEY_PASSWORD APPLE_ID; do',
+    'echo "Required macOS release secret is missing: ${required}"', '##[endgroup]'].map(line).join('');
+  const whole = Buffer.from(prefix + selected + line('Post job cleanup.'));
+  assert.equal(transientAppleStapleFailure(whole.toString()), false, 'Whole job contains earlier echoed script');
+  const result = extractFailedBuildLog(whole, 'darwin-arm64');
+  assert.equal(result.toString(), selected, 'Selection preserves exact original header/output/terminal bytes');
+  assert.equal(transientAppleStapleFailure(result.toString()), true);
+  const actualSigningError = Buffer.from(selected.replace(line(transient[0]),line('failed to sign: invalid credentials')+line(transient[0])));
+  assert.equal(transientAppleStapleFailure(extractFailedBuildLog(actualSigningError,'darwin-arm64').toString()),false);
+  for (const invalid of [ selected+selected, selected.replace(' --arm64 ', ' --x64 '),
+    selected.replace(line('##[error]Process completed with exit code 1.'), ''),
+    selected.replace(line('##[error]Process completed with exit code 1.'), line('##[group]Run other step')+line('##[error]Process completed with exit code 1.')),
+    selected.replace('exit code 1.', 'exit code 2.') ]) {
+    assert.throws(() => extractFailedBuildLog(Buffer.from(invalid),'darwin-arm64'));
+  }
 });
