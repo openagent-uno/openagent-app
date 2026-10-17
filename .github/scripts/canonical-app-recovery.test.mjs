@@ -29,6 +29,8 @@ function fixture(failed = ['darwin-arm64']) {
     steps: fail ? [{ name: 'Build Electron app', conclusion: 'failure' }] : [] });
   const jobs = ['verify canonical source and installed identity', 'lint, types, and unit tests'].map((name, i) => job(name, i));
   jobs.push(...PLATFORMS.map((platform, i) => job(names[platform], i + 2, failed.includes(platform))));
+  jobs.push(...['launch packaged macOS Intel installers', 'release'].map((name, i) =>
+    ({ ...job(name, i + 8), conclusion: 'skipped' })));
   return { input, run, jobs };
 }
 const check = value => validateOriginalRun(value.run, value.jobs, value.input);
@@ -39,6 +41,9 @@ test('recovery admits exactly failed Mac subset and never pretends original run 
     assert.deepEqual(natives.filter(row => row.conclusion === 'failure').map(row => row.platform).sort(), [...failed].sort());
     assert.equal(value.run.conclusion, 'failure');
     assert.equal(natives.length, 6);
+    assert.equal(value.jobs.length, 10);
+    assert.equal(value.jobs.filter(row => row.conclusion === 'skipped').length, 2);
+    assert.equal(value.jobs.filter(row => row.conclusion === 'success').length, 8 - failed.length);
   }
   assert.throws(() => recoveryInput({ ...env, RECOVER_PLATFORMS: '["linux-x64"]' }));
   assert.throws(() => recoveryInput({ ...env, RECOVER_PLATFORMS: '["darwin-arm64","darwin-arm64"]' }));
@@ -57,6 +62,10 @@ test('unfinished, different-attempt/source, failed source gate and non-native-bu
     jobs => { jobs[4].conclusion = 'failure'; jobs[4].steps = [{ name: 'Build Electron app', conclusion: 'failure' }]; },
     jobs => { jobs[4].head_sha = 'f'.repeat(40); },
     jobs => { jobs.push({ ...jobs[0] }); },
+    jobs => { jobs.pop(); },
+    jobs => { jobs[8].name = 'macos-intel-smoke'; },
+    jobs => { jobs[8].name = 'unexpected aggregate gate'; },
+    jobs => { jobs[8].conclusion = 'failure'; },
   ]) { const value = fixture(); mutate(value.jobs); assert.throws(() => check(value)); }
 });
 

@@ -47,13 +47,14 @@ export function validateOriginalRun(run, jobs, input) {
   assert.equal(run.event, 'workflow_dispatch');
   assert.equal(run.status, 'completed', 'Wait until the original serial native matrix is terminal');
   assert.equal(run.conclusion, 'failure');
+  assert.equal(jobs.length, 10, 'Require the complete original ten-job API inventory');
   assert.equal(jobs.length, new Set(jobs.map(job => job.name)).size, 'Ambiguous original job names');
   for (const job of jobs) {
     assert.equal(String(job.run_id), input.run_id); assert.equal(job.head_sha, input.executor_commit);
     assert.equal(job.status, 'completed');
     if (!Object.values(NATIVE_NAMES).includes(job.name) && !['verify canonical source and installed identity', 'lint, types, and unit tests'].includes(job.name)) {
       assert.equal(job.conclusion, 'skipped', 'Only aggregate-dependent original gates may be skipped');
-      assert(['macos-intel-smoke', 'release'].includes(job.name), 'Unexpected original gate');
+      assert(['launch packaged macOS Intel installers', 'release'].includes(job.name), 'Unexpected original gate');
     }
   }
   for (const name of ['verify canonical source and installed identity', 'lint, types, and unit tests']) {
