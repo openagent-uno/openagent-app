@@ -98,12 +98,12 @@ function releasePath(ctx, id) {
   assert.match(String(id), /^\d+$/);
   return `repos/${ctx.repository}/releases/${id}`;
 }
-function stage(ctx, id) {
+export function stage(ctx, id) {
   const release = gh([releasePath(ctx, id)]);
   validateStage(release, ctx);
   return release;
 }
-function listAssets(ctx, id) {
+export function listAssets(ctx, id) {
   return gh(['--paginate', '--slurp', `${releasePath(ctx, id)}/assets?per_page=100`]).flat();
 }
 function upload(ctx, id, name, file) {
@@ -163,7 +163,7 @@ async function publishPlatform(ctx, id, platform, directory) {
   stage(ctx, id);
 }
 
-async function downloadPlatform(ctx, id, platform, directory) {
+export async function downloadPlatform(ctx, id, platform, directory) {
   assert.ok(PLATFORMS.includes(platform));
   stage(ctx, id);
   const assets = listAssets(ctx, id);
